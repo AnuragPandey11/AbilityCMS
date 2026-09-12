@@ -1,0 +1,52 @@
+# Local development infrastructure, per BACKEND_SPEC §13 Phase 0.
+#
+# Docker is not installed on every development machine. Where it is absent, the
+# same three services run natively — see README §"Local setup without Docker".
+# Either path must give identical behaviour; the only difference that matters is
+# that TimescaleDB is present here by construction, and optional natively.
+services:
+  postgres:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: solarcms-postgres
+    environment:
+      POSTGRES_USER: solarcms
+      POSTGRES_PASSWORD: solarcms
+      POSTGRES_DB: solarcms
+    ports: ["5432:5432"]
+    volumes: ["solarcms-pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U solarcms -d solarcms"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: solarcms-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The production broker is ours to operate (MASTER F-17). This is the local
+  # stand-in, so that the ingest worker can be developed against a broker we
+  # control and the canonical topic format can be exercised before the client
+  # adopts it.
+  emqx:
+    image: emqx/emqx:5.8.0
+    container_name: solarcms-emqx
+    ports:
+      - "1883:1883"    # MQTT
+      - "8883:8883"    # MQTT over TLS
+      - "18083:18083"  # dashboard
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  solarcms-pgdata:

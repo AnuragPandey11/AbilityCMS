@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Theme tokens.
+ *
+ * Every colour is a CSS custom property holding **space-separated RGB
+ * channels**, never a hex string. That is what lets Tailwind's alpha modifiers
+ * (`bg-ok/10`, `border-accent/30`) keep working through a variable — the config
+ * wraps each one as `rgb(var(--c-x) / <alpha-value>)`. A hex here would silently
+ * break every `/nn` opacity in the codebase.
+ *
+ * Light is the default ground and matches the client's mockups (Ability
+ * Automation): a soft green-grey page, white cards, green brand. Dark is the
+ * opt-in. `[data-theme]` on <html> wins in both directions so an explicit choice
+ * always beats the OS preference.
+ *
+ * Semantic names only — no colour is named after a Client or a Plant (F-14).
+ */
+
+@layer base {
+  :root {
+    /* ── Grounds ─────────────────────────────────────────────────────────── */
+    --c-surface: 234 238 236; /* page */
+    --c-surface-raised: 255 255 255; /* cards, panels */
+    --c-surface-sunken: 244 247 245; /* sidebar, table headers */
+
+    /* ── Lines ───────────────────────────────────────────────────────────── */
+    --c-line: 229 234 231;
+    --c-line-soft: 238 242 240;
+
+    /* ── Text ────────────────────────────────────────────────────────────── */
+    --c-ink: 16 26 21;
+    --c-ink-muted: 88 103 97;
+    --c-ink-faint: 141 152 143;
+
+    /* ── Brand + status ──────────────────────────────────────────────────── */
+    --c-accent: 18 164 90;
+    --c-accent-strong: 10 122 65;
+    --c-accent-soft: 230 246 237;
+    --c-ok: 18 164 90;
+    --c-warn: 224 152 42;
+    --c-bad: 223 75 75;
+    --c-info: 47 127 209;
+
+    /* Quality codes 0..3 (§4.2). Bad quality must never look like data, so
+       these are deliberately kept separate from the brand palette above. */
+    --c-q0: 18 164 90;
+    --c-q1: 224 152 42;
+    --c-q2: 141 152 143;
+    --c-q3: 223 75 75;
+
+    /* ── Chart chrome, read at runtime by ECharts and the SLD ─────────────── */
+    --c-chart-grid: 229 234 231;
+    --c-chart-axis: 141 152 143;
+    --c-chart-tooltip-bg: 255 255 255;
+    --c-chart-tooltip-border: 229 234 231;
+    /* Categorical series colours. Deliberately not semantic — a series identity
+       must never be mistaken for a quality or a status. */
+    --c-series-1: 47 127 209;
+    --c-series-2: 122 108 214;
+    --c-series-3: 13 148 136;
+    --c-series-4: 219 39 119;
+    --c-series-5: 217 119 6;
+    --c-series-6: 8 145 178;
+    --c-series-7: 234 88 12;
+    --c-series-8: 100 116 139;
+
+    --shadow-card: 0 1px 2px rgb(16 32 24 / 0.04), 0 8px 22px -12px rgb(16 32 24 / 0.14);
+    --shadow-soft: 0 1px 2px rgb(16 32 24 / 0.05);
+
+    color-scheme: light;
+  }
+
+  /* System preference, only when the user has not chosen explicitly. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --c-surface: 15 20 25;
+      --c-surface-raised: 22 29 38;
+      --c-surface-sunken: 10 14 18;
+
+      --c-line: 36 48 64;
+      --c-line-soft: 30 40 54;
+
+      --c-ink: 230 237 243;
+      --c-ink-muted: 139 152 169;
+      --c-ink-faint: 90 104 120;
+
+      --c-accent: 63 191 122;
+      --c-accent-strong: 94 207 138;
+      --c-accent-soft: 17 42 30;
+      --c-ok: 34 197 94;
+      --c-warn: 245 158 11;
+      --c-bad: 239 68 68;
+      --c-info: 56 189 248;
+
+      --c-q0: 34 197 94;
+      --c-q1: 245 158 11;
+      --c-q2: 139 152 169;
+      --c-q3: 239 68 68;
+
+      --c-chart-grid: 36 48 64;
+      --c-chart-axis: 139 152 169;
+      --c-chart-tooltip-bg: 22 29 38;
+      --c-chart-tooltip-border: 36 48 64;
+      --c-series-1: 59 130 246;
+      --c-series-2: 56 189 248;
+      --c-series-3: 167 139 250;
+      --c-series-4: 244 114 182;
+      --c-series-5: 251 191 36;
+      --c-series-6: 52 211 153;
+      --c-series-7: 251 146 60;
+      --c-series-8: 148 163 184;
+
+      --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -12px rgb(0 0 0 / 0.6);
+      --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.35);
+
+      color-scheme: dark;
+    }
+  }
+
+  /* Explicit choice. Repeated rather than shared with the media query above so
+     the toggle wins in both directions — light on a dark OS, dark on a light OS. */
+  :root[data-theme="dark"] {
+    --c-surface: 15 20 25;
+    --c-surface-raised: 22 29 38;
+    --c-surface-sunken: 10 14 18;
+
+    --c-line: 36 48 64;
+    --c-line-soft: 30 40 54;
+
+    --c-ink: 230 237 243;
+    --c-ink-muted: 139 152 169;
+    --c-ink-faint: 90 104 120;
+
+    --c-accent: 63 191 122;
+    --c-accent-strong: 94 207 138;
+    --c-accent-soft: 17 42 30;
+    --c-ok: 34 197 94;
+    --c-warn: 245 158 11;
+    --c-bad: 239 68 68;
+    --c-info: 56 189 248;
+
+    --c-q0: 34 197 94;
+    --c-q1: 245 158 11;
+    --c-q2: 139 152 169;
+    --c-q3: 239 68 68;
+
+    --c-chart-grid: 36 48 64;
+    --c-chart-axis: 139 152 169;
+    --c-chart-tooltip-bg: 22 29 38;
+    --c-chart-tooltip-border: 36 48 64;
+    --c-series-1: 59 130 246;
+    --c-series-2: 56 189 248;
+    --c-series-3: 167 139 250;
+    --c-series-4: 244 114 182;
+    --c-series-5: 251 191 36;
+    --c-series-6: 52 211 153;
+    --c-series-7: 251 146 60;
+    --c-series-8: 148 163 184;
+
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -12px rgb(0 0 0 / 0.6);
+    --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.35);
+
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-surface text-ink antialiased;
+  }
+
+  /* Native controls inherit the themed ground; a white select on a dark panel
+     is the most common way a themed UI looks half-finished. */
+  select option {
+    background-color: rgb(var(--c-surface-raised));
+    color: rgb(var(--c-ink));
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded bg-line;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

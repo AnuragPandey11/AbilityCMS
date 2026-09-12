@@ -1,0 +1,114 @@
+"""Builds the Single Line Diagram tree from a Device list. Pure — no I/O.
+
+The SLD is the **electrical** topology and is built from `parent_device_id`
+alone. Two things are deliberately excluded:
+
+* **Blocks never appear** (Guardrail 11). A Block says *where* a Device is;
+  `parent_device_id` says *what it is wired into*. Inserting a geographic grouping
+  into an electrical diagram makes the diagram wrong.
+* **Devices outside the power path never appear** (MASTER §2.3). A Weather Station
+  and a Power Plant Controller are real, monitored Devices, but electricity does
+  not flow through them, and placing them in the electrical tree would corrupt it.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True, slots=True)
+class SldDevice:
+    """One Device as the diagram needs it."""
+
+    device_id: int
+    code: str
+    name: str
+    device_type_code: str
+    in_power_path: bool
+    parent_device_id: int | None
+    variant: str | None = None
+    rated_capacity_kw: float | None = None
+
+
+@dataclass(slots=True)
+class SldNode:
+    device: SldDevice
+    children: list[SldNode] = field(default_factory=list)
+
+    def walk(self) -> list[SldDevice]:
+        """Depth-first, this node first."""
+        out = [self.device]
+        for child in self.children:
+            out.extend(child.walk())
+        return out
+
+
+@dataclass(slots=True)
+class SldTree:
+    roots: list[SldNode] = field(default_factory=list)
+    # Devices excluded because they carry no current. Returned rather than
+    # dropped: the caller still has to display them somewhere, just not here.
+    excluded_not_in_power_path: list[SldDevice] = field(default_factory=list)
+    # parent_device_id pointed outside the supplied set, or formed a cycle.
+    orphaned: list[SldDevice] = field(default_factory=list)
+
+    @property
+    def device_count(self) -> int:
+        return sum(len(root.walk()) for root in self.roots)
+
+
+def build_sld(devices: list[SldDevice]) -> SldTree:
+    """Assemble the electrical tree.
+
+    A Device whose parent is absent from the power path becomes a root rather than
+    being discarded: an Inverter wired through a non-power-path Device is still
+    part of the electrical story, and silently dropping it would make the diagram
+    claim the Plant has less equipment than it does.
+
+    Cycles cannot occur through valid data — `parent_device_id` is constrained to
+    the same Plant and a Device cannot be its own parent (I-3) — but a cycle is
+    detected and reported rather than recursed into, because a diagram request
+    must not be able to hang the API.
+    """
+    in_path = [d for d in devices if d.in_power_path]
+    tree = SldTree(excluded_not_in_power_path=[d for d in devices if not d.in_power_path])
+
+    nodes = {d.device_id: SldNode(d) for d in in_path}
+    present = set(nodes)
+
+    for device in in_path:
+        parent_id = device.parent_device_id
+        if parent_id is None or parent_id not in present:
+            tree.roots.append(nodes[device.device_id])
+        else:
+            nodes[parent_id].children.append(nodes[device.device_id])
+
+    # Any node not reachable from a root sits in a cycle. Detected by counting
+    # rather than by recursion, so a malformed graph costs one pass, not a stack.
+    reachable: set[int] = set()
+    stack = [node for node in tree.roots]
+    while stack:
+        node = stack.pop()
+        if node.device.device_id in reachable:
+            continue
+        reachable.add(node.device.device_id)
+        stack.extend(node.children)
+
+    if len(reachable) != len(present):
+        for device_id in sorted(present - reachable):
+            tree.orphaned.append(nodes[device_id].device)
+        # Detach them so the returned tree is traversable without looping.
+        cyclic = present - reachable
+        for node in nodes.values():
+            node.children = [c for c in node.children if c.device.device_id not in cyclic]
+
+    # Stable output: a diagram that reorders between requests is unreadable.
+    def sort_node(node: SldNode) -> None:
+        node.children.sort(key=lambda c: c.device.code)
+        for child in node.children:
+            sort_node(child)
+
+    tree.roots.sort(key=lambda n: n.device.code)
+    for root in tree.roots:
+        sort_node(root)
+    return tree

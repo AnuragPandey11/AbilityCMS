@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ability CMS</title>
+    <script>
+      // Applied before first paint. Without this the page renders in the default
+      // light palette for one frame and a dark-theme user sees a white flash on
+      // every load. Deliberately inline and dependency-free for that reason.
+      (function () {
+        try {
+          var choice = localStorage.getItem("solarcms.theme");
+          if (choice === "light" || choice === "dark") {
+            document.documentElement.setAttribute("data-theme", choice);
+          }
+        } catch (e) {
+          /* Blocked site data: fall through to the system preference. */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
