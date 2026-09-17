@@ -57,6 +57,37 @@ class SldTree:
         return sum(len(root.walk()) for root in self.roots)
 
 
+def would_create_cycle(
+    parents: dict[int, int | None], child_id: int, new_parent_id: int | None
+) -> bool:
+    """Would pointing `child_id` at `new_parent_id` close a loop?
+
+    `build_sld` already survives a cycle — it detaches the loop and reports it
+    rather than recursing — but surviving one is not the same as allowing one to
+    be created. A hierarchy editor lets an administrator drag any Device onto any
+    other, so the mistake is one gesture away, and catching it at the moment of
+    the drag says *"that would make A feed into itself"* where catching it later
+    only produces a diagram with pieces mysteriously missing.
+
+    Walks up from the proposed parent: if the chain reaches the child, the edge
+    closes a loop. Iteration is bounded by the number of Devices, so a cycle
+    already present in the data cannot hang this.
+    """
+    if new_parent_id is None:
+        return False
+    if new_parent_id == child_id:
+        return True
+
+    seen: set[int] = set()
+    cursor: int | None = new_parent_id
+    while cursor is not None and cursor not in seen:
+        if cursor == child_id:
+            return True
+        seen.add(cursor)
+        cursor = parents.get(cursor)
+    return False
+
+
 def build_sld(devices: list[SldDevice]) -> SldTree:
     """Assemble the electrical tree.
 

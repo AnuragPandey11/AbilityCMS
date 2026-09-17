@@ -29,15 +29,16 @@ import {
   useDeviceModelTags,
   usePlantDevices,
   useTags,
+  useUnmappedKeys,
 } from "@/api/hooks";
 import * as devicesApi from "@/api/endpoints/devices";
 import { isApiError } from "@/api/problem";
-import { Button, Panel, Badge, inputClass } from "@/components/ui";
+import { Button, Field, Panel, Badge, inputClass } from "@/components/ui";
 import {
   EmptyState,
   ErrorState,
   ForbiddenState,
-  LoadingState,
+  SkeletonTable,
 } from "@/components/state";
 import { PlantPicker } from "@/components/domain";
 import { usePermission } from "@/auth/usePermission";
@@ -158,6 +159,12 @@ export function DeviceBindingsAdmin(): JSX.Element {
   const devices = devicesQuery.data ?? [];
   const device = devices.find((candidate) => candidate.id === deviceId) ?? null;
   const liveFrame = deviceId ? liveDevices[deviceId] : undefined;
+  // How far this Model's repeating group runs, so the settings panel only offers
+  // a string count to Devices that actually have one.
+  const modelRepeatMax = (modelTagsQuery.data ?? []).reduce(
+    (highest, tag) => Math.max(highest, tag.repeat_index ?? 0),
+    0,
+  );
 
   const removedCount = useMemo(() => {
     const existing = new Set((bindingsQuery.data ?? []).map((b) => b.tag_code));
@@ -236,13 +243,48 @@ export function DeviceBindingsAdmin(): JSX.Element {
         </div>
       </Panel>
 
+      {deviceId !== null ? (
+        <DeviceSettings deviceId={deviceId} modelRepeatMax={modelRepeatMax} />
+      ) : null}
+
+      {deviceId !== null ? (
+        <UnmappedSignals
+          deviceId={deviceId}
+          onBind={(sourceKey, tagCode) =>
+            setDraft((previous) =>
+              previous.some((binding) => binding.tag_code === tagCode)
+                ? // Already bound to something else: point the existing row at
+                  // this key rather than adding a second binding for one Tag,
+                  // which the unique constraint would reject on save anyway.
+                  previous.map((binding) =>
+                    binding.tag_code === tagCode
+                      ? { ...binding, source_key: sourceKey }
+                      : binding,
+                  )
+                : [
+                    ...previous,
+                    {
+                      source_key: sourceKey,
+                      tag_code: tagCode,
+                      scale: "1",
+                      value_offset: "0",
+                      valid_min: "",
+                      valid_max: "",
+                      enabled: true,
+                    },
+                  ],
+            )
+          }
+        />
+      ) : null}
+
       {deviceId === null ? (
         <EmptyState
           title="Choose a Device"
           detail="Bindings are per Device, because field wiring never matches the datasheet."
         />
       ) : bindingsQuery.isLoading ? (
-        <LoadingState label="Loading bindings" />
+        <SkeletonTable rows={8} columns={6} />
       ) : bindingsQuery.isError ? (
         <ErrorState
           error={bindingsQuery.error}
@@ -482,5 +524,327 @@ export function DeviceBindingsAdmin(): JSX.Element {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Signals this Device is publishing that nothing is bound to.
+ *
+ * The single most useful thing during commissioning, and it exists nowhere else:
+ * an unmapped key never becomes a Reading, so no query over history can reveal
+ * one. Until this panel existed the only symptom was a Tag that stayed empty,
+ * which is indistinguishable from a sensor that has failed.
+ *
+ * The suggestion beside each key is the registry's own alias — the client writes
+ * "AMBINT TEMP." and the canonical Tag is AMBIENT_TEMPERATURE. A suggestion
+ * only: the binding is the authority, and the operator confirms it.
+ */
+function UnmappedSignals({
+  deviceId,
+  onBind,
+}: {
+  deviceId: number;
+  onBind: (sourceKey: string, tagCode: string) => void;
+}): JSX.Element | null {
+  const queryClient = useQueryClient();
+  const keysQuery = useUnmappedKeys(deviceId);
+  const keys = keysQuery.data ?? [];
+
+  const forget = useMutation({
+    mutationFn: () => devicesApi.forgetUnmappedKeys(deviceId),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: ["devices", deviceId, "unmapped-keys"],
+      }),
+  });
+
+  if (keysQuery.isLoading || keys.length === 0) return null;
+
+  return (
+    <Panel
+      title={`${keys.length} unmapped signal(s)`}
+      subtitle="This Device is publishing these, and they are being discarded."
+      actions={
+        <button
+          type="button"
+          onClick={() => forget.mutate()}
+          className="text-[11px] text-ink-muted hover:text-ink hover:underline"
+          title="Clears the list so it rebuilds from what arrives next. Use after binding them."
+        >
+          Clear list
+        </button>
+      }
+    >
+      <div className="flex flex-wrap gap-2">
+        {keys.map((key) => (
+          <div
+            key={key.source_key}
+            className="flex items-center gap-2 rounded border border-warn/30 bg-warn/5 px-2 py-1"
+          >
+            <span className="font-mono text-xs text-ink">{key.source_key}</span>
+            {key.suggested_tag_code ? (
+              <button
+                type="button"
+                onClick={() =>
+                  onBind(key.source_key, key.suggested_tag_code as string)
+                }
+                className="text-[11px] text-accent hover:underline"
+                title={`Add a draft binding to ${key.suggested_tag_code}. Nothing is saved until you press Save bindings.`}
+              >
+                bind to {key.suggested_tag_code}
+              </button>
+            ) : (
+              <span className="text-[11px] text-ink-faint">
+                no matching Tag — add one to the registry first
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
+        Binding one adds a draft row below. Nothing is written until the bindings
+        are saved, and saved bindings apply to the next message, never to
+        Readings already stored.
+      </p>
+    </Panel>
+  );
+}
+
+/**
+ * The Device's own settings: topic, interval, capacity, string count, wiring.
+ *
+ * Separate from the bindings because they fail differently. A wrong binding
+ * decodes a number incorrectly; a missing topic means nothing arrives at all,
+ * and a wrong `expected_interval_s` means a dead Device still reads as healthy.
+ * Both were previously fixable only by re-running onboarding.
+ */
+function DeviceSettings({
+  deviceId,
+  modelRepeatMax,
+}: {
+  deviceId: number;
+  modelRepeatMax: number;
+}): JSX.Element | null {
+  const queryClient = useQueryClient();
+  const deviceQuery = useDevice(deviceId);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const device = deviceQuery.data;
+
+  useEffect(() => {
+    if (!device) return;
+    setForm({
+      name: device.name,
+      source_address: device.source_address ?? "",
+      expected_interval_s: String(device.expected_interval_s),
+      rated_capacity_kw:
+        device.rated_capacity_kw === null ? "" : String(device.rated_capacity_kw),
+      string_count: device.string_count === null ? "" : String(device.string_count),
+    });
+  }, [device]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      devicesApi.updateDevice(deviceId, {
+        name: form.name || undefined,
+        source_address: form.source_address || undefined,
+        expected_interval_s: form.expected_interval_s
+          ? Number(form.expected_interval_s)
+          : undefined,
+        rated_capacity_kw: form.rated_capacity_kw
+          ? Number(form.rated_capacity_kw)
+          : undefined,
+        string_count: form.string_count ? Number(form.string_count) : undefined,
+        // Emptying a box means "remove this", which a PATCH cannot express by
+        // omission — `null` and "unchanged" are the same JSON.
+        clear: [
+          form.source_address ? null : "source_address",
+          form.string_count ? null : "string_count",
+        ].filter((field): field is string => field !== null),
+      }),
+    onSuccess: () => {
+      setError(null);
+      setNote(
+        "Saved. The ingest worker's topic cache was invalidated, so the change " +
+          "takes effect on the next message.",
+      );
+      void queryClient.invalidateQueries({ queryKey: ["devices", deviceId] });
+    },
+    onError: (err) => {
+      setNote(null);
+      setError(
+        isApiError(err) ? err.displayMessage : "Could not save the Device.",
+      );
+    },
+  });
+
+  const reseed = useMutation({
+    mutationFn: () => devicesApi.bindFromModel(deviceId, false),
+    onSuccess: (result) => {
+      setError(null);
+      setNote(
+        `${result.bound} Tag(s) seeded from the Model` +
+          (result.strings ? ` including ${result.strings} PV string(s).` : "."),
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ["devices", deviceId, "bindings"],
+      });
+    },
+    onError: (err) =>
+      setError(
+        isApiError(err) ? err.displayMessage : "Could not seed from the Model.",
+      ),
+  });
+
+  if (!device) return null;
+
+  return (
+    <Panel
+      title="Device settings"
+      subtitle="Topic, interval, capacity and string count. These fail differently from bindings."
+      actions={
+        <button
+          type="button"
+          onClick={() => setOpen((previous) => !previous)}
+          className="text-[11px] text-ink-muted hover:text-ink hover:underline"
+        >
+          {open ? "Hide" : "Edit"}
+        </button>
+      }
+    >
+      {!open ? (
+        <div className="flex flex-wrap gap-4 text-[11px] text-ink-muted">
+          <span>
+            Topic{" "}
+            <span className="font-mono text-ink">
+              {device.source_address ?? "not set"}
+            </span>
+          </span>
+          <span>
+            Interval <span className="text-ink">{device.expected_interval_s}s</span>
+          </span>
+          <span>
+            Capacity{" "}
+            <span className="text-ink">
+              {device.rated_capacity_kw ?? "not set"} kW
+            </span>
+          </span>
+          {modelRepeatMax > 0 ? (
+            <span>
+              PV strings{" "}
+              <span className="text-ink">{device.string_count ?? "not set"}</span>{" "}
+              of {modelRepeatMax}
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <Field label="Name">
+              <input
+                value={form.name ?? ""}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, name: event.target.value }))
+                }
+                className={inputClass}
+              />
+            </Field>
+            <Field
+              label="MQTT topic"
+              hint="The sole authority for whose data a message is."
+            >
+              <input
+                value={form.source_address ?? ""}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, source_address: event.target.value }))
+                }
+                className={`${inputClass} font-mono text-xs`}
+              />
+            </Field>
+            <Field
+              label="Expected interval (s)"
+              hint="From observation. Health thresholds multiply this."
+            >
+              <input
+                type="number"
+                min={1}
+                value={form.expected_interval_s ?? ""}
+                onChange={(event) =>
+                  setForm((f) => ({
+                    ...f,
+                    expected_interval_s: event.target.value,
+                  }))
+                }
+                className={`${inputClass} border-warn/40`}
+              />
+            </Field>
+            <Field
+              label="Rated capacity (kW)"
+              hint="Specific yield is energy ÷ capacity; without it there is none."
+            >
+              <input
+                type="number"
+                value={form.rated_capacity_kw ?? ""}
+                onChange={(event) =>
+                  setForm((f) => ({
+                    ...f,
+                    rated_capacity_kw: event.target.value,
+                  }))
+                }
+                className={inputClass}
+              />
+            </Field>
+            {modelRepeatMax > 0 ? (
+              <Field
+                label="PV strings on this unit"
+                hint={`Up to ${modelRepeatMax}. Re-seed from the Model after changing it.`}
+              >
+                <input
+                  type="number"
+                  min={0}
+                  max={modelRepeatMax}
+                  value={form.string_count ?? ""}
+                  onChange={(event) =>
+                    setForm((f) => ({ ...f, string_count: event.target.value }))
+                  }
+                  className={inputClass}
+                />
+              </Field>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              disabled={save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? "Saving…" : "Save Device"}
+            </Button>
+            <Button
+              disabled={reseed.isPending}
+              onClick={() => reseed.mutate()}
+              title="Adds any Tags on the Model that are not bound yet. Existing bindings and their corrections are left alone."
+            >
+              {reseed.isPending ? "Seeding…" : "Seed missing Tags from Model"}
+            </Button>
+          </div>
+
+          {note ? (
+            <p className="rounded border border-ok/30 bg-ok/10 px-2 py-1 text-xs text-ok">
+              {note}
+            </p>
+          ) : null}
+          {error ? (
+            <p className="rounded border border-bad/30 bg-bad/10 px-2 py-1 text-xs text-bad">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      )}
+    </Panel>
   );
 }

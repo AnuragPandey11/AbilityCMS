@@ -86,6 +86,11 @@ export const TagSchema = z.object({
   valid_max: nullableNumeric(),
   min_interval_s: z.number(),
   is_cumulative: z.boolean(),
+  // A calculated Tag: arithmetic over other Tag codes, held as data so that the
+  // client's "Need to Calculate" rows are configuration rather than a release.
+  // Null means a Device publishes this value.
+  formula: z.string().nullable().catch(null),
+  derived_scope: z.enum(["device", "plant"]).nullable().catch(null),
 });
 export type Tag = z.infer<typeof TagSchema>;
 
@@ -104,6 +109,15 @@ export const DeviceModelSchema = z.object({
   model_code: z.string(),
   variant: z.string().nullable(),
   device_type_code: z.string(),
+  device_type_name: z.string().optional().catch(undefined),
+  in_power_path: z.boolean().optional().catch(undefined),
+  rated_capacity_kw: nullableNumeric().optional(),
+  // How many signals this Model schedules, and how far its repeating group runs
+  // — enough to label the choice "Reference String Inverter, 23 signals + up to
+  // 28 PV strings" without a second request per Model.
+  signal_count: z.number().optional().catch(undefined),
+  repeat_max: z.number().optional().catch(undefined),
+  derived_count: z.number().optional().catch(undefined),
 });
 export type DeviceModel = z.infer<typeof DeviceModelSchema>;
 
@@ -114,10 +128,17 @@ export const DeviceModelTagSchema = z.object({
   name: z.string(),
   unit: z.string(),
   category: z.string(),
-  scale_default: z.number(),
-  valid_min: z.number().nullable(),
-  valid_max: z.number().nullable(),
+  scale_default: nullableNumeric(),
+  valid_min: nullableNumeric(),
+  valid_max: nullableNumeric(),
   default_source_key: z.string().nullable(),
+  // Position in a repeating group (PV1..PV28); null for a signal appearing once.
+  repeat_index: z.number().nullable().catch(null),
+  sort_order: z.number().catch(0),
+  // Marks a row nothing publishes: it is computed, and no source key will ever
+  // arrive for it. The bindings screen must not show it as "unmapped".
+  formula: z.string().nullable().catch(null),
+  derived_scope: z.string().nullable().catch(null),
 });
 export type DeviceModelTag = z.infer<typeof DeviceModelTagSchema>;
 
@@ -254,8 +275,53 @@ export const DeviceDetailSchema = DeviceListItemSchema.extend({
   rated_capacity_kw: nullableNumeric(),
   installed_on: z.string().nullable(),
   completeness_24h: nullableNumeric(),
+  // How many inputs of the Model's repeating group this unit has — the PV
+  // strings on this Inverter. A fact about the unit, not the Model.
+  string_count: z.number().nullable().catch(null),
 }).passthrough();
 export type DeviceDetail = z.infer<typeof DeviceDetailSchema>;
+
+// ── Commissioning ───────────────────────────────────────────────────────────
+
+/**
+ * One thing standing between a Plant and going live.
+ *
+ * Onboarding fails quietly: a Device with no topic simply never reports, and a
+ * Device with no bindings decodes nothing. Both look exactly like equipment that
+ * has not been switched on. This turns each into something nameable.
+ */
+export const CommissioningIssueSchema = z.object({
+  severity: z.enum(["blocking", "warning", "info"]).catch("warning"),
+  code: z.string(),
+  detail: z.string(),
+  device_id: z.number().optional(),
+  device_code: z.string().optional(),
+  keys: z.array(z.string()).optional(),
+});
+export type CommissioningIssue = z.infer<typeof CommissioningIssueSchema>;
+
+export const CommissioningReportSchema = z.object({
+  plant_id: z.number(),
+  status: z.string(),
+  device_count: z.number(),
+  unmapped_key_count: z.number(),
+  ready: z.boolean(),
+  blocking_count: z.number(),
+  issues: z.array(CommissioningIssueSchema),
+  next_status: z.string().nullable(),
+});
+export type CommissioningReport = z.infer<typeof CommissioningReportSchema>;
+
+/** A payload key a Device is publishing that no binding maps. */
+export const UnmappedKeySchema = z.object({
+  source_key: z.string(),
+  suggested_tag_code: z.string().nullable(),
+});
+export const UnmappedKeysSchema = z.object({
+  device_id: z.number(),
+  keys: z.array(UnmappedKeySchema),
+});
+export type UnmappedKey = z.infer<typeof UnmappedKeySchema>;
 
 export const BindingSchema = z.object({
   id: z.number(),
@@ -593,3 +659,126 @@ export function parse<S extends z.ZodTypeAny>(
   }
   return result.data;
 }
+
+// ── Dashboard slots ─────────────────────────────────────────────────────────
+//
+// The layout is fixed and the sources are not. A slot is a *position* on the
+// screen (`kpi.current_power`), and the backend resolves it against whatever
+// Devices the Plant actually has — an ABT Meter on an 8 MW Plant, the sum of
+// four Inverters on a rooftop one. `source` says which, and the screen shows it:
+// 6.32 MW is a different claim depending on whether a meter measured it or
+// twelve machines were added together.
+
+export const SlotSourceSchema = z.object({
+  kind: z.enum(["device_tag", "plant_attribute", "device_count"]),
+  device_type_code: z.string().nullable(),
+  tag_code: z.string().nullable(),
+  aggregate: z.string(),
+  device_count: z.number(),
+  is_aggregated: z.boolean(),
+  /** The preferred source is bound but silent; a lower-ranked one answered. */
+  degraded: z.boolean(),
+});
+export type SlotSource = z.infer<typeof SlotSourceSchema>;
+
+export const ResolvedSlotSchema = z.object({
+  slot_code: z.string(),
+  label: z.string(),
+  position: z.number(),
+  /** null is never 0. A missing input is unknown, not zero (Guardrail 3). */
+  value: z.number().nullable(),
+  unit: z.string().nullable(),
+  /**
+   * `no_source` — nothing on this Plant can answer (a commissioning gap).
+   * `no_value` — the source exists and has gone quiet (a fault, happening now).
+   * `unconfigured` — the slot declares no candidates.
+   * They read as the same blank tile and mean entirely different things.
+   */
+  undefined_reason: z.enum(["no_source", "no_value", "unconfigured"]).nullable(),
+  source: SlotSourceSchema.nullable(),
+  override_note: z.string().nullable().optional(),
+});
+export type ResolvedSlot = z.infer<typeof ResolvedSlotSchema>;
+
+export const SLD_STAGE_CODES = [
+  "PV_ARRAY",
+  "INVERTERS",
+  "TRANSFORMER",
+  "GRID",
+] as const;
+export type SldStageCode = (typeof SLD_STAGE_CODES)[number];
+
+export const SldStageSchema = z.object({
+  code: z.enum(SLD_STAGE_CODES),
+  label: z.string(),
+  position: z.number(),
+  device_count: z.number(),
+  online_count: z.number(),
+  /** False when no Device folds into this stage — not the same as "it is down". */
+  instrumented: z.boolean(),
+  health: z.enum(["ok", "degraded", "down", "unmonitored"]),
+  devices: z.array(
+    z.object({
+      device_id: z.number(),
+      code: z.string(),
+      device_type_code: z.string(),
+      online: z.boolean(),
+    }),
+  ),
+  slots: z.array(ResolvedSlotSchema),
+});
+export type SldStage = z.infer<typeof SldStageSchema>;
+
+export const SldStagesSchema = z.object({
+  stages: z.array(SldStageSchema),
+  /** Power-path Devices whose Type has no stage — a gap in the catalogue. */
+  unstaged: z.array(
+    z.object({
+      device_id: z.number(),
+      code: z.string(),
+      device_type_code: z.string(),
+    }),
+  ),
+});
+export type SldStages = z.infer<typeof SldStagesSchema>;
+
+export const PlantDashboardSchema = z.object({
+  plant_id: z.number(),
+  /** Panel code → its slots. Panels and positions are identical on every Plant. */
+  panels: z.record(z.string(), z.array(ResolvedSlotSchema)),
+  sld: SldStagesSchema,
+  device_count: z.number(),
+  assumptions_note: z.string(),
+});
+export type PlantDashboard = z.infer<typeof PlantDashboardSchema>;
+
+/** Panel codes, in the order the page lays them out. */
+export const DASHBOARD_PANELS = [
+  "kpi_row",
+  "plant_status",
+  "power_summary",
+  "energy_summary",
+  "environment",
+] as const;
+
+/**
+ * The curated columns of a per-Device summary table, by Device Type.
+ *
+ * Not everything a Device publishes — an Inverter is bound to eighty Tags once
+ * its PV strings are counted, and a table eighty columns wide answers nothing.
+ */
+export const DeviceTableColumnSchema = z.object({
+  tag_id: z.number(),
+  tag_code: z.string(),
+  name: z.string(),
+  unit: z.string().nullable(),
+  category: TagCategorySchema,
+  position: z.number(),
+});
+export type DeviceTableColumn = z.infer<typeof DeviceTableColumnSchema>;
+
+export const DeviceTableColumnsSchema = z.record(
+  z.string(),
+  z.array(DeviceTableColumnSchema),
+);
+export type DeviceTableColumns = z.infer<typeof DeviceTableColumnsSchema>;

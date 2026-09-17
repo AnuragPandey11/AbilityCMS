@@ -1,6 +1,6 @@
 # SolarCMS Backend — Build Specification
 
-**Version:** 1.4 · **Date:** 12 September 2026
+**Version:** 1.5 · **Date:** 17 September 2026
 **Audience:** an engineering agent implementing the backend from scratch.
 
 ---
@@ -142,7 +142,10 @@ solarcms-backend/
 │   │   ├── alarm_logic.py        # threshold/debounce/hysteresis evaluation
 │   │   ├── health_logic.py       # staleness, frozen-value, completeness
 │   │   ├── tiering.py            # which aggregate tier serves a given time range
-│   │   └── sld.py                # builds the Single Line Diagram tree from a Device list
+│   │   ├── sld.py                # builds the Single Line Diagram tree from a Device list
+│   │   ├── sld_stages.py         # folds that tree into the fixed four: PV → INV → TX → Grid
+│   │   ├── slots.py              # resolves a dashboard position against a Plant's own Devices
+│   │   └── dashboard_spec.py     # the default slot catalogue, seeded to `dashboard_slots`
 │   │
 │   ├── cache/
 │   │   ├── keys.py               # every Redis key pattern, centralised
@@ -153,6 +156,7 @@ solarcms-backend/
 │   ├── services/                 # orchestration: domain + db + cache
 │   │   ├── onboarding.py         # client → plant → device → binding → commissioning → active
 │   │   ├── analytics.py          # KPI computation, tier-routed history queries
+│   │   ├── dashboard.py          # loads the slot catalogue, gathers facts, resolves a Plant
 │   │   ├── alarming.py
 │   │   ├── reporting.py
 │   │   └── notifications.py
@@ -242,6 +246,7 @@ Migration order:
 | `0006` | Health, alarms, escalation, notifications |
 | `0007` | Reporting, audit |
 | `0008` | RLS policies and helper functions (last — needs all tables present) |
+| `0021` | `dashboard_slots` + `dashboard_slot_candidates` (platform catalogue), `plant_dashboard_slot_overrides` (Client-owned, RLS), `device_table_columns`, and `device_types.sld_stage` |
 
 **`regions` and `blocks` are fully in scope.** The hierarchy is confirmed (MASTER §2.1) and Block semantics are defined (MASTER §2.1.1). Build them with working business logic.
 
@@ -477,6 +482,9 @@ async def acknowledge(
 | GET | `/plants/{id}` | `dashboard.view` | Detail + current KPIs. Also returns `device_counts`: per Device Type, the ⚠ PROPOSED `planned_count` beside the live `registered_count`, so commissioning progress is the gap between them (migration 0019, MASTER OPEN-21). BUILT |
 | GET | `/plants/{id}/kpis` | `dashboard.view` | `?period=today\|month\|year\|lifetime` |
 | GET | `/plants/{id}/sld` | `dashboard.view` | Power-path tree only (`in_power_path = true`) |
+| GET | `/plants/{id}/dashboard` | `dashboard.view` | The fixed dashboard, resolved. Same panels and positions on every Plant; only the Device that answered each slot differs, and that provenance travels with the value. `undefined_reason` distinguishes `no_source` (a commissioning gap) from `no_value` (an instrument gone quiet) — never 0.0 for either. BUILT |
+| GET | `/plants/{id}/sld-stages` | `dashboard.view` | The four-stage schematic: **PV Array → Inverters → Transformer → Grid**, always those four in that order. A stage with no Devices renders `instrumented: false`. `unstaged` lists power-path Devices whose Type has no `sld_stage` — a catalogue gap, reported rather than silently dropped. BUILT |
+| GET | `/catalog/device-table-columns` | `dashboard.view` | The curated columns of a per-Device summary table, by Device Type — not everything a Device publishes. BUILT |
 | POST/PATCH | `/plants` `/plants/{id}` | `plant.manage` | Client Admin permitted (SSOT F-15) |
 | GET | `/plants/{id}/blocks` | `dashboard.view` | Blocks with their own KPIs. Empty array when the Plant has none |
 | POST/PATCH/DELETE | `/plants/{id}/blocks` `/blocks/{id}` | `plant.manage` | Client Admin permitted |

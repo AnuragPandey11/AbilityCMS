@@ -24,6 +24,7 @@ import { isApiError } from "@/api/problem";
 import { Button, Field, Panel, Badge, inputClass } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { NewClientForm } from "@/admin/NewClientForm";
+import { CommissioningPanel } from "@/admin/CommissioningPanel";
 import { RegionSelect } from "@/admin/RegionSelect";
 import { usePermission } from "@/auth/usePermission";
 import { useAuth } from "@/auth/AuthProvider";
@@ -43,6 +44,12 @@ interface DraftDevice {
   source_address: string;
   expected_interval_s: string;
   rated_capacity_kw: string;
+  /**
+   * How many inputs of the Model's repeating group this unit has — the PV
+   * strings on this Inverter. Asked per Device, not per Model, because the same
+   * datasheet covers a 12-string and a 24-string machine.
+   */
+  string_count: string;
   block_index: number | null;
   parent_index: number | null;
   reports_via_index: number | null;
@@ -57,6 +64,7 @@ const emptyDevice = (): DraftDevice => ({
   // assumption should not arrive looking like a decision.
   expected_interval_s: "",
   rated_capacity_kw: "",
+  string_count: "",
   block_index: null,
   parent_index: null,
   reports_via_index: null,
@@ -262,9 +270,6 @@ export function OnboardingWizard(): JSX.Element {
 
   const importDevices = useMutation({
     mutationFn: async () => {
-      // Bulk import is all-or-nothing and inserts in order, so a parent must
-      // appear before its child. The form indexes are resolved against the ids
-      // returned as we go, which is why this is sequential rather than mapped.
       const payload = devices.map((device) => ({
         code: device.code,
         name: device.name,
@@ -274,17 +279,56 @@ export function OnboardingWizard(): JSX.Element {
         rated_capacity_kw: device.rated_capacity_kw
           ? Number(device.rated_capacity_kw)
           : null,
+        string_count: device.string_count ? Number(device.string_count) : null,
         block_id:
           device.block_index !== null
             ? (blocks[device.block_index]?.id ?? null)
             : null,
+        // Seed each Device's bindings from its Model's signal schedule, so it
+        // decodes something from its first message rather than looking broken.
+        bind_from_model: true,
       }));
-      return devicesApi.bulkImportDevices(plantId as number, payload);
+      const result = await devicesApi.bulkImportDevices(
+        plantId as number,
+        payload,
+      );
+
+      // Wiring is applied as a second pass, on purpose. Creation is
+      // all-or-nothing and inserts in order, so no Device in the batch can
+      // reference another's id — they do not exist yet. Patching afterwards is
+      // the only way the form's "feeds into" and "reports via" choices can
+      // become real without giving up the atomic create.
+      const wiring = devices
+        .map((device, index) => ({ device, index }))
+        .filter(
+          ({ device }) =>
+            device.parent_index !== null || device.reports_via_index !== null,
+        );
+      let wired = 0;
+      for (const { device, index } of wiring) {
+        const id = result.devices[index]?.id;
+        if (id === undefined) continue;
+        await devicesApi.updateDevice(id, {
+          parent_device_id:
+            device.parent_index !== null
+              ? (result.devices[device.parent_index]?.id ?? null)
+              : null,
+          reports_via_device_id:
+            device.reports_via_index !== null
+              ? (result.devices[device.reports_via_index]?.id ?? null)
+              : null,
+        });
+        wired += 1;
+      }
+      return { ...result, wired };
     },
     onSuccess: (result) => {
       setCreatedDevices(result.devices);
       setError(null);
-      setMessage(`${result.created} Device(s) registered.`);
+      setMessage(
+        `${result.created} Device(s) registered` +
+          (result.wired ? `, ${result.wired} wired into the diagram.` : "."),
+      );
       advanceTo(3);
       void queryClient.invalidateQueries({ queryKey: ["plants"] });
     },
@@ -295,16 +339,20 @@ export function OnboardingWizard(): JSX.Element {
   });
 
   const setStatus = useMutation({
-    mutationFn: (status: string) =>
-      plantsApi.updatePlant(plantId as number, { status }),
-    onSuccess: (_result, status) => {
+    mutationFn: ({ status, force }: { status: string; force?: boolean }) =>
+      plantsApi.changePlantStatus(plantId as number, status, { force }),
+    onSuccess: (_result, variables) => {
       setError(null);
-      setMessage(`Plant moved to ${status}.`);
+      setMessage(`Plant moved to ${variables.status}.`);
       void queryClient.invalidateQueries({ queryKey: ["plants"] });
     },
     onError: (err) =>
       setError(
-        isApiError(err) ? err.displayMessage : "Could not change the status.",
+        isApiError(err)
+          ? // A refusal is the readiness gate doing its job, not a fault. Said
+            // plainly, with the way past it, or the operator reads it as a bug.
+            `${err.displayMessage} Resolve the blocking issues listed above, or use "Activate anyway".`
+          : "Could not change the status.",
       ),
   });
 
@@ -336,6 +384,35 @@ export function OnboardingWizard(): JSX.Element {
         i === index ? { ...device, ...patch } : device,
       ),
     );
+
+  const modelById = new Map(models.map((model) => [model.id, model]));
+
+  /** How far this Model's repeating group runs — 28 for a String Inverter, 0 for a VCB. */
+  const repeatMaxFor = (modelId: number | null): number =>
+    modelId === null ? 0 : (modelById.get(modelId)?.repeat_max ?? 0);
+
+  /**
+   * What choosing this Model actually means, in Tags.
+   *
+   * Shown because "Reference String Inverter" says nothing about whether this
+   * Device will decode 23 signals or 107, and the difference is entirely the
+   * string count typed two fields to the left.
+   */
+  const modelSummary = (modelId: number | null, stringCount: string): string => {
+    const model = modelId === null ? null : modelById.get(modelId);
+    if (!model) return "Choose a Model to see what it will report.";
+    const base = model.signal_count ?? 0;
+    const repeat = model.repeat_max ?? 0;
+    const strings = stringCount ? Number(stringCount) : 0;
+    const perString = repeat > 0 ? 3 : 0;
+    const derived = model.derived_count ?? 0;
+    const bound = base - derived + Math.min(strings, repeat) * perString;
+    const parts = [`${bound} Tag(s) will be bound`];
+    if (derived > 0) parts.push(`${derived} computed from formulas`);
+    if (repeat > 0 && strings === 0)
+      parts.push(`no PV strings set — none of the ${repeat} will be bound`);
+    return parts.join(" · ");
+  };
 
   const devicesValid = devices.every(
     (device) =>
@@ -904,6 +981,25 @@ export function OnboardingWizard(): JSX.Element {
                     className={inputClass}
                   />
                 </Field>
+                {repeatMaxFor(device.device_model_id) > 0 ? (
+                  <Field
+                    label="PV strings on this unit"
+                    hint={`Up to ${repeatMaxFor(device.device_model_id)}. Only this many PV inputs are bound.`}
+                  >
+                    <input
+                      type="number"
+                      min={0}
+                      max={repeatMaxFor(device.device_model_id)}
+                      value={device.string_count}
+                      onChange={(event) =>
+                        updateDevice(index, {
+                          string_count: event.target.value,
+                        })
+                      }
+                      className={inputClass}
+                    />
+                  </Field>
+                ) : null}
                 {blocks.length > 0 ? (
                   <Field label="Block" hint="Where it is — not what it feeds.">
                     <select
@@ -926,6 +1022,81 @@ export function OnboardingWizard(): JSX.Element {
                     </select>
                   </Field>
                 ) : null}
+                {/*
+                  The two relationships that are not "where it is". Collapsing
+                  either into the Block makes both unanswerable: without "feeds
+                  into" there is no Single Line Diagram, and without "reports
+                  via" a failed collector is recorded as equipment downtime and
+                  corrupts every availability figure.
+                */}
+                <Field
+                  label="Feeds into"
+                  hint="Electrical parent — this is what draws the Single Line Diagram."
+                >
+                  <select
+                    value={device.parent_index ?? ""}
+                    onChange={(event) =>
+                      updateDevice(index, {
+                        parent_index: event.target.value
+                          ? Number(event.target.value)
+                          : null,
+                      })
+                    }
+                    className={inputClass}
+                  >
+                    <option value="">Nothing (a diagram root)</option>
+                    {devices.map((other, otherIndex) =>
+                      otherIndex === index ? null : (
+                        <option key={otherIndex} value={otherIndex}>
+                          {other.code || `Device ${otherIndex + 1}`}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </Field>
+                <Field
+                  label="Reports via"
+                  hint="Which Collector transmits it. Separates comms loss from downtime."
+                >
+                  <select
+                    value={device.reports_via_index ?? ""}
+                    onChange={(event) =>
+                      updateDevice(index, {
+                        reports_via_index: event.target.value
+                          ? Number(event.target.value)
+                          : null,
+                      })
+                    }
+                    className={inputClass}
+                  >
+                    <option value="">Publishes for itself</option>
+                    {devices.map((other, otherIndex) =>
+                      otherIndex === index ? null : (
+                        <option key={otherIndex} value={otherIndex}>
+                          {other.code || `Device ${otherIndex + 1}`}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </Field>
+                <div className="col-span-2 flex items-center justify-between border-t border-line pt-2 lg:col-span-4">
+                  <span className="text-[11px] text-ink-faint">
+                    {modelSummary(device.device_model_id, device.string_count)}
+                  </span>
+                  {devices.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDevices((previous) =>
+                          previous.filter((_, i) => i !== index),
+                        )
+                      }
+                      className="text-[11px] text-bad hover:underline"
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
@@ -970,17 +1141,27 @@ export function OnboardingWizard(): JSX.Element {
             ))}
           </div>
 
+          {/*
+            The readiness panel, not two unguarded buttons. Activating publishes
+            this Plant into every Portfolio total the Client sees, and a
+            half-mapped Plant dragging fleet PR down is the exact failure the
+            status exists to prevent.
+          */}
+          <div className="mt-4">
+            <CommissioningPanel plantId={plantId} />
+          </div>
+
           <div className="mt-4 flex flex-wrap gap-2">
             <Button
               disabled={setStatus.isPending}
-              onClick={() => setStatus.mutate("commissioning")}
+              onClick={() => setStatus.mutate({ status: "commissioning" })}
             >
               Move to commissioning
             </Button>
             <Button
               variant="primary"
               disabled={setStatus.isPending}
-              onClick={() => setStatus.mutate("active")}
+              onClick={() => setStatus.mutate({ status: "active" })}
               title="Only an active Plant is counted in portfolio totals."
             >
               Activate
@@ -988,7 +1169,9 @@ export function OnboardingWizard(): JSX.Element {
           </div>
           <p className="mt-2 text-[11px] text-ink-faint">
             A Plant stays out of every portfolio total until it is active, so
-            activate it only once its Devices are bound and reporting.
+            activate it only once its Devices are bound and reporting. Activation
+            is refused while blocking issues remain — override deliberately from
+            the panel above if you know something the checks do not.
           </p>
 
           {/*

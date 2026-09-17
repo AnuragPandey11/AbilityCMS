@@ -1,6 +1,11 @@
 # Broker Observations — Client Test Broker
 
-**Version:** 1.1 · **Date:** 10 September 2026 · **Status:** Evidence, not decisions
+**Version:** 1.2 · **Date:** 16 September 2026 · **Status:** Evidence, not decisions
+
+> ⚠ **The broker changed between 10 and 16 September 2026.** Payload keys on
+> `KULAR_GREEN/DATA` were replaced wholesale, and the weather topic was renamed.
+> Everything in §1 below describes the *10 September* broker and is retained as
+> the record of what it was; **§7 records what it does now.** Read §7 first.
 
 Observations from the client's test broker at `122.180.254.239:1883`, topic filter
 `KULAR_GREEN/#`, anonymous and plaintext. Two runs, 45 s and 75 s, using
@@ -250,6 +255,58 @@ durations, or counters? And are the weather sensors known to be unserviceable?
 | B-11 | Which WMS signal is the broker's `AverageGHI` — `CUMMULATIVE GHI`, `YEST. CUMMULATIVE GHI`, or an average of `GHI IRRADIATION`? | OPEN-15 |
 | B-12 | The broker publishes 25 keys across 3 topics; the schedule lists ~75 signals for 7 Device Types. When do the remaining signals start publishing? | Scope, tender §8–§11 |
 | B-13 | At ~2.78 s, is per-Reading fidelity wanted, or is one Reading per minute sufficient? Throttling at 60 s discards ~95% and adds 60 s to alarm detection latency. | Retention volume, alarm latency (BACKEND_SPEC §12.4) |
+| B-14 | Payload keys on `KULAR_GREEN/DATA` changed wholesale between 10 and 16 Sep, and the weather topic was renamed `MMS`→`WMS`. **Is there a change process for either?** Every Plant is one silent rename away from decoding nothing. | §7, commissioning |
+
+---
+
+## 7. The broker changed — 16 September 2026
+
+A 22-second run of the ingest worker against the same broker, immediately after
+migration 0020 was applied. Three findings, all of which were **invisible before
+the unmapped-key tracking added in the same change**: an unmapped key never
+becomes a Reading, so nothing in `readings` could ever have shown this.
+
+### 7.1 `KULAR_GREEN/DATA` renamed every one of its keys
+
+**Observed now:** `VRY`, `VYB`, `VBR`, `IR`, `IY`, `IB`, `PF`, `Hz`.
+**Observed 10 Sep:** `VoltageRY`, `VoltageYB`, `VoltageBR`, `CurrentR`, `CurrentY`,
+`CurrentB`, `AvgPowerFactor`, `Frequency`.
+
+The Device `MFM-01` is bound to the old names, so **it is currently decoding
+nothing** — all eight keys land in `unmapped_keys`. The Device still reads as
+*online*, because it is publishing perfectly on schedule; only the content
+changed. That is precisely the failure the health sweep cannot see and the
+unmapped-key list can.
+
+Both key families are now in `SOURCE_KEY_ALIASES`, so the binding screen suggests
+the right Tag for each. **The bindings themselves are not rewritten
+automatically** — an alias is a default for a *new* binding, and silently
+re-pointing a live Device's existing bindings is exactly the kind of inference
+MASTER §5.2 forbids. Rebinding is one action on the Device bindings screen.
+
+⚠ **This is worth raising with the client as a process question, not a bug**
+(B-14): if payload keys can change without notice, every Plant they publish is
+one rename away from silently decoding nothing.
+
+### 7.2 The weather topic moved: `MMS` → `WMS`
+
+`KULAR_GREEN/WMS` now publishes and is **quarantined** — no Device is registered
+for it. `WMS-01` is still registered on `KULAR_GREEN/MMS`, which did not appear
+once in the observation window.
+
+Consequence, and it is not small: **the Plant has no irradiance data**, so
+`AVG.GHI_CUMULATIVE` is absent and **PR cannot be computed for it** — correctly
+undefined rather than zero, but undefined all the same. Correcting the Device's
+`source_address` to `KULAR_GREEN/WMS` restores it, and is one field on the Device
+settings panel. Not done automatically: a 22-second window is evidence that WMS
+publishes, not proof that MMS is retired.
+
+### 7.3 What still decodes
+
+`KULAR_GREEN/GENERATION` is unchanged and decoding normally — active, reactive
+and apparent power, and the four energy counters. `StartTime`, `StopTime` and
+`ShutdownTime` remain unmapped, as they were on 10 Sep, because their meaning is
+still unstated (B-7).
 
 ---
 
@@ -257,5 +314,6 @@ durations, or counters? And are the weather sensors known to be unserviceable?
 
 | Version | Date | Change |
 |---|---|---|
+| 1.2 | 16 Sep 2026 | **§7: the broker changed.** `KULAR_GREEN/DATA` replaced all eight payload keys with short codes, so `MFM-01` decodes nothing while still reading as online. The weather topic moved from `MMS` to `WMS` and is being quarantined, leaving the Plant with no irradiance and therefore no computable PR. Both key families added to `SOURCE_KEY_ALIASES`; bindings and topics deliberately **not** rewritten automatically. Added B-14. |
 | 1.1 | 10 Sep 2026 | Cross-referenced against the client's signal schedule (`TAG_CATALOGUE.md`). Hypotheses §4.1 (irradiance is daily kWh/m²) and §4.2 (power in kW) corroborated by the client's own units; neither confirmed. Noted that the published `PerformanceRatio` corresponds to no signal on any Device Type and is therefore pipeline-computed. Added B-11 and B-12. |
 | 1.0 | 10 Sep 2026 | Initial observations from the `KULAR_GREEN` test broker: topic shape, payload keys, rates, and the ten questions above. |

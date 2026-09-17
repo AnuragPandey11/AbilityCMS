@@ -5,11 +5,13 @@ import {
   CredentialSchema,
   DeviceDetailSchema,
   DeviceListItemSchema,
+  UnmappedKeysSchema,
   parse,
   type Binding,
   type Credential,
   type DeviceDetail,
   type DeviceListItem,
+  type UnmappedKey,
 } from "../schemas";
 
 export async function listDevices(
@@ -93,17 +95,87 @@ export interface DeviceCreate {
   expected_interval_s?: number;
   rated_capacity_kw?: number | null;
   installed_on?: string | null;
+  /**
+   * How many inputs of the Model's repeating group this unit has — the PV
+   * strings on this Inverter. A fact about the unit, not the Model: the same
+   * datasheet covers a 12-string and a 24-string machine.
+   */
+  string_count?: number | null;
+  /**
+   * Seed bindings from the Model's signal schedule. Left on by default: a Device
+   * that exists and decodes nothing looks exactly like a broken one.
+   */
+  bind_from_model?: boolean;
 }
 
 export async function createDevice(
   plantId: number,
   body: DeviceCreate,
-): Promise<{ id: number; code: string }> {
+): Promise<{ id: number; code: string; bindings?: { bound: number } }> {
   return (await request("/devices", {
     method: "POST",
     params: { plant_id: plantId },
     body,
-  })) as { id: number; code: string };
+  })) as { id: number; code: string; bindings?: { bound: number } };
+}
+
+export type DeviceUpdate = Partial<Omit<DeviceCreate, "device_model_id">> & {
+  status?: string;
+  /**
+   * Fields to set to NULL. Needed because `null` and "unchanged" are the same
+   * JSON in a PATCH body — without it a Collector can be assigned but never
+   * unassigned.
+   */
+  clear?: string[];
+};
+
+export async function updateDevice(
+  deviceId: number,
+  body: DeviceUpdate,
+): Promise<DeviceDetail> {
+  return parse(
+    DeviceDetailSchema,
+    await request(`/devices/${deviceId}`, { method: "PATCH", body }),
+    `PATCH /devices/${deviceId}`,
+  );
+}
+
+/**
+ * Regenerate bindings from the Model's schedule.
+ *
+ * The operation to reach for after changing a string count: raising a 12-string
+ * Inverter to 24 adds the twelve new PV inputs without disturbing corrections
+ * already made to the rest. `replace` discards existing bindings first — and
+ * with them any per-Device scale or source-key correction.
+ */
+export async function bindFromModel(
+  deviceId: number,
+  replace = false,
+): Promise<{ bound: number; strings: number }> {
+  return (await request(`/devices/${deviceId}/bindings/from-model`, {
+    method: "POST",
+    params: { replace },
+  })) as { bound: number; strings: number };
+}
+
+/**
+ * Payload keys this Device publishes that nothing is bound to.
+ *
+ * Available nowhere else: an unmapped key never becomes a Reading, so no query
+ * over history can reveal one. Each entry is a signal the Device really sends
+ * and the platform is currently discarding.
+ */
+export async function unmappedKeys(deviceId: number): Promise<UnmappedKey[]> {
+  const body = await request(`/devices/${deviceId}/unmapped-keys`);
+  return parse(
+    UnmappedKeysSchema,
+    body,
+    `GET /devices/${deviceId}/unmapped-keys`,
+  ).keys;
+}
+
+export async function forgetUnmappedKeys(deviceId: number): Promise<void> {
+  await request(`/devices/${deviceId}/unmapped-keys`, { method: "DELETE" });
 }
 
 /** All-or-nothing. A parent must appear before its child in the list. */

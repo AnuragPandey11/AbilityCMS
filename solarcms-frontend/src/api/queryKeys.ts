@@ -17,9 +17,11 @@ export const qk = {
   // The catalogue changes monthly; cached hard for the session (§9).
   tags: () => ["catalog", "tags"] as const,
   deviceTypes: () => ["catalog", "device-types"] as const,
-  deviceModels: () => ["catalog", "device-models"] as const,
-  deviceModelTags: (modelId: number) =>
-    ["catalog", "device-models", modelId, "tags"] as const,
+  deviceTableColumns: () => ["catalog", "device-table-columns"] as const,
+  deviceModels: (typeCode?: string | null) =>
+    ["catalog", "device-models", typeCode ?? null] as const,
+  deviceModelTags: (modelId: number, stringCount?: number | null) =>
+    ["catalog", "device-models", modelId, "tags", stringCount ?? null] as const,
 
   plants: (params?: unknown) => ["plants", params ?? {}] as const,
   allPlants: () => ["plants", "all"] as const,
@@ -30,11 +32,15 @@ export const qk = {
   plantDevices: (id: number, blockId?: number | null) =>
     ["plants", id, "devices", blockId ?? null] as const,
   plantSld: (id: number) => ["plants", id, "sld"] as const,
+  plantDashboard: (id: number) => ["plants", id, "dashboard"] as const,
   blockKpis: (id: number, period: KpiPeriod) =>
     ["blocks", id, "kpis", period] as const,
 
+  plantCommissioning: (id: number) => ["plants", id, "commissioning"] as const,
+
   device: (id: number) => ["devices", id] as const,
   bindings: (id: number) => ["devices", id, "bindings"] as const,
+  unmappedKeys: (id: number) => ["devices", id, "unmapped-keys"] as const,
 
   readings: (query: ReadingsQuery) => ["readings", query] as const,
 

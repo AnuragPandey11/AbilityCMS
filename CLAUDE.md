@@ -4,12 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## State of this repository
 
-SolarCMS is a multi-tenant solar plant monitoring platform: MQTT ingestion → TimescaleDB → REST/WebSocket API. The backend lives in [solarcms-backend/](solarcms-backend/) and all 11 build phases are complete: migrations 0001–0017 apply and reverse, all 50 specified endpoints exist, five worker/API processes run, and 150 tests pass. Not a git repository.
+SolarCMS is a multi-tenant solar plant monitoring platform: MQTT ingestion → TimescaleDB → REST/WebSocket API. The backend lives in [solarcms-backend/](solarcms-backend/) and all 11 build phases are complete: migrations 0001–0021, all specified endpoints exist, five worker/API processes run, and the unit suite passes.
+
+Migration 0020 is applied and seeded (237 Tags, 20 Models, 364 model-tag rows, a `PLANT_KPI` Device per Plant), and the Plant KPI writer is verified to write rather than log-and-sleep.
+
+**The shell here is zsh, which does not treat `#` as a comment interactively.** Never put an inline comment in a command a person will paste — `cli seed  # backfills …` fails with `unrecognized arguments: #`. Put the explanation on its own line.
+
+```
+.venv/bin/alembic upgrade head
+.venv/bin/python -m solarcms.cli seed
+```
 
 Four documents carry the design, in this precedence order:
 
-- [docs/MASTER_SPECIFICATION.md](docs/MASTER_SPECIFICATION.md) (v2.1) — **authoritative on facts**: vocabulary, client-confirmed decisions, data model, scope, open questions.
-- [docs/BACKEND_SPEC.md](docs/BACKEND_SPEC.md) (v1.3) — **authoritative on implementation**: structure, pinned dependencies, endpoints, build order. Subordinate to MASTER on any fact.
+- [docs/MASTER_SPECIFICATION.md](docs/MASTER_SPECIFICATION.md) (v2.7) — **authoritative on facts**: vocabulary, client-confirmed decisions, data model, scope, open questions.
+- [docs/BACKEND_SPEC.md](docs/BACKEND_SPEC.md) (v1.5) — **authoritative on implementation**: structure, pinned dependencies, endpoints, build order. Subordinate to MASTER on any fact.
 - [docs/TAG_CATALOGUE.md](docs/TAG_CATALOGUE.md) — the client's own Device List and signal schedule. **Authoritative on units** for the 7 Device Types it covers; silent on scaling and ranges.
 - [docs/BROKER_OBSERVATIONS.md](docs/BROKER_OBSERVATIONS.md) — measured behaviour of the client's test broker. Evidence of *shape*, never of meaning.
 
@@ -31,7 +40,7 @@ python -m solarcms.workers.health_sweeper  # 60s staleness/frozen-value sweep
 python -m solarcms.workers.scheduler     # report crons, escalation timers
 ```
 
-Migrations are Alembic only (`alembic upgrade head`), currently `0001`–`0017`. **Roles are created outside them** — run `scripts/bootstrap_roles.sql` as a superuser first, since a migration role normally has no CREATEROLE. Seed with `python -m solarcms.cli seed` (idempotent).
+Migrations are Alembic only (`alembic upgrade head`), currently `0001`–`0021`. **Roles are created outside them** — run `scripts/bootstrap_roles.sql` as a superuser first, since a migration role normally has no CREATEROLE. Seed with `python -m solarcms.cli seed` (idempotent).
 
 Tests: `pytest tests/unit` is pure-`domain/` and needs nothing running; `pytest tests/integration` needs the migrated database. Lint and types must both stay clean: `ruff check .` and `mypy src/solarcms` (strict). `tools/simulate.py` publishes either topic shape and can induce faults (`--fault silent|frozen|underperform`) that are otherwise impossible to wait for.
 
@@ -39,7 +48,17 @@ Tests: `pytest tests/unit` is pure-`domain/` and needs nothing running; `pytest 
 
 **`domain/` is pure.** Plain Python values in and out, no DB, no network, no I/O — that is what makes the formulas (the part most likely to be wrong) testable and replaceable. Topic decoding, PR/CUF/availability, alarm debounce/hysteresis, health logic, tier selection, and SLD tree building all live there.
 
-**Nothing is known yet about units, formulas, thresholds, or intervals.** Every placeholder lives in `domain/assumptions.py` and nowhere else, so the client's real table is a one-file edit. BACKEND_SPEC §12 lists them; a factor-of-1000 voltage error looks entirely plausible in the data, which is why this is enforced rather than advised.
+**Nothing is known yet about units, formulas, thresholds, or intervals.** Every placeholder lives in `domain/assumptions.py` and nowhere else, so the client's real table is a one-file edit. BACKEND_SPEC §12 lists them; a factor-of-1000 voltage error looks entirely plausible in the data, which is why this is enforced rather than advised. The exception, added 16 Sep 2026: the formulas in `DERIVED_TAG_FORMULAS` are **client-supplied**, transcribed from their sheet's FORMULA column, and are marked SUPPLIED rather than ASSUMED — except CUF, which they left blank.
+
+**A calculated metric is a row, not a release.** `tags.formula` holds arithmetic over other Tag codes (`(HV_VOLTAGE_RY + HV_VOLTAGE_YB + HV_VOLTAGE_BR) / 3`) and `domain/derived.py` evaluates it — parsing with `ast` against a whitelist, so a formula typed by an administrator cannot call anything. Two scopes: `device` formulas read one Device's own Tags and run in ingest; `plant` formulas read dotted aggregates (`SUM.ENERGY_TODAY`, `AVG.GHI_CUMULATIVE`) and run in the scheduler, the only process that sees a whole Plant. Three rules worth holding: **a published value always beats a computed one**, so a meter that really transmits AVG VOLTAGE keeps its own; **a missing input yields undefined, never 0.0**, because a PR of zero and an unknown PR mean opposite things; and a Device derives a Tag **only when it is bound to all of that formula's inputs**, which is why nothing is configured per Device.
+
+**Repeating signal groups are sliced per unit.** The Inverter schedules PV1–PV28; how many a given machine has is `devices.string_count`, not a property of the Model, because one datasheet covers a 12-string and a 24-string machine. `device_model_tags.repeat_index` marks the group and binding takes the first *n*. With no count recorded, **none** of the group is bound — twenty-eight Tags that never report look exactly like a broken Device.
+
+**The dashboard is one fixed screen, and the sources are configuration.** Plants are wired differently — two MCR sections fed by an ICR on one, a rooftop array whose entire AC side is a net meter on another — so a **slot** is a *position* on the screen (`kpi.current_power`), not a Tag. Each slot carries an ordered list of candidates naming a Device **Type**, a Tag and an aggregation, and the first the Plant is actually bound for wins (`domain/slots.py`, catalogue in `domain/dashboard_spec.py`, tables in migration 0021). Three rules matter: resolution is *planned* against bindings and only then read against values, which is what separates "no settlement meter here" from "the meter has gone quiet"; provenance travels with every value, because 6.32 MW measured and 6.32 MW summed from twelve Inverters are different claims; and a missing source yields undefined, never 0.0. Per-Plant deviation is a row in `plant_dashboard_slot_overrides` with a `note` — **expected to be empty**, and that it is usually empty is what keeps it on the right side of Guardrail 2. A drag-and-drop canvas was rejected (MASTER §3.7): it makes each Plant a bespoke artefact nobody can compare with another.
+
+**The SLD has two projections.** `domain/sld.py` builds the true `parent_device_id` tree — one box per Device, the view for finding *which* Inverter. `domain/sld_stages.py` folds every power-path Device Type into exactly four stages via `device_types.sld_stage` — **PV Array → Inverters → Transformer → Grid**, always those four in that order — which is the view for judging a Plant at a glance and comparing it with the next one. A stage with no Devices still renders, marked not instrumented: on a rooftop Plant that is normal, on an 8 MW Plant it is a Device nobody registered.
+
+**Every Plant has a `PLANT_KPI` Device** carrying its own figures (PR, CUF, peak power and its time, start/stop times, functional-Inverter count). This is the client's `DASHBOARD` row, renamed because "dashboard" already names a UI concept here. Its Tags are computed by `services/plant_kpi.py` every scheduler tick and copied to the YESTERDAY family at **23:55 Plant-local** — not UTC, or an Asia/Kolkata Plant attributes five and a half hours to the wrong day.
 
 **Readings are narrow rows, never columns.** `(time, client_id, device_id, tag_id, value, quality, source_time)`. Device Models expose different Tag sets, so a wide table would be mostly NULL and every new model a migration. `client_id` is deliberately denormalised onto `readings` so row-level security and chunk pruning avoid a three-table join.
 
@@ -79,6 +98,9 @@ Two guardrails were added from the client's signal schedule: **never throttle a 
 
 Each of these was found by running the system, and each is a trap worth not re-discovering:
 
+- **A payload key's meaning depends on the Device Type.** `VRY` is 11.037 from the client's MFM (an 11 kV feeder) and 799.9 from their Inverter (an 800 V LT bus). `SOURCE_KEY_ALIASES` is keyed by the key alone, so both resolved to `HV_VOLTAGE_RY` and one would have been stored as "799.9 kV" — with two of the three phases passing the range check while doing it. Use `alias_for(key, device_type_code)`, never the dict directly; `SOURCE_KEY_ALIASES_BY_DEVICE_TYPE` holds the overrides.
+- **A subscription filter that matches nothing is invisible.** The client's broker moved to `SCMS/V1/...` while `MQTT_SUBSCRIBE_TOPICS` still said `KULAR_GREEN/#`. MQTT `#` is level-anchored, so it matched nothing, and because nothing was *delivered* nothing was quarantined either — `mqtt_raw` stayed empty and no alarm fired. 27 hours of silence looked exactly like a quiet plant. `python -m solarcms.cli commission-from-broker` (dry run by default) compares what is publishing against what is registered.
+- **MQTT topic levels are case-sensitive, and must stay that way.** `SCMS/V1` is a second `topic_patterns` row, not a `.lower()` in the resolver: case-folding would make `KULAR_GREEN` and `kular_green` the same origin, and Guardrail 5 makes the topic the sole authority for origin.
 - **Payloads come in two shapes.** The canonical envelope (`{device, timestamp, readings:[{tag,value}]}`) and the flat body the client's broker actually sends. `domain/decoding.normalise_payload` handles both. The envelope's `device` field is deliberately ignored — the topic is the sole authority for origin.
 - **Throttling also erased the liveness signal.** `_accept` returned before recording anything when every Tag in a message was inside its throttle window, so a Device on 300 s-throttled Tags was invisible for 57 of every 60 s and the health sweep flapped it `online → offline` each minute. "Heard" and "stored" are now separate: ingest touches `seen:device:{id}` in Redis on every accepted message, and the sweep takes the later of that and `max(readings_v.time)`. Never derive liveness from `readings` alone.
 - **A permissive RLS policy is not a GRANT.** Migration 0015 created `device_health_scheduler … WITH CHECK (true)` but never granted the scheduler INSERT/UPDATE, so every health sweep failed with "permission denied", logged it, and slept — `comm_status` stayed NULL fleet-wide and nothing else noticed. Fixed in 0017. A worker that catches-and-logs its main loop needs a test that asserts a row was written.
@@ -87,6 +109,8 @@ Each of these was found by running the system, and each is a trap worth not re-d
 - **A failed login cannot share a transaction with the 401 it records.** The raise rolls the audit row back, and tender §33 requires failed logins. `auth.py` commits that row in its own transaction first.
 - **Authentication is circular**: `memberships` is needed to set `app.client_id`, but its policy filters on `app.client_id`. Resolved by setting `app.user_id` after the password verifies and letting a session read its own memberships (migration 0014). `SECURITY DEFINER` does *not* work here — `FORCE ROW LEVEL SECURITY` subjects the owner too.
 - **asyncpg cannot infer a parameter's type used only in `IS NULL`**, and `:param::type` collides with SQLAlchemy's bind syntax. Use `CAST(:param AS type)`.
+- **The same bind used twice can deduce two types and fail the whole statement.** `UPDATE plants SET status = :status … WHEN :status = 'active'` assigns to a `varchar(32)` and compares against a `text` literal, and asyncpg refuses with `inconsistent types deduced for parameter $1 — text versus character varying`. It surfaces as a 500 on a route that looks obviously correct. Same remedy as above: `CAST` **every** occurrence, not just the awkward-looking one.
+- **`HTTPException(detail=...)` is rendered as a string.** A dict passed as `detail` reaches the browser as a Python repr — `{'message': …, 'issues': [...]}` — which then gets displayed to a user verbatim. Pass a sentence; if the caller needs structure, give it an endpoint to fetch.
 - **`INET` comes back as `ipaddress.IPv4Address`**, which the JSON serialiser rejects; the audit query casts with `host()`.
 - **RLS silently makes a migration's data fix a no-op.** `FORCE ROW LEVEL SECURITY` applies to the owner, so a migration that touches data in a protected table matches zero rows — no error, just nothing happening. Any such migration must `SELECT set_config('app.is_platform_admin','true',true)` first.
 - **The scheduler runs with platform privileges, so the barrier views do not scope it.** Report generation must filter by `client_id` itself; it is the one place isolation is not inherited from the database, and it leaked another Client's meter into a Financial Report before the predicate was added.

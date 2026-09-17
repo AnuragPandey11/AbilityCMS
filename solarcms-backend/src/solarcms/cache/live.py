@@ -48,6 +48,52 @@ async def write_current_values(
         await pipe.execute()
 
 
+async def clear_current_values(device_id: int, tag_ids: list[int]) -> None:
+    """Drop specific Tags from a Device's current values.
+
+    Used at the Plant's day boundary: today's peak power and start time must
+    *stop standing* once they have been copied to the YESTERDAY family, or
+    tomorrow's peak is compared against yesterday's and never beats it.
+    """
+    if not tag_ids:
+        return
+    # Cast for the same reason `read_current_values` does: redis-py types this as
+    # possibly-sync depending on the client flavour, and this client is async.
+    await cast(
+        "Awaitable[int]",
+        get_redis().hdel(keys.live_device(device_id), *[str(t) for t in tag_ids]),
+    )
+
+
+async def record_unmapped_keys(device_id: int, source_keys: list[str]) -> None:
+    """Remember payload keys nothing is bound to, for the commissioning screen.
+
+    A published-but-unbound key is not an error — a Device may report more than
+    has been mapped — but it *is* the signal that commissioning is unfinished,
+    and it is invisible everywhere else: an unmapped key never becomes a Reading,
+    so no query over `readings` can ever reveal one. Kept for a day, so the list
+    reflects what the Device is sending now rather than what it once sent.
+    """
+    if not source_keys:
+        return
+    redis = get_redis()
+    async with redis.pipeline(transaction=False) as pipe:
+        pipe.sadd(keys.unmapped_keys(device_id), *source_keys)
+        pipe.expire(keys.unmapped_keys(device_id), keys.UNMAPPED_KEYS_TTL_S)
+        await pipe.execute()
+
+
+async def read_unmapped_keys(device_id: int) -> list[str]:
+    result: set[str] = await cast(
+        "Awaitable[set[str]]", get_redis().smembers(keys.unmapped_keys(device_id))
+    )
+    return sorted(result)
+
+
+async def clear_unmapped_keys(device_id: int) -> None:
+    await get_redis().delete(keys.unmapped_keys(device_id))
+
+
 async def touch_device_seen(device_id: int, at: datetime) -> None:
     """Record that a Device spoke, whether or not anything was stored.
 

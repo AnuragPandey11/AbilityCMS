@@ -6,14 +6,23 @@ import json
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from solarcms.api.auth import hash_password
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.cache import live
 from solarcms.cache.live import invalidate_resolution
-from solarcms.schemas.assets import BindingsReplace, DeviceBulkImport, DeviceCreate
+from solarcms.domain.assumptions import SOURCE_KEY_ALIASES
+from solarcms.domain.sld import would_create_cycle
+from solarcms.schemas.assets import (
+    BindingsReplace,
+    DeviceBulkImport,
+    DeviceCreate,
+    DeviceUpdate,
+)
+from solarcms.services.onboarding import bind_from_model
 
 router = APIRouter(tags=["devices"])
 
@@ -73,6 +82,62 @@ async def get_bindings(
     return [dict(row._mapping) for row in rows]
 
 
+@router.get("/devices/{device_id}/unmapped-keys")
+async def unmapped_keys(
+    device_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("config.modify")),
+) -> dict[str, Any]:
+    """Payload keys this Device is publishing that nothing is bound to.
+
+    The most useful thing on a commissioning screen, and it is available nowhere
+    else: an unmapped key never becomes a Reading, so no query over `readings`
+    can reveal one. Each entry is a signal the Device really sends and that the
+    platform is currently discarding.
+
+    `suggested_tag_code` is the registry's own alias for that key where one
+    exists — the client's sheet spells it "AMBINT TEMP." and the canonical Tag is
+    AMBIENT_TEMPERATURE. A suggestion only: the binding is the authority.
+    """
+    exists = (await session.execute(
+        text("SELECT 1 FROM devices WHERE id = :id"), {"id": device_id})).first()
+    if exists is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    keys = await live.read_unmapped_keys(device_id)
+    return {
+        "device_id": device_id,
+        "keys": [
+            {"source_key": key, "suggested_tag_code": SOURCE_KEY_ALIASES.get(key)}
+            for key in keys
+        ],
+    }
+
+
+@router.delete("/devices/{device_id}/unmapped-keys",
+               status_code=status.HTTP_204_NO_CONTENT)
+async def forget_unmapped_keys(
+    device_id: int, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("config.modify")),
+) -> Response:
+    """Forget the unmapped-key list, so it rebuilds from what arrives next.
+
+    Used after editing bindings: the old list still names keys that are now
+    mapped, and a commissioning screen that keeps reporting solved problems stops
+    being read.
+    """
+    device = (await session.execute(
+        text("SELECT client_id FROM devices WHERE id = :id"), {"id": device_id})).first()
+    if device is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    keys = await live.read_unmapped_keys(device_id)
+    await live.clear_unmapped_keys(device_id)
+    # Audited like any other configuration action: it changes what the
+    # commissioning screen reports, and "who cleared the warning" is exactly the
+    # question asked when a signal turns out to have been missing all along.
+    await _audit(session, user, device.client_id, "device.unmapped_keys.clear",
+                 device_id, after={"cleared": keys})
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/devices", status_code=status.HTTP_201_CREATED)
 async def create_device(
     plant_id: int, body: DeviceCreate, session: SessionDep,
@@ -120,11 +185,13 @@ async def _insert_devices(
                 INSERT INTO devices (client_id, plant_id, device_model_id, code, name,
                                      serial_number, block_id, parent_device_id,
                                      reports_via_device_id, source_address,
-                                     expected_interval_s, rated_capacity_kw, installed_on)
+                                     expected_interval_s, rated_capacity_kw,
+                                     string_count, installed_on)
                 VALUES (:client_id, :plant_id, :model_id, :code, :name, :serial,
                         :block_id, :parent_id, :collector_id, :source_address,
-                        :interval_s, :capacity, :installed_on)
-                RETURNING id, code, name, status, source_address, expected_interval_s
+                        :interval_s, :capacity, :string_count, :installed_on)
+                RETURNING id, code, name, status, source_address, expected_interval_s,
+                          string_count
             """), {
                 "client_id": plant.client_id, "plant_id": plant_id,
                 "model_id": device.device_model_id, "code": device.code,
@@ -134,6 +201,7 @@ async def _insert_devices(
                 "source_address": device.source_address,
                 "interval_s": device.expected_interval_s,
                 "capacity": device.rated_capacity_kw,
+                "string_count": device.string_count,
                 "installed_on": device.installed_on,
             })).first()
         except IntegrityError as exc:
@@ -146,10 +214,164 @@ async def _insert_devices(
                 f"{_explain_integrity_error(exc)}",
             ) from exc
         assert row is not None
-        out.append(dict(row._mapping))
+        created = dict(row._mapping)
+        if device.bind_from_model:
+            # Seeded from the Model's schedule so the Device decodes something
+            # from its first message. A starting point, not the authority: the
+            # commissioning screen is where it is corrected (MASTER §5.2).
+            created["bindings"] = await bind_from_model(
+                session, plant.client_id, row.id)
+        out.append(created)
         await _audit(session, user, plant.client_id, "device.create", row.id,
-                     after={"code": device.code, "topic": device.source_address})
+                     after={"code": device.code, "topic": device.source_address,
+                            "string_count": device.string_count})
     return out
+
+
+@router.patch("/devices/{device_id}")
+async def update_device(
+    device_id: int, body: DeviceUpdate, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("plant.manage")),
+) -> dict[str, Any]:
+    """Edit a Device — its wiring, its topic, its interval, its string count.
+
+    The three groupings are edited here because they are *discovered*: which
+    Collector actually transmits a Device, and what it really feeds into, are
+    routinely corrected after the first day of live data. A platform where that
+    requires a developer is a platform where the SLD quietly stays wrong.
+    """
+    before = (await session.execute(text("""
+        SELECT client_id, plant_id, code, name, status, block_id, parent_device_id,
+               reports_via_device_id, source_address, expected_interval_s,
+               string_count
+          FROM devices WHERE id = :id
+    """), {"id": device_id})).first()
+    if before is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+
+    clear = set(body.clear or [])
+    unknown = clear - {"block_id", "parent_device_id", "reports_via_device_id",
+                       "source_address", "string_count"}
+    if unknown:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"cannot clear {sorted(unknown)}")
+
+    # ── Refuse a loop at the moment it is made ───────────────────────────────
+    # The composite foreign key already forces a parent to share the Plant, and a
+    # CHECK forbids a Device being its own parent, but neither can see a longer
+    # ring: A feeds B, B feeds C, C feeds A. `build_sld` survives that — it
+    # detaches the ring and reports it — but the hierarchy editor makes the
+    # mistake one drag away, and a diagram with pieces silently missing is a far
+    # worse answer than "that would make MFM-01 feed into itself".
+    if body.parent_device_id is not None and "parent_device_id" not in clear:
+        rows = (await session.execute(text("""
+            SELECT id, parent_device_id FROM devices WHERE plant_id = :plant_id
+        """), {"plant_id": before.plant_id})).all()
+        parents = {row.id: row.parent_device_id for row in rows}
+        if would_create_cycle(parents, device_id, body.parent_device_id):
+            target = (await session.execute(
+                text("SELECT code FROM devices WHERE id = :id"),
+                {"id": body.parent_device_id})).scalar()
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{before.code} cannot feed into {target or body.parent_device_id}: "
+                f"{target or 'that Device'} already feeds back into {before.code}, "
+                f"directly or through others, and electricity cannot flow in a ring.",
+            )
+
+    def value(field: str, supplied: Any) -> Any:
+        return None if field in clear else supplied
+
+    try:
+        row = (await session.execute(text("""
+            UPDATE devices
+               SET name = coalesce(:name, name),
+                   serial_number = coalesce(:serial, serial_number),
+                   block_id = CASE WHEN :clear_block THEN NULL
+                                   ELSE coalesce(:block_id, block_id) END,
+                   parent_device_id = CASE WHEN :clear_parent THEN NULL
+                                           ELSE coalesce(:parent_id, parent_device_id) END,
+                   reports_via_device_id =
+                       CASE WHEN :clear_collector THEN NULL
+                            ELSE coalesce(:collector_id, reports_via_device_id) END,
+                   source_address = CASE WHEN :clear_topic THEN NULL
+                                         ELSE coalesce(:source_address, source_address) END,
+                   expected_interval_s = coalesce(:interval_s, expected_interval_s),
+                   rated_capacity_kw = coalesce(:capacity, rated_capacity_kw),
+                   string_count = CASE WHEN :clear_strings THEN NULL
+                                       ELSE coalesce(:string_count, string_count) END,
+                   installed_on = coalesce(CAST(:installed_on AS date), installed_on),
+                   status = coalesce(:status, status)
+             WHERE id = :id
+            RETURNING id, code, name, status, block_id, parent_device_id,
+                      reports_via_device_id, source_address, expected_interval_s,
+                      rated_capacity_kw, string_count
+        """), {
+            "id": device_id, "name": body.name, "serial": body.serial_number,
+            "block_id": value("block_id", body.block_id),
+            "parent_id": value("parent_device_id", body.parent_device_id),
+            "collector_id": value("reports_via_device_id", body.reports_via_device_id),
+            "source_address": value("source_address", body.source_address),
+            "interval_s": body.expected_interval_s,
+            "capacity": body.rated_capacity_kw,
+            "string_count": value("string_count", body.string_count),
+            "installed_on": body.installed_on, "status": body.status,
+            "clear_block": "block_id" in clear,
+            "clear_parent": "parent_device_id" in clear,
+            "clear_collector": "reports_via_device_id" in clear,
+            "clear_topic": "source_address" in clear,
+            "clear_strings": "string_count" in clear,
+        })).first()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"device {before.code!r} violates a constraint: "
+            f"{_explain_integrity_error(exc)}",
+        ) from exc
+    assert row is not None
+
+    # The resolver caches topic → Device with its bindings and constants for
+    # 300s. Editing any of them without invalidating means ingest keeps decoding
+    # against the old mapping for five minutes — long enough to look like the
+    # edit silently failed.
+    for topic in {before.source_address, row.source_address}:
+        if topic:
+            await invalidate_resolution(topic)
+
+    await _audit(session, user, before.client_id, "device.update", device_id,
+                 before=dict(before._mapping), after=dict(row._mapping))
+    return dict(row._mapping)
+
+
+@router.post("/devices/{device_id}/bindings/from-model")
+async def rebind_from_model(
+    device_id: int, session: SessionDep,
+    replace: bool = Query(False, description="Discard existing bindings first."),
+    user: CurrentUser = Depends(require_permission("config.modify")),
+) -> dict[str, Any]:
+    """Regenerate this Device's bindings from its Model's signal schedule.
+
+    The operation to reach for after changing a Device's string count: raising a
+    12-string Inverter to 24 adds the twelve new PV inputs without disturbing the
+    corrections already made to the rest.
+
+    `replace=true` discards existing bindings first, which also discards any
+    per-Device scale or source-key correction — so it is opt-in, and the default
+    adds without overwriting.
+    """
+    device = (await session.execute(
+        text("SELECT client_id, source_address FROM devices WHERE id = :id"),
+        {"id": device_id})).first()
+    if device is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+
+    result = await bind_from_model(session, device.client_id, device_id,
+                                   replace=replace)
+    if device.source_address:
+        await invalidate_resolution(device.source_address)
+    await _audit(session, user, device.client_id, "device.bindings.from_model",
+                 device_id, after={**result, "replace": replace})
+    return result
 
 
 def _explain_integrity_error(exc: IntegrityError) -> str:
@@ -167,14 +389,16 @@ def _explain_integrity_error(exc: IntegrityError) -> str:
 
 async def _audit(
     session: Any, user: CurrentUser, client_id: int, action: str, entity_id: int,
-    *, after: dict[str, Any] | None = None,
+    *, after: dict[str, Any] | None = None, before: dict[str, Any] | None = None,
 ) -> None:
     await session.execute(text("""
-        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
+        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id,
+                               before, after)
         VALUES (:client_id, :user_id, :action, 'devices', :entity_id,
-                CAST(:after AS jsonb))
+                CAST(:before AS jsonb), CAST(:after AS jsonb))
     """), {"client_id": client_id, "user_id": user.user_id, "action": action,
            "entity_id": entity_id,
+           "before": json.dumps(before, default=str) if before else None,
            "after": json.dumps(after, default=str) if after else None})
 
 

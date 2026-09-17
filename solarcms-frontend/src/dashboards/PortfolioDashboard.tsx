@@ -18,7 +18,7 @@ import * as plantsApi from "@/api/endpoints/plants";
 import type { KpiFigure, PlantKpis, PlantListItem } from "@/api/schemas";
 import { KpiTile, StatTile } from "@/components/charts/KpiTile";
 import { Panel, SectionHeading, Badge } from "@/components/ui";
-import { EmptyState, ErrorState, LoadingState } from "@/components/state";
+import {EmptyState, ErrorState, SkeletonChart, SkeletonKpiRow, SkeletonTable} from "@/components/state";
 import {
   DeviceHealthStrip,
   PeriodPicker,
@@ -89,7 +89,15 @@ export function PortfolioDashboard(): JSX.Element {
     })),
   });
 
-  if (plantsQuery.isLoading) return <LoadingState label="Loading portfolio" />;
+  if (plantsQuery.isLoading) {
+    return (
+      <div className="space-y-6">
+        <SkeletonKpiRow tiles={6} />
+        <SkeletonChart />
+        <SkeletonTable rows={6} columns={5} />
+      </div>
+    );
+  }
   if (plantsQuery.isError) {
     return <ErrorState error={plantsQuery.error} retry={() => void plantsQuery.refetch()} />;
   }

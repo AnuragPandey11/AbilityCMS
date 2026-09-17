@@ -92,10 +92,63 @@ class DeviceCreate(BaseModel):
     expected_interval_s: int = Field(default=60, ge=1)
     rated_capacity_kw: float | None = Field(default=None, ge=0)
     installed_on: date | None = None
+    # How many inputs of the Model's repeating group this unit has — the number
+    # of PV strings on an Inverter. A fact about the unit, not the Model: the
+    # same datasheet covers a 12-string and a 24-string machine, so asking it
+    # here is what stops the catalogue needing a Model per string count.
+    string_count: int | None = Field(default=None, ge=0, le=512)
+    # Seed the bindings from the Model's signal schedule on creation. On by
+    # default because the alternative — a Device that exists and decodes nothing
+    # — looks identical to a broken Device on every screen that shows it.
+    bind_from_model: bool = True
 
     # Note: "parent must share the Plant" (I-3) is enforced by a composite foreign
     # key in the schema, not here. A structural constraint cannot be bypassed by a
     # code path that forgets to call the validator.
+
+
+class DeviceUpdate(BaseModel):
+    """Edit a registered Device. Every field optional; omitted means unchanged.
+
+    The three groupings are editable because they are discovered, not designed:
+    which Collector actually transmits a Device is routinely corrected after the
+    first day of real data.
+    """
+
+    name: str | None = None
+    serial_number: str | None = None
+    block_id: int | None = None
+    parent_device_id: int | None = None
+    reports_via_device_id: int | None = None
+    source_address: str | None = None
+    expected_interval_s: int | None = Field(default=None, ge=1)
+    rated_capacity_kw: float | None = Field(default=None, ge=0)
+    string_count: int | None = Field(default=None, ge=0, le=512)
+    installed_on: date | None = None
+    status: str | None = Field(
+        default=None, pattern="^(active|maintenance|faulty|decommissioned)$")
+    # Clearing a grouping needs a way to say "none", which an omitted field
+    # cannot: `null` and "unchanged" are the same JSON without it.
+    clear: list[str] | None = Field(
+        default=None,
+        description="Fields to set to NULL: block_id, parent_device_id, "
+                    "reports_via_device_id, source_address, string_count.",
+    )
+
+
+class PlantStatusChange(BaseModel):
+    """Move a Plant along the onboarding path (MASTER §6.5).
+
+    A dedicated route rather than a PATCH field, because a transition is not an
+    edit: going `active` publishes the Plant into every Portfolio total, and that
+    deserves its own readiness check and its own audit entry.
+    """
+
+    status: str = Field(pattern="^(draft|commissioning|active|decommissioned)$")
+    # A Plant that fails its readiness checks can still be forced live — the
+    # operator may know something the checks do not — but never by accident.
+    force: bool = False
+    note: str | None = None
 
 
 class DeviceBulkImport(BaseModel):

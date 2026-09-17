@@ -1,0 +1,3 @@
+# scripts/dev-up.sh's own bookkeeping: per-process logs and the PID file it
+# tracks them by. Regenerated every run; never meant to be committed.
+.dev-run/

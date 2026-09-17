@@ -8,7 +8,7 @@
  * rather than as a bug or a blank panel.
  */
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { isApiError } from "@/api/problem";
 
 export function LoadingState({ label = "Loading" }: { label?: string }): JSX.Element {
@@ -20,8 +20,125 @@ export function LoadingState({ label = "Loading" }: { label?: string }): JSX.Ele
   );
 }
 
-export function Skeleton({ className = "" }: { className?: string }): JSX.Element {
-  return <div className={`animate-pulse rounded bg-line/60 ${className}`} />;
+export function Skeleton({
+  className = "",
+  style,
+}: {
+  className?: string;
+  style?: CSSProperties;
+}): JSX.Element {
+  return (
+    <div className={`animate-pulse rounded bg-line/60 ${className}`} style={style} />
+  );
+}
+
+/**
+ * Skeletons shaped like the thing that is coming.
+ *
+ * A centred "Loading…" moves every tile on the page the moment data lands, and
+ * on a monitoring wall that reflow reads as the screen having gone wrong. These
+ * occupy the final layout, so arriving data fills boxes that are already there.
+ *
+ * They are deliberately *shapes*, never placeholder numbers. A skeleton showing
+ * "0 kW" or a dash is indistinguishable, for the second before it resolves, from
+ * a Plant that has genuinely stopped generating — and that is the one reading an
+ * operator must never get wrong.
+ */
+export function SkeletonKpiRow({ tiles = 6 }: { tiles?: number }): JSX.Element {
+  return (
+    <div
+      className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6"
+      aria-hidden="true"
+    >
+      {Array.from({ length: tiles }, (_, index) => (
+        <div
+          key={index}
+          className="rounded-lg border border-line bg-surface-raised p-3"
+        >
+          <Skeleton className="h-2.5 w-20" />
+          <Skeleton className="mt-2.5 h-6 w-24" />
+          <Skeleton className="mt-2 h-2 w-16" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function SkeletonTable({
+  rows = 6,
+  columns = 5,
+}: {
+  rows?: number;
+  columns?: number;
+}): JSX.Element {
+  return (
+    <div className="overflow-hidden rounded-lg border border-line" aria-hidden="true">
+      <div className="flex gap-4 border-b border-line bg-surface-sunken px-3 py-2">
+        {Array.from({ length: columns }, (_, index) => (
+          <Skeleton key={index} className="h-2.5 flex-1" />
+        ))}
+      </div>
+      {Array.from({ length: rows }, (_, row) => (
+        <div key={row} className="flex gap-4 border-b border-line/50 px-3 py-2.5">
+          {Array.from({ length: columns }, (_, column) => (
+            <Skeleton key={column} className="h-3 flex-1" />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function SkeletonChart({ height = 220 }: { height?: number }): JSX.Element {
+  return (
+    <div
+      className="rounded-lg border border-line bg-surface-raised p-3"
+      aria-hidden="true"
+    >
+      <Skeleton className="h-2.5 w-28" />
+      <div
+        className="mt-3 flex items-end gap-1.5"
+        style={{ height: `${height}px` }}
+      >
+        {Array.from({ length: 24 }, (_, index) => (
+          <Skeleton
+            key={index}
+            className="flex-1"
+            // A daylight curve rather than a flat bar chart: the shape a
+            // generation chart is about to take.
+            style={{
+              height: `${20 + Math.sin((index / 23) * Math.PI) * 70}%`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function SkeletonPanel({
+  lines = 3,
+  title = true,
+}: {
+  lines?: number;
+  title?: boolean;
+}): JSX.Element {
+  return (
+    <div
+      className="rounded-lg border border-line bg-surface-raised p-4"
+      aria-hidden="true"
+    >
+      {title ? <Skeleton className="h-3 w-32" /> : null}
+      <div className="mt-3 space-y-2">
+        {Array.from({ length: lines }, (_, index) => (
+          <Skeleton
+            key={index}
+            className={`h-3 ${index % 3 === 0 ? "w-full" : index % 3 === 1 ? "w-4/5" : "w-2/3"}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function EmptyState({

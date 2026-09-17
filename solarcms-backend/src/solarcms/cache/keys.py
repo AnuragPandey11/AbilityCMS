@@ -51,6 +51,13 @@ THROTTLE_TTL_S: Final = 600
 COUNTER: Final = "counter:{device_id}:{tag_id}"
 COUNTER_TTL_S: Final = 86400
 
+# Payload keys a Device published that no binding maps. The single most useful
+# fact during commissioning — it is the difference between "this Device sends
+# nothing" and "this Device sends things nobody has named yet" — and it exists
+# nowhere else: an unmapped key is by definition absent from `readings`.
+UNMAPPED_KEYS: Final = "unmapped:device:{device_id}"
+UNMAPPED_KEYS_TTL_S: Final = 86400
+
 # Live fan-out across API replicas. Not optional: with more than one API process,
 # a WebSocket held by process A never sees a Reading received by the ingest
 # worker without it.
@@ -97,3 +104,7 @@ def counter(device_id: int, tag_id: int) -> str:
 
 def analytics(digest: str) -> str:
     return ANALYTICS.format(digest=digest)
+
+
+def unmapped_keys(device_id: int) -> str:
+    return UNMAPPED_KEYS.format(device_id=device_id)

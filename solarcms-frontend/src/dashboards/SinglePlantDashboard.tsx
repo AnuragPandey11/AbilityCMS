@@ -15,6 +15,8 @@ import {
   usePlantBlocks,
   usePlantDevices,
   usePlantKpis,
+  usePlantDashboard,
+  useDeviceTableColumns,
   useDeviceHealth,
   useTagsById,
 } from "@/api/hooks";
@@ -25,7 +27,18 @@ import { KpiTile, StatTile } from "@/components/charts/KpiTile";
 import { Gauge } from "@/components/charts/Gauge";
 import { ReadingsPanel } from "@/components/charts/ReadingsPanel";
 import { Panel, Badge } from "@/components/ui";
-import { EmptyState, ErrorState, LoadingState } from "@/components/state";
+import {
+  EmptyState,
+  ErrorState,
+  SkeletonKpiRow,
+  SkeletonPanel,
+  SkeletonTable,
+} from "@/components/state";
+import { PlantStatusControl } from "@/admin/PlantStatusControl";
+import { DeviceTypePanels } from "@/components/devices/DeviceTypePanels";
+import { DeviceSummaryTable } from "@/components/devices/DeviceSummaryTable";
+import { SldSpine } from "@/components/sld/SldSpine";
+import { KpiSlotRow, SlotListPanel } from "@/components/dashboard/DashboardPanels";
 import {
   CommStatusBadge,
   DeviceHealthStrip,
@@ -49,6 +62,8 @@ export function SinglePlantDashboard(): JSX.Element {
 
   const plantQuery = usePlant(plantId);
   const kpisQuery = usePlantKpis(plantId, period);
+  const dashboardQuery = usePlantDashboard(plantId);
+  const columnsQuery = useDeviceTableColumns();
   const blocksQuery = usePlantBlocks(plantId);
   const devicesQuery = usePlantDevices(plantId);
   const healthQuery = useDeviceHealth(plantId);
@@ -72,13 +87,34 @@ export function SinglePlantDashboard(): JSX.Element {
       />
     );
   }
-  if (plantQuery.isLoading) return <LoadingState label="Loading Plant" />;
+  // A skeleton in the shape of the page, not a centred spinner: the tiles,
+  // gauges and table land in boxes that are already there, so nothing reflows
+  // at the moment data arrives.
+  if (plantQuery.isLoading) {
+    return (
+      <div className="space-y-6">
+        <SkeletonPanel lines={2} />
+        <SkeletonKpiRow tiles={4} />
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <SkeletonPanel lines={2} title={false} />
+          <SkeletonPanel lines={2} title={false} />
+          <SkeletonPanel lines={2} title={false} />
+        </div>
+        <SkeletonTable rows={6} columns={6} />
+      </div>
+    );
+  }
   if (plantQuery.isError) {
     return <ErrorState error={plantQuery.error} retry={() => void plantQuery.refetch()} />;
   }
 
   const plant = plantQuery.data!;
   const kpis = kpisQuery.data;
+  // The fixed dashboard. Panels and positions are identical on every Plant;
+  // only which Device answered each slot differs, and that travels with the
+  // value rather than being decided here.
+  const dash = dashboardQuery.data;
+  const panel = (code: string) => dash?.panels[code] ?? [];
   // Every timestamp on this screen renders in the Plant's zone (Guardrail 11).
   const timezone = plant.timezone;
   const devices = devicesQuery.data ?? [];
@@ -192,6 +228,15 @@ export function SinglePlantDashboard(): JSX.Element {
             <span className="text-ink-muted">{plant.name}</span>
             <PlantStatusBadge status={plant.status} />
           </h1>
+          {/*
+            Status is edited where the Plant is looked at. It used to be
+            reachable only from the onboarding wizard, so a Plant that finished
+            commissioning a week later could be activated only by walking back
+            through a form built for creating one.
+          */}
+          <div className="mt-2">
+            <PlantStatusControl plantId={plant.id} status={plant.status} />
+          </div>
           <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-ink-muted">
             <span>DC {formatCapacity(plant.dc_capacity_kwp, "kWp")}</span>
             <span>AC {formatCapacity(plant.ac_capacity_kw, "kW")}</span>
@@ -210,6 +255,87 @@ export function SinglePlantDashboard(): JSX.Element {
         </div>
       </div>
 
+      {/*
+        The headline row, resolved live. Every tile here is answerable by a bare
+        rooftop Plant publishing four Inverters *and* by an 8 MW Plant with a
+        settlement meter — that is the test a figure has to pass to be in this
+        row — and each one names the Device that answered it.
+      */}
+      {dashboardQuery.isLoading ? (
+        <SkeletonKpiRow tiles={7} />
+      ) : dashboardQuery.isError ? (
+        <ErrorState
+          error={dashboardQuery.error}
+          retry={() => void dashboardQuery.refetch()}
+        />
+      ) : (
+        <KpiSlotRow slots={panel("kpi_row")} />
+      )}
+
+      {/*
+        The four-stage schematic, fixed on every Plant. The detailed
+        `parent_device_id` tree — which Inverter is the broken one — lives on the
+        SLD dashboard; this answers the other question, whether the Plant is
+        healthy at a glance and how it compares with the next one.
+      */}
+      <Panel
+        title="Single Line Diagram"
+        subtitle="PV Array → Inverters → Transformer → Grid. Every power-path Device folds into one of the four by its Device Type."
+      >
+        {dashboardQuery.isLoading ? (
+          <SkeletonPanel lines={4} title={false} />
+        ) : dash ? (
+          <SldSpine sld={dash.sld} />
+        ) : null}
+      </Panel>
+
+      {/*
+        The three list panels. Each renders only if the Plant can answer at least
+        one of its slots: a weather-station panel on a Plant with no weather
+        station is a permanent row of dashes, and permanent dashes teach
+        operators to ignore dashes.
+      */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <SlotListPanel panel="plant_status" slots={panel("plant_status")} />
+        <SlotListPanel panel="power_summary" slots={panel("power_summary")} />
+        <div className="space-y-3">
+          <SlotListPanel panel="energy_summary" slots={panel("energy_summary")} />
+          <SlotListPanel panel="environment" slots={panel("environment")} />
+        </div>
+      </div>
+
+      {/*
+        One compact summary table per Device Type that has columns configured —
+        the "Inverter Summary" of the reference screens, generalised. There is no
+        `if (type === "INVERTER")` anywhere below: a Client who wants the same
+        table for their meters adds rows to `device_table_columns`.
+      */}
+      {Object.entries(columnsQuery.data ?? {}).map(([typeCode, columns]) => {
+        const ofType = devices.filter((device) => device.type_code === typeCode);
+        if (ofType.length === 0) return null;
+        return (
+          <Panel
+            key={typeCode}
+            title={`${typeCode} Summary`}
+            subtitle="Columns come from the catalogue, not from this screen."
+          >
+            <DeviceSummaryTable
+              devices={ofType}
+              columns={columns}
+              liveValues={Object.fromEntries(
+                ofType.map((device) => [device.id, liveDevices[device.id]?.values]),
+              )}
+            />
+          </Panel>
+        );
+      })}
+
+      {/*
+        Period analysis, which is a different question from the live row above
+        and deliberately not merged with it: these are computed from hourly
+        aggregates over the selected period, where the tiles above are what the
+        Plant is reporting right now.
+      */}
       {kpisQuery.isError ? (
         <ErrorState error={kpisQuery.error} retry={() => void kpisQuery.refetch()} />
       ) : (
@@ -248,6 +374,23 @@ export function SinglePlantDashboard(): JSX.Element {
         </>
       )}
 
+
+      {/*
+        The live equipment view. Rendered from the catalogue — which Devices
+        exist, which Tags each reports, what those Tags mean — so a Client who
+        adds a Device Type tomorrow gets a panel for it with no release.
+      */}
+      {devicesQuery.isLoading ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <SkeletonPanel lines={4} />
+          <SkeletonPanel lines={4} />
+          <SkeletonPanel lines={4} />
+          <SkeletonPanel lines={4} />
+        </div>
+      ) : (
+        <DeviceTypePanels devices={devices} timezone={timezone} />
+      )}
+
       <Panel
         title="Device health"
         subtitle="Communication status is distinct from equipment condition."
@@ -256,7 +399,7 @@ export function SinglePlantDashboard(): JSX.Element {
           <DeviceHealthStrip health={healthQuery.data} />
         </div>
         {devicesQuery.isLoading ? (
-          <LoadingState label="Loading Devices" />
+          <SkeletonTable rows={5} columns={6} />
         ) : devices.length === 0 ? (
           <EmptyState
             title="No Devices registered"

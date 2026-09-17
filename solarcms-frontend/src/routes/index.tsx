@@ -18,6 +18,7 @@ import { EmptyState, LoadingState } from "@/components/state";
 
 import { PortfolioDashboard } from "@/dashboards/PortfolioDashboard";
 import { PlantListDashboard } from "@/dashboards/PlantListDashboard";
+import { PlantOverviewDashboard } from "@/dashboards/PlantOverviewDashboard";
 import { SinglePlantDashboard } from "@/dashboards/SinglePlantDashboard";
 import { SldDashboard } from "@/dashboards/SldDashboard";
 import { InverterMonitoringDashboard } from "@/dashboards/InverterMonitoringDashboard";
@@ -25,6 +26,7 @@ import { AlarmsDashboard } from "@/dashboards/AlarmsDashboard";
 import { ReportsDashboard } from "@/dashboards/ReportsDashboard";
 
 import { OnboardingWizard } from "@/admin/OnboardingWizard";
+import { PlantHierarchyEditor } from "@/admin/PlantHierarchyEditor";
 import { DeviceBindingsAdmin } from "@/admin/DeviceBindingsAdmin";
 import { AlarmRulesAdmin } from "@/admin/AlarmRulesAdmin";
 import { UsersAdmin } from "@/admin/UsersAdmin";
@@ -35,8 +37,8 @@ import { ForbiddenState } from "@/components/state";
 /** One component per dashboard code. Codes come from the database. */
 const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
   portfolio: PortfolioDashboard,
-  plant_list: () => <PlantListDashboard variant="plant_list" />,
-  plant_overview: () => <PlantListDashboard variant="plant_overview" />,
+  plant_overview: PlantOverviewDashboard,
+  plant_list: PlantListDashboard,
   single_plant: SinglePlantDashboard,
   sld: SldDashboard,
   inverter_monitoring: InverterMonitoringDashboard,
@@ -114,6 +116,14 @@ export function AppRoutes(): JSX.Element {
           element={
             <RequirePermission permission="plant.manage">
               <OnboardingWizard />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="/admin/hierarchy"
+          element={
+            <RequirePermission permission="plant.manage">
+              <PlantHierarchyEditor />
             </RequirePermission>
           }
         />

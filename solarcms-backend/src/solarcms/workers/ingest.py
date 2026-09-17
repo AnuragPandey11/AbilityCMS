@@ -140,16 +140,28 @@ class IngestWorker:
             await self._quarantine(topic, payload, now, resolution.reason)
             return
 
+        # Derived Tags observe their own throttle, so their last-write times are
+        # read alongside the bound ones.
         tag_ids = [b.tag_id for b in resolution.bindings.values()]
+        tag_ids += [d.tag_id for d in resolution.derived]
         cumulative_ids = [b.tag_id for b in resolution.bindings.values() if b.cumulative]
         last_written = await live.read_throttle_state(resolution.device_id, tag_ids)
         last_counters = await live.read_counter_values(resolution.device_id, cumulative_ids)
+        # Only fetched when this Device computes something. The client's broker
+        # splits one instrument's signals across topics, so a formula's inputs
+        # routinely arrive in different messages and the standing values are what
+        # let it resolve at all — but most Devices derive nothing, and a Redis
+        # round-trip per message for them would be pure cost.
+        standing = (
+            await self._standing_values(resolution) if resolution.derived else None
+        )
 
         result = decode(
             topic, payload, resolution, now,
             source_time=None,  # this broker publishes none; see BROKER_OBSERVATIONS §2.2
             last_written=last_written,
             last_counter_value=last_counters,
+            standing=standing,
         )
 
         self.stats["throttled"] += len(result.throttled_keys)
@@ -163,6 +175,11 @@ class IngestWorker:
         if result.unmapped_keys:
             log.info("unbound source keys", topic=topic,
                      device_id=resolution.device_id, keys=result.unmapped_keys)
+            # Surfaced, not just logged. This is what the commissioning screen
+            # reads to say "this Device is sending three signals nobody has
+            # mapped" — a fact that exists nowhere else, because an unmapped key
+            # never becomes a Reading.
+            await live.record_unmapped_keys(resolution.device_id, result.unmapped_keys)
 
         if result.quarantined:
             await self._quarantine(topic, payload, now, result.rejection or "rejected",
@@ -172,6 +189,27 @@ class IngestWorker:
 
         await self._accept(topic, payload, now, result.readings, resolution.client_id,
                            resolution.device_id)
+
+    async def _standing_values(self, resolution: Any) -> dict[str, float]:
+        """This Device's last known value per Tag code, for formula inputs.
+
+        Read from the live hash rather than from `readings`: it is already there,
+        it is keyed by Device, and querying a compressed hypertable per message
+        to learn what a Device said thirty seconds ago would be indefensible.
+        """
+        by_id = {b.tag_id: b.tag_code for b in resolution.bindings.values()}
+        current = await live.read_current_values(resolution.device_id)
+        standing: dict[str, float] = {}
+        for key, raw in current.items():
+            if key.startswith("_"):
+                continue
+            try:
+                code = by_id.get(int(key))
+                if code is not None:
+                    standing[code] = float(raw)
+            except ValueError:
+                continue
+        return standing
 
     async def _accept(
         self, topic: str, payload: dict[str, Any], now: datetime,

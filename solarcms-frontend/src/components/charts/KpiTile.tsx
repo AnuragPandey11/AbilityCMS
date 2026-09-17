@@ -13,8 +13,14 @@
 
 import type { ReactNode } from "react";
 import type { KpiFigure } from "@/api/schemas";
-import { UNDEFINED_DISPLAY, formatKpi, variantNote } from "@/format/value";
+import {
+  UNDEFINED_DISPLAY,
+  formatNumber,
+  formatRatioAsPercent,
+  variantNote,
+} from "@/format/value";
 import { InfoHint } from "@/components/ui";
+import { FittedFigure } from "./FittedFigure";
 
 export function KpiTile({
   label,
@@ -32,7 +38,14 @@ export function KpiTile({
 }): JSX.Element {
   const value = figure?.value ?? null;
   const isUndefined = value === null;
-  const rendered = formatKpi(value, kind, unit);
+  // Figure and unit are separate so the figure can shrink to fit while the
+  // unit keeps its size; a percentage carries its sign as part of the figure.
+  const rendered = isUndefined
+    ? UNDEFINED_DISPLAY
+    : kind === "ratio"
+      ? formatRatioAsPercent(value)
+      : formatNumber(value);
+  const unitLabel = !isUndefined && kind === "quantity" ? unit : null;
 
   // The reason is the useful half: "no irradiation in period" tells an operator
   // it is night, where a bare dash tells them nothing.
@@ -40,16 +53,18 @@ export function KpiTile({
     figure?.undefined_reason ?? "This figure is not defined for the selected period.";
 
   return (
-    <div className="rounded-lg border border-line bg-surface-raised p-4">
+    <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
       <div className="flex items-center text-xs text-ink-muted">
         {label}
         {hint ? <InfoHint text={hint} /> : null}
       </div>
-      <div
-        className={`mt-1 font-mono text-2xl ${isUndefined ? "text-ink-faint" : "text-ink"}`}
-        title={isUndefined ? undefinedReason : undefined}
-      >
-        {rendered}
+      <div className="mt-1">
+        <FittedFigure
+          value={rendered}
+          unit={unitLabel}
+          className={`font-mono text-2xl ${isUndefined ? "text-ink-faint" : "text-ink"}`}
+          title={isUndefined ? undefinedReason : undefined}
+        />
       </div>
       {isUndefined ? (
         <p className="mt-1 text-[11px] leading-snug text-ink-faint">{undefinedReason}</p>
@@ -86,13 +101,16 @@ export function StatTile({
     bad: "text-bad",
   };
   return (
-    <div className="rounded-lg border border-line bg-surface-raised p-4">
+    <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
       <div className="flex items-center text-xs text-ink-muted">
         {label}
         {hint ? <InfoHint text={hint} /> : null}
       </div>
-      <div className={`mt-1 font-mono text-2xl ${tones[tone]}`}>
-        {value ?? UNDEFINED_DISPLAY}
+      <div className="mt-1">
+        <FittedFigure
+          value={value ?? UNDEFINED_DISPLAY}
+          className={`font-mono text-2xl ${tones[tone]}`}
+        />
       </div>
       {footnote ? (
         <p className="mt-1 text-[11px] leading-snug text-ink-faint">{footnote}</p>

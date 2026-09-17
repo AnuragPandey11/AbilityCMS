@@ -3,6 +3,8 @@ import { request } from "../client";
 import {
   BlockKpisSchema,
   BlockSchema,
+  CommissioningReportSchema,
+  PlantDashboardSchema,
   PlantDetailSchema,
   PlantKpisSchema,
   PlantPageSchema,
@@ -10,7 +12,9 @@ import {
   parse,
   type Block,
   type BlockKpis,
+  type CommissioningReport,
   type KpiPeriod,
+  type PlantDashboard,
   type PlantDetail,
   type PlantKpis,
   type PlantPage,
@@ -173,4 +177,55 @@ export async function updateBlock(
  */
 export async function deleteBlock(blockId: number): Promise<void> {
   await request(`/blocks/${blockId}`, { method: "DELETE" });
+}
+
+/**
+ * What still stands between this Plant and going live.
+ *
+ * Onboarding fails quietly rather than loudly: a Device with no topic simply
+ * never reports, a Device with no bindings decodes nothing, and both look like
+ * equipment that has not been switched on yet. This turns each into a named,
+ * countable item — so "the Plant is ready" becomes a check rather than an
+ * opinion.
+ */
+export async function commissioningReport(
+  plantId: number,
+): Promise<CommissioningReport> {
+  return parse(
+    CommissioningReportSchema,
+    await request(`/plants/${plantId}/commissioning`),
+    `GET /plants/${plantId}/commissioning`,
+  );
+}
+
+/**
+ * Move a Plant along `draft → commissioning → active`.
+ *
+ * Its own call rather than a PATCH field, because a transition is not an edit:
+ * going `active` publishes the Plant into every Portfolio total the Client sees.
+ * A Plant failing its readiness checks is refused with 409 unless `force` is
+ * set — the operator may know something the checks do not, but never by
+ * accident.
+ */
+export async function changePlantStatus(
+  plantId: number,
+  status: string,
+  options: { force?: boolean; note?: string } = {},
+): Promise<{ id: number; status: string; changed: boolean }> {
+  return (await request(`/plants/${plantId}/status`, {
+    method: "POST",
+    body: { status, force: options.force ?? false, note: options.note ?? null },
+  })) as { id: number; status: string; changed: boolean };
+}
+
+/**
+ * The fixed dashboard, resolved against whatever this Plant actually has.
+ *
+ * Same panels, same positions, every Plant. What differs is only which Device
+ * answered each slot, which travels with the value rather than being inferred
+ * here — the frontend never decides where a number came from.
+ */
+export async function plantDashboard(plantId: number): Promise<PlantDashboard> {
+  const body = await request(`/plants/${plantId}/dashboard`);
+  return parse(PlantDashboardSchema, body, `GET /plants/${plantId}/dashboard`);
 }

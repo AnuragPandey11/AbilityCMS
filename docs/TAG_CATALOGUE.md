@@ -1,18 +1,24 @@
 # Tag Catalogue — Client-Supplied Signal List
 
-**Version:** 1.1 · **Date:** 11 September 2026 · **Status:** Evidence — client-supplied, partially authoritative
+**Version:** 1.2 · **Date:** 16 September 2026 · **Status:** Evidence — client-supplied, partially authoritative
 
 Transcribed from the client's Device List and signal schedule, received 10 September 2026;
-**second revision of the same sheet received 11 September 2026** (§8). The second revision
-adds six Device Types' signal lists, fills the `Range` column for the WMS rows only, and
-corrects two units. Where the two revisions differ, the second is taken and the first is
-noted.
+**second revision received 11 September 2026** (§8); **third revision received 16 September
+2026** (§2.15, §8). Where revisions differ, the latest is taken and the earlier noted.
+
+**The third revision is the most consequential of the three**, because it is the first to
+supply *formulas*. Its `FORMULA` column gives the arithmetic for every row previously
+marked only "Need to Calculate", including **PR** — which makes it the answer to half of
+OPEN-16, arriving three days after `BROKER_OBSERVATIONS.md` §4.3 predicted it would have to.
+It also splits the Inverter into String and Central variants, adds the PV1–PV28 per-string
+inputs, and names a `DASHBOARD` Device carrying the Plant's own KPIs. See §2.15.
 
 **What this closes and what it does not.** OPEN-15 asks two questions: *what unit* and *what
 scaling factor* applies to each Tag. This document answers the **unit** question for the
 Device Types it covers. It does **not** answer scaling — the sheet's `Range` column is blank
-except for the WMS — and it still does not cover 4 of the 17 Device Types. OPEN-15 is
-therefore **narrowed, not resolved**; see §5.
+except for the WMS — and it still does not cover 2 of the 17 Device Types. OPEN-15 is
+therefore **narrowed, not resolved**; see §5. OPEN-16 is **answered for PR**, **not for CUF**
+(§2.15.2) and not for Availability.
 
 Units below are the client's own. Where a unit is self-evidently wrong it is transcribed
 faithfully and flagged in §4 rather than silently corrected — a corrected transcription
@@ -251,6 +257,109 @@ select by `device_types.code = 'ABT_METER'`, never by which Tags a Device happen
 
 Present, with **four blank rows**. No signal names, types, or units. Still missing (§6).
 
+### 2.15 The third revision — formulas, variants, and repeating groups
+
+The sheet received 16 September 2026 adds a `FORMULA` column and three structural facts
+the earlier revisions did not carry.
+
+#### 2.15.1 Calculated signals — SUPPLIED
+
+Every row previously showing only "Need to Calculate" now has its arithmetic beside it,
+transcribed verbatim:
+
+| Signal | Client's formula | Where it applies |
+|---|---|---|
+| `AVG VOLTAGE` | `(VOLTAGE RY + VOLTAGE YB + VOLTAGE BR)/3` | Inverter, MFM, ABT Meter |
+| `TOTAL CURRENT` | `( R PHASE CURRENT + Y PHASE CURRENT + B PHASE CURRENT )` | Inverter |
+| `DC POWER` | `ACTIVE_POWER / (EFFICIENCY/100)` | Inverter |
+| `SPECIFIC YIELD` | `(DAILY_ENERGY / INV_CAPACITY)` | Inverter |
+| `PR` | `(TODAY_ENERGY/(CUMMULATIVE GHI*DC CAPACITY)) * 100.0` | Plant (`DASHBOARD`) |
+
+These are now **data, not code**: `tags.formula` holds the expression and
+`domain/derived.py` evaluates it, so a calculated metric is an INSERT exactly as a measured
+one is (I-2). Migration 0020 adds the column.
+
+⚠ **The client's PR is not the PR that was implemented.** `domain/formulas.py`
+`performance_ratio` is the IEC 61724 definition: plane-of-array irradiance, divided through
+`G_REF`, returned as a fraction. The client's divides by **GHI** (horizontal), uses no
+reference-yield step, and returns a **percentage**. Both are kept — the client's as the Tag
+`PERFORMANCE_RATIO` that their reports must agree with, ours as the reference definition —
+for the same reason `REPORTED_PERFORMANCE_RATIO` exists: so that the two can be *compared*
+rather than silently conflated.
+
+Fed the client's own observed inputs (`BROKER_OBSERVATIONS.md` §4.1: TodayExport 26,913.12
+kWh, AverageGHI 5.517, ~5,600 kWp) their formula returns **87.11%** against the 87.105 their
+broker publishes. That agreement is what makes the transcription trustworthy rather than
+merely plausible, and it is asserted in `tests/unit/test_derived.py`.
+
+#### 2.15.2 CUF is still not specified
+
+`CUF` and `YESTERDAY CUF` are marked "Need to Calculate" and their `FORMULA` cells are
+**blank**. The implementation uses the conventional `energy / (AC capacity × hours) × 100`
+and marks it ⚠ ASSUMED. **T-16** asks for the client's own definition.
+
+#### 2.15.3 The day boundary — SUPPLIED
+
+Against every `YESTERDAY` row the sheet says: *"AT 11:55 PM ... DATA WILL BE MOVE TO THIS
+PARAMETER"*. This is a **copy at the day boundary, not a calculation** — whatever produced
+today's figure, yesterday's is that same figure. Implemented in `services/plant_kpi.py`,
+firing at 23:55 **Plant-local**: a Plant in Asia/Kolkata rolls over at 18:25 UTC, and using
+the server's midnight would attribute five and a half hours of generation to the wrong day.
+
+#### 2.15.4 Plant start and stop — SUPPLIED
+
+*"When the active power is greater than 0.1 MW, that time shall be considered the Plant
+Start Time"*, and less than, the Stop Time. 0.1 MW is **100 kW** in the Tag's own unit.
+
+⚠ **T-17, an interpretation.** Read literally, a passing cloud sets a Stop Time mid-morning.
+The implementation records the Start once per day (the first crossing) and lets the Stop be
+the *latest* fall below the threshold, so the evening shutdown ends up holding it.
+
+#### 2.15.5 Inverter variants and the PV string group
+
+The Inverter is now scheduled twice — `STRING INVERTER` and `CENTRAL INVERTER` — with
+identical signal lists on this revision. Both carry **PV1..PV28 VOLTAGE / CURRENT / ACTIVE
+POWER** (V, A, kW per string; note the aggregate `PV VOLTAGE` remains kV, §4.3).
+
+How many strings a given Inverter has is a property of the **unit**, not the Model: one
+datasheet covers a 12-string and a 24-string machine. `devices.string_count` therefore
+records it, `device_model_tags.repeat_index` marks the group, and a Device binds the first
+*n*. The alternative — a Model per string count — multiplies the catalogue by 28 and still
+cannot express a unit with a dead input.
+
+⚠ **T-15.** The sheet lists `PV221` between PV20 and PV22. Read as a typo for PV21, since
+the sequence is otherwise unbroken 1–28; both spellings are aliased so a publisher copying
+the sheet literally still decodes.
+
+#### 2.15.6 `DASHBOARD` — a Device carrying the Plant's own figures
+
+The Device List includes a row named `DASHBOARD`, carrying PR, YESTERDAY PR, CUF, YESTERDAY
+CUF, TODAY PEAK POWER (and its time), YEST. PEAK POWER (and its time), NO. OF INVERTER
+FUNCTIONAL, PLANT START TIME and PLANT STOP TIME.
+
+⚠ **Seeded as Device Type `PLANT_KPI`, not `DASHBOARD`.** "Dashboard" already names a UI
+concept in this system — the `dashboards` table, `dashboard.view`, the per-User dashboard
+assignment of MASTER §4.2 — and a Device Type sharing the word makes every sentence about it
+ambiguous, which is what MASTER §1.4 exists to prevent. The client's own label is carried in
+the Type's `name` so their sheet stays recognisable. Every Plant gets exactly one, created
+with the Plant; it is not in the power path and never appears in the SLD.
+
+#### 2.15.7 Annunciator — twenty unnamed contacts
+
+`SIGNAL1`..`SIGNAL20`, all Bit, no meanings given. That is what an annunciator is: a panel
+whose lamp legends are written at the plant, not at the factory. Seeded as generic DI Tags;
+what `SIGNAL7` means at a given Plant is recorded on that Device's **binding**, which is
+per-Device and therefore the correct home for a Plant-specific label — never a code path
+(Guardrail 2).
+
+#### 2.15.8 Still missing after three revisions
+
+`SMB` (a heading with no rows — still blocks tender §10 and the String Current Deviation
+rule) and `MCR SECTION` / `ICR SECTION` (expected to carry nothing of their own, §3).
+`ANNUNCIATOR` is no longer a gap. `BATTERY CHARGER` reappears as a signal group that is
+still not one of the seventeen Device Types (§4.5, T-8); it is seeded as a **Model** of
+`DC_POWER_BANK` so its nine contacts have a home without inventing an eighteenth Type.
+
 ---
 
 ## 3. What the section headers reveal
@@ -437,7 +546,12 @@ be registered against them; bindings for those are set by hand.
 | T-13 | The Fire System's `FAULT` row has no type. DI, or a fault code? | §2.10 |
 | T-14 | The WMS row renamed to `INVERTER MODULE TEMP.` — a PV-module sensor at the inverter, or the inverter's internal temperature (which the Inverter list also carries as `MODULE TEMP.`)? | §2.2, T-11 |
 | T-11 | Inverter `MODULE TEMP.` — is this the PV module temperature (a WMS quantity) or the inverter's own internal temperature? | Alarm scoping |
-| T-12 | Does every Device of a Type carry every listed signal, or does it vary by Model? | Binding strategy |
+| ~~T-12~~ | ~~Does every Device of a Type carry every listed signal, or does it vary by Model?~~ **Answered:** it varies — the third revision schedules String and Central Inverters separately and 2- vs 3-winding Transformers separately. Models are per variant. | Binding strategy |
+| T-15 | The Inverter list has `PV221` between PV20 and PV22. Confirm this is PV21. | §2.15.5 |
+| T-16 | `CUF` is marked "Need to Calculate" with a blank FORMULA cell. What is your definition — against AC or DC capacity, and with what exclusions? | OPEN-16 |
+| T-17 | Plant Stop Time: read literally, a passing cloud sets it mid-morning. Is it the *last* fall below 0.1 MW for the day? | §2.15.4 |
+| T-18 | The `DASHBOARD` Device — is it a physical panel that publishes these figures, or the values you expect *us* to compute? Currently computed. | §2.15.6 |
+| T-19 | `TODAY PEAK POWER TIME` and the Plant start/stop times are stored as hours since local midnight, in the Plant's timezone. Confirm the timezone is the Plant's and not IST throughout. | §2.15.4 |
 
 ---
 
@@ -445,5 +559,6 @@ be registered against them; bindings for those are set by hand.
 
 | Version | Date | Change |
 |---|---|---|
+| 1.2 | 16 Sep 2026 | **Third revision of the client's sheet** (§2.15). First revision to carry a `FORMULA` column: AVG VOLTAGE, TOTAL CURRENT, DC POWER, SPECIFIC YIELD and **PR** are now client-supplied arithmetic, closing OPEN-16 for PR and reproducing their own published 87.105 from their own inputs. CUF remains unspecified (T-16). Day-boundary rollover at 23:55 Plant-local and the 0.1 MW plant start/stop rule are SUPPLIED. Inverter split into String and Central variants carrying PV1–PV28 per-string inputs, held as a repeating group sliced by `devices.string_count`. `DASHBOARD` Device seeded as Device Type `PLANT_KPI` to avoid colliding with the UI concept. Annunciator's twenty unnamed contacts supplied. Missing list reduced to SMB and the two Sections. Added T-15 through T-19; T-12 closed. |
 | 1.1 | 11 Sep 2026 | **Second revision of the client's sheet.** Added §2.9–§2.14 (ISOLATOR, FIRE SYSTEM, UPS, ABT METER, MODULE TRACKER, ANNUNCIATOR); PPC extended from four signals to ten (§2.7). Transformer gains three analogue temperatures (§2.5) — the first revision's "no analogue temperature" withdrawn, OPEN-18 answered for the Transformer. WMS `Range` column filled (§2.2, §4.6) — the only client-supplied bounds in the registry. Inverter `AVG CURRENT` corrected to A (§4.1 resolved, T-4 closed). ABT METER signal list received (§2.12) — identical to MFM; OPEN-17 narrowed to SMB. Missing list reduced from 10 Types to 4 (§6). Reference Models per Type recorded (§6). Added T-13, T-14. |
 | 1.0 | 10 Sep 2026 | Initial transcription of the client's Device List and signal schedule. Units supplied for 7 Device Types; scaling and ranges still open. Recorded the DI population, the two invalidated Alarm Rule seeds, and the switchgear-section evidence for OPEN-12. |

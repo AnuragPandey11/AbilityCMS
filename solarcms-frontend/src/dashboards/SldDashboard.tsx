@@ -14,8 +14,9 @@
 import { useState } from "react";
 import { usePlantDevices, usePlantSld, useTagsById } from "@/api/hooks";
 import { SldTree, type SldOverlay } from "@/components/sld/SldTree";
+import { PlantFlow } from "@/components/sld/PlantFlow";
 import { Panel, Badge } from "@/components/ui";
-import { EmptyState, ErrorState, LoadingState } from "@/components/state";
+import {EmptyState, ErrorState, SkeletonPanel} from "@/components/state";
 import { CommStatusBadge, PlantPicker } from "@/components/domain";
 import { usePlantScope } from "@/state/usePlantScope";
 import { useLiveSocket } from "@/live/LiveSocket";
@@ -40,7 +41,14 @@ export function SldDashboard(): JSX.Element {
       />
     );
   }
-  if (sldQuery.isLoading) return <LoadingState label="Building diagram" />;
+  if (sldQuery.isLoading) {
+    return (
+      <div className="space-y-4">
+        <SkeletonPanel lines={1} />
+        <SkeletonPanel lines={8} title={false} />
+      </div>
+    );
+  }
   if (sldQuery.isError) {
     return <ErrorState error={sldQuery.error} retry={() => void sldQuery.refetch()} />;
   }
@@ -119,6 +127,20 @@ export function SldDashboard(): JSX.Element {
           </p>
         </div>
       ) : null}
+
+      {/*
+        The Plant's *actual* chain of equipment, rolled up by type and distance
+        from the grid. Distinct from the four-stage spine on the Single Plant
+        dashboard, which folds every Plant into the same four boxes so two Plants
+        can be compared: this one shows what is really wired, in the order it is
+        really wired, which is what you want once you are already on the SLD page.
+      */}
+      <Panel
+        title="Plant schematic"
+        subtitle="Derived from the wiring, not from a fixed sequence — a Plant with a meter mid-chain or two transformers draws itself."
+      >
+        <PlantFlow devices={devices} />
+      </Panel>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_18rem]">
         <Panel

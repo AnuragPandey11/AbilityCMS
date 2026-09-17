@@ -151,6 +151,9 @@ class Device(Base):
     # default — the test broker publishes ~21x faster than assumed.
     expected_interval_s: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     rated_capacity_kw: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    # How many inputs of a repeating group this unit actually has — the number of
+    # PV strings on an Inverter. NULL where the Model has no repeating group.
+    string_count: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     installed_on: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = created_at()
@@ -229,4 +232,47 @@ class BrokerCredential(Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     topic_scope: Mapped[str] = mapped_column(Text, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = created_at()
+
+
+class PlantDashboardSlotOverride(Base):
+    """Where the default candidate order resolves wrongly for one Plant.
+
+    Most often a Plant with parallel feeder metering, where the catalogue's
+    default `first` reads one of two feeders and `sum` is the correct answer
+    (`domain/dashboard_spec._METERED_AGGREGATE`).
+
+    ⚠ This is **not** a per-Plant dashboard, which Guardrail 2 forbids. It holds
+    a deviation from a shared default, keyed to a Plant, and is expected to be
+    empty for almost every Plant — that it is usually empty is exactly what
+    distinguishes the two. Nothing here reaches a code path or a table name.
+
+    `note` records *why*, because a year later nobody remembers.
+    """
+
+    __tablename__ = "plant_dashboard_slot_overrides"
+    __table_args__ = (UniqueConstraint("plant_id", "slot_id"),)
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    plant_id: Mapped[int] = mapped_column(
+        ForeignKey("plants.id", ondelete="CASCADE"), nullable=False
+    )
+    slot_id: Mapped[int] = mapped_column(
+        ForeignKey("dashboard_slots.id", ondelete="CASCADE"), nullable=False
+    )
+    # All NULL with hidden = True means "do not show this slot on this Plant"
+    # without proposing a different source.
+    kind: Mapped[str | None] = mapped_column(Text)
+    device_type_id: Mapped[int | None] = mapped_column(
+        ForeignKey("device_types.id", ondelete="CASCADE")
+    )
+    tag_id: Mapped[int | None] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"))
+    aggregate: Mapped[str | None] = mapped_column(Text)
+    plant_attribute: Mapped[str | None] = mapped_column(Text)
+    online_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created_at()

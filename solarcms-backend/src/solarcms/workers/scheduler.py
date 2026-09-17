@@ -24,12 +24,14 @@ from solarcms.db.session import dispose_engine, scoped_session
 from solarcms.domain.alarm_logic import should_escalate
 from solarcms.logging import configure_logging
 from solarcms.services.notifications import record_and_send
+from solarcms.services.plant_kpi import compute as compute_plant_kpis
 from solarcms.services.reporting import (
     FinancialSourceUnavailable,
     gather,
     render_pdf,
     render_xlsx,
 )
+from solarcms.services.seed import DERIVED_TAGS
 from solarcms.services.storage import artifact_key, get_store
 
 log = structlog.get_logger("scheduler")
@@ -205,6 +207,25 @@ async def verify_aggregates() -> list[str]:
     return stalled
 
 
+async def run_plant_kpis() -> dict[str, int]:
+    """Compute each Plant's own figures — PR, CUF, peak, start and stop times.
+
+    Runs on the scheduler because it is the only process that sees a whole Plant
+    at once: ingest sees one Device's message, and a Plant's PR needs its meters
+    and its Weather Station together.
+
+    ⚠ A worker that catches and logs its own main loop needs a test that asserts
+    a row was written — migration 0015 created a policy without the matching
+    GRANT and every health sweep failed silently for weeks (CLAUDE.md). The
+    integration suite asserts a Reading appears on the KPI Device.
+    """
+    async with scoped_session(
+        SecurityContext.platform(0), role=SCHEDULER_ROLE
+    ) as session:
+        return await compute_plant_kpis(session, list(DERIVED_TAGS),
+                                        tick_seconds=TICK_SECONDS)
+
+
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
@@ -219,9 +240,10 @@ async def run() -> None:
             escalated = await fire_due_escalations()
             rendered = await run_queued_reports()
             stalled = await verify_aggregates()
+            kpis = await run_plant_kpis()
             if escalated or rendered or stalled:
                 log.info("tick", escalated=escalated, rendered=rendered,
-                         stalled=stalled)
+                         stalled=stalled, kpi_values=kpis.get("values", 0))
         except Exception as exc:
             log.error("scheduler tick failed", error=str(exc))
         with contextlib.suppress(TimeoutError):

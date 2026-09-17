@@ -36,6 +36,7 @@ from solarcms.domain.assumptions import (
     QUALITY_UNPARSEABLE,
     STALE_SOURCE_TIME_MULTIPLIER,
 )
+from solarcms.domain.derived import DerivedTag, evaluate_all
 
 # Field names a topic pattern may capture. A pattern using any other name is
 # rejected at construction — a typo must not silently produce an unmatched topic.
@@ -131,6 +132,25 @@ class TagBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class DerivedBinding:
+    """A Tag this Device computes rather than receives.
+
+    Present when the Tag registry carries a device-scope formula and every input
+    that formula reads is bound on this Device. Nothing is configured per Device:
+    a meter that publishes three phase voltages gets AVG VOLTAGE computed because
+    it has the inputs, and a VCB — which publishes nothing but contacts — gets
+    nothing, because it has none of them.
+    """
+
+    tag_id: int
+    tag_code: str
+    expression: str
+    valid_min: float | None = None
+    valid_max: float | None = None
+    min_interval_s: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class DeviceResolution:
     """Everything needed to decode one Device's payload, resolved upstream.
 
@@ -143,6 +163,11 @@ class DeviceResolution:
     plant_id: int
     expected_interval_s: int
     bindings: dict[str, TagBinding]  # source key → binding
+    # Tags this Device computes. Empty for most Devices.
+    derived: tuple[DerivedBinding, ...] = ()
+    # Values a formula may read that are not Tags: the Device's own rated
+    # capacity (the client writes it `INV_CAPACITY`), and its Plant's.
+    constants: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +303,7 @@ def decode(
     source_time: datetime | None = None,
     last_written: dict[int, datetime] | None = None,
     last_counter_value: dict[int, float] | None = None,
+    standing: dict[str, float] | None = None,
 ) -> DecodeResult:
     """Decode one message into Readings. No I/O; fully unit-testable.
 
@@ -364,4 +390,79 @@ def decode(
             )
         )
 
+    result.readings.extend(
+        derive(resolver, result.readings, now, source_time=source_time,
+               standing=standing, last_written=last_written)
+    )
     return result
+
+
+def derive(
+    resolver: DeviceResolution,
+    readings: list[DecodedReading],
+    now: datetime,
+    *,
+    source_time: datetime | None = None,
+    standing: dict[str, float] | None = None,
+    last_written: dict[int, datetime] | None = None,
+) -> list[DecodedReading]:
+    """Compute this Device's calculated Tags from what it just published.
+
+    `standing` is the Device's last known value per Tag code, so a formula whose
+    inputs arrive in *different* messages still resolves — the client's broker
+    splits voltages and power across separate topics, and requiring every input
+    in one payload would mean AVG VOLTAGE never computed at all.
+
+    A published value always beats a computed one: if this Device genuinely
+    transmits AVG VOLTAGE, `evaluate_all` leaves it alone. That is what makes
+    this safe to run for every Device without a per-Device switch.
+    """
+    if not resolver.derived:
+        return []
+
+    values: dict[str, float] = dict(standing or {})
+    values.update(resolver.constants)
+    # This message wins over anything standing: it is the newer measurement.
+    values.update({r.tag_code: r.value for r in readings if r.quality == QUALITY_GOOD})
+
+    computed = evaluate_all(
+        [DerivedTag(d.tag_code, d.expression, "device") for d in resolver.derived],
+        values,
+    )
+    written_at_by_tag = last_written or {}
+    out: list[DecodedReading] = []
+    for spec in resolver.derived:
+        value = computed.get(spec.tag_code)
+        if value is None:
+            continue
+        # A computed Tag is throttled by its own min_interval_s exactly as a
+        # received one is. Without this, a broker publishing every 2.8s would
+        # produce a derived row per formula per message — the throttle a Device's
+        # own Tags observe, silently bypassed by the values we add ourselves.
+        written_at = written_at_by_tag.get(spec.tag_id)
+        if (
+            spec.min_interval_s > 0
+            and written_at is not None
+            and (now - written_at) < timedelta(seconds=spec.min_interval_s)
+        ):
+            continue
+        # Range checking applies to a computed value exactly as it does to a
+        # received one. A DC POWER of 40,000 kW from a 3% efficiency reading is
+        # not a measurement, and it must be stored and flagged, never dropped.
+        quality = QUALITY_GOOD
+        if spec.valid_min is not None and value < spec.valid_min:
+            quality = QUALITY_OUT_OF_RANGE
+        elif spec.valid_max is not None and value > spec.valid_max:
+            quality = QUALITY_OUT_OF_RANGE
+        out.append(DecodedReading(
+            device_id=resolver.device_id,
+            client_id=resolver.client_id,
+            plant_id=resolver.plant_id,
+            tag_id=spec.tag_id,
+            tag_code=spec.tag_code,
+            value=value,
+            quality=quality,
+            time=now,
+            source_time=source_time,
+        ))
+    return out

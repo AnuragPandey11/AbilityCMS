@@ -1,6 +1,6 @@
 # SolarCMS Frontend — Build Specification
 
-**Version:** 1.0 · **Date:** 11 September 2026
+**Version:** 1.1 · **Date:** 17 September 2026
 **Audience:** an engineering agent implementing the frontend from scratch.
 
 ---
@@ -136,6 +136,7 @@ solarcms-frontend/
 │   │   ├── PortfolioDashboard.tsx
 │   │   ├── PlantOverviewDashboard.tsx
 │   │   ├── PlantListDashboard.tsx
+│   │   ├── usePlantFleet.ts
 │   │   ├── SinglePlantDashboard.tsx
 │   │   ├── SldDashboard.tsx
 │   │   ├── InverterMonitoringDashboard.tsx
@@ -360,10 +361,41 @@ half-mapped Plant would otherwise drag fleet PR down. Show them in a separate
 Tiles: total capacity, current power, today's energy, fleet PR, availability,
 CO₂ avoided, active alarms by severity.
 
-### 6.2 `plant_list` and `plant_overview`
+### 6.2 `plant_overview` and `plant_list`
 
-A sortable, filterable table of Plants: code, name, region, capacity, status,
-current power, today's energy, PR, device health summary, open alarms.
+Two screens over one data set. The tender (§7) names both and defines neither,
+so the split is ⚠ PROPOSED (MASTER OPEN-23): three altitudes, with `portfolio`
+above them.
+
+| Code | Question it answers | Form |
+|---|---|---|
+| `portfolio` | How is the fleet doing? | Totals; no per-Plant rows (§6.1) |
+| `plant_overview` | Which Plant needs me right now? | One card per Plant, ordered by need for attention |
+| `plant_list` | Working through the Plants systematically | Sortable, filterable, exportable table |
+
+Both read through `usePlantFleet(period)`, which pages `GET /plants`, fans out
+`GET /plants/{id}/kpis` per Plant, and joins `/health/devices` and active
+`/alarms` by `plant_id` once per render. Fetching lives there and nowhere else:
+a User granted both codes must not double the request volume.
+
+**Overview ordering is by Alarm severity, then offline Devices, never by a
+KPI.** An undefined PR is the normal night-time state of every Plant in the
+fleet; ranking on it would float the whole estate to the top at dusk. Ties are
+broken by open-Alarm count, then name, so the order is stable between polls.
+The left border carries the only colour with meaning: red for critical/high,
+amber for any other open Alarm or an offline Device, grey for no Devices.
+
+**No figure appears on a card that the table lacks.** Overview changes the
+shape of the presentation, not what the platform claims to know — OPEN-14, 15
+and 16 gate the same numbers on both. `null` renders as "—" with its reason on
+both (§4.3).
+
+**No map yet.** `latitude`/`longitude` are on `GET /plants/{id}`, not on the
+list item. Adding a map means adding them to the list projection first; N
+detail fetches to fake it would be worse than no map.
+
+Table columns: code, name, region, status, DC capacity, live Devices, energy
+for the selected period, PR, device health summary, open alarms.
 
 `GET /plants` is cursor-paginated (`?limit=&cursor=`). Follow `next_cursor`;
 never construct an offset.
@@ -584,4 +616,5 @@ induces the states the health and alarm screens exist to show.
 
 | Version | Date | Change |
 |---|---|---|
+| 1.1 | 17 Sep 2026 | §6.2 rewritten: `plant_overview` is a card grid ordered by need for attention, `plant_list` the table, both over `usePlantFleet`. Previously one component with two headings. MASTER OPEN-23. |
 | 1.0 | 11 Sep 2026 | Initial specification, written against the running backend: 50 endpoints, the live WebSocket contract, and the response shapes as generated rather than as designed. |

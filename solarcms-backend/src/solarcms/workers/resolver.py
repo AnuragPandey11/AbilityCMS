@@ -28,7 +28,15 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache import live
-from solarcms.domain.decoding import DeviceResolution, TagBinding, TopicPattern, parse_topic
+from solarcms.domain.assumptions import FORMULA_CONSTANTS
+from solarcms.domain.decoding import (
+    DerivedBinding,
+    DeviceResolution,
+    TagBinding,
+    TopicPattern,
+    parse_topic,
+)
+from solarcms.domain.derived import referenced_names
 
 log = structlog.get_logger(__name__)
 
@@ -80,6 +88,70 @@ async def _load_bindings(session: AsyncSession, device_id: int) -> dict[str, Tag
         )
         for row in rows
     }
+
+
+async def _load_derived(
+    session: AsyncSession, bound: set[str]
+) -> list[DerivedBinding]:
+    """Device-scope formulas whose every input this Device actually reports.
+
+    Nothing is configured per Device. A Tag carrying a formula is computed here
+    when the Device is bound to all of its inputs, which is both the correct test
+    and a self-maintaining one: bind a Device's EFFICIENCY tomorrow and DC POWER
+    starts appearing, with no second step to forget.
+
+    The Tag itself must *not* already be bound — a Device that genuinely
+    transmits the value keeps its own (MASTER §5.2 applies to computed Tags too).
+    """
+    rows = (await session.execute(text("""
+        SELECT t.id, t.code, t.formula, t.valid_min, t.valid_max, t.min_interval_s
+          FROM tags t
+         WHERE t.formula IS NOT NULL AND t.derived_scope = 'device'
+    """))).all()
+
+    derived: list[DerivedBinding] = []
+    for row in rows:
+        if row.code in bound:
+            continue
+        try:
+            inputs = referenced_names(row.formula, scope="device")
+        except ValueError as exc:
+            # A malformed formula must be loud and must not take ingestion down
+            # with it: every other Tag on this Device still decodes.
+            log.error("ignoring malformed Tag formula", tag=row.code, error=str(exc))
+            continue
+        # A constant is supplied by the resolution, not by a binding, so it does
+        # not count towards "does this Device report the inputs".
+        needed = {name for name in inputs if name not in FORMULA_CONSTANTS}
+        if needed and needed.issubset(bound):
+            derived.append(DerivedBinding(
+                tag_id=row.id, tag_code=row.code, expression=row.formula,
+                valid_min=row.valid_min, valid_max=row.valid_max,
+                min_interval_s=row.min_interval_s,
+            ))
+    return derived
+
+
+async def _constants(session: AsyncSession, device_id: int) -> dict[str, float]:
+    """Capacities a formula may divide by, named as the client's sheet names them."""
+    row = (await session.execute(text("""
+        SELECT d.rated_capacity_kw, p.dc_capacity_kwp, p.ac_capacity_kw
+          FROM devices d JOIN plants p ON p.id = d.plant_id
+         WHERE d.id = :device_id
+    """), {"device_id": device_id})).first()
+    if row is None:
+        return {}
+    constants: dict[str, float] = {}
+    # SPECIFIC YIELD is `DAILY_ENERGY / INV_CAPACITY` on the client's sheet, so
+    # an Inverter with no rated capacity recorded simply has no specific yield —
+    # undefined, not zero, and visible as a gap the commissioning screen reports.
+    if row.rated_capacity_kw is not None:
+        constants["INV_CAPACITY"] = float(row.rated_capacity_kw)
+    if row.dc_capacity_kwp is not None:
+        constants["DC_CAPACITY"] = float(row.dc_capacity_kwp)
+    if row.ac_capacity_kw is not None:
+        constants["AC_CAPACITY"] = float(row.ac_capacity_kw)
+    return constants
 
 
 async def _device_row(session: AsyncSession, topic: str, patterns: list[TopicPattern]):  # type: ignore[no-untyped-def]
@@ -136,6 +208,8 @@ async def resolve(
             bindings={
                 key: TagBinding(**binding) for key, binding in cached["bindings"].items()
             },
+            derived=tuple(DerivedBinding(**d) for d in cached.get("derived", [])),
+            constants=cached.get("constants", {}),
         )
 
     row = await _device_row(session, topic, patterns)
@@ -147,12 +221,17 @@ async def resolve(
         return ResolutionFailure(topic, reason)
 
     bindings = await _load_bindings(session, row.id)
+    bound_codes = {b.tag_code for b in bindings.values()}
+    derived = await _load_derived(session, bound_codes)
+    constants = await _constants(session, row.id)
     resolution = DeviceResolution(
         device_id=row.id,
         client_id=row.client_id,
         plant_id=row.plant_id,
         expected_interval_s=row.expected_interval_s,
         bindings=bindings,
+        derived=tuple(derived),
+        constants=constants,
     )
     await live.cache_resolution(topic, {
         "device_id": row.id,
@@ -161,5 +240,7 @@ async def resolve(
         "expected_interval_s": row.expected_interval_s,
         # asdict, not vars: TagBinding uses slots and has no __dict__.
         "bindings": {k: asdict(v) for k, v in bindings.items()},
+        "derived": [asdict(d) for d in derived],
+        "constants": constants,
     })
     return resolution

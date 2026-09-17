@@ -21,7 +21,7 @@ import * as alarmsApi from "@/api/endpoints/alarms";
 import type { Alarm, AlarmSeverity, AlarmState } from "@/api/schemas";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { Button, Panel, Badge, inputClass } from "@/components/ui";
-import { EmptyState, ErrorState, LoadingState } from "@/components/state";
+import { EmptyState, ErrorState, SkeletonTable } from "@/components/state";
 import {
   AlarmStateBadge,
   ClassificationBadge,
@@ -271,7 +271,7 @@ export function AlarmsDashboard(): JSX.Element {
         subtitle="Sorted by severity or any column. Duplicates would be a real backend bug — none are removed here."
       >
         {alarmsQuery.isLoading ? (
-          <LoadingState label="Loading alarms" />
+          <SkeletonTable rows={8} columns={7} />
         ) : alarmsQuery.isError ? (
           <ErrorState error={alarmsQuery.error} retry={() => void alarmsQuery.refetch()} />
         ) : filtered.length === 0 ? (

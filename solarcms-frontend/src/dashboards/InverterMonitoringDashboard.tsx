@@ -22,7 +22,7 @@ import { qk } from "@/api/queryKeys";
 import * as devicesApi from "@/api/endpoints/devices";
 import type { DeviceDetail, DeviceListItem } from "@/api/schemas";
 import { Panel, Badge, InfoHint } from "@/components/ui";
-import { AwaitingDeviceDataState, EmptyState, ErrorState, LoadingState } from "@/components/state";
+import {AwaitingDeviceDataState, EmptyState, ErrorState, SkeletonKpiRow, SkeletonTable} from "@/components/state";
 import { CommStatusBadge, LastSeen, PlantPicker } from "@/components/domain";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { UNDEFINED_DISPLAY, formatNumber, formatValue } from "@/format/value";
@@ -158,7 +158,14 @@ export function InverterMonitoringDashboard(): JSX.Element {
       />
     );
   }
-  if (devicesQuery.isLoading) return <LoadingState label="Loading Devices" />;
+  if (devicesQuery.isLoading) {
+    return (
+      <div className="space-y-6">
+        <SkeletonKpiRow tiles={4} />
+        <SkeletonTable rows={8} columns={6} />
+      </div>
+    );
+  }
   if (devicesQuery.isError) {
     return <ErrorState error={devicesQuery.error} retry={() => void devicesQuery.refetch()} />;
   }

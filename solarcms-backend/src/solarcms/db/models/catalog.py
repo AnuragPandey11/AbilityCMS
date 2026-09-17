@@ -36,6 +36,11 @@ class DeviceType(Base):
     id: Mapped[int] = pk()
     code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which of the four fixed SLD stages this Type folds into (domain/sld_stages).
+    # NULL means it carries no current and is not drawn. A column rather than a
+    # code path because a VCB sits at a transformer bay on one Plant and an MCR
+    # feeder position on another, and moving it must not be a deploy.
+    sld_stage: Mapped[str | None] = mapped_column(String(16))
     # Determines Single Line Diagram membership. A Device outside the power path
     # is real and monitored, but electricity does not flow through it; placing it
     # in the electrical tree would corrupt the diagram (MASTER §2.3).
@@ -90,7 +95,17 @@ class Tag(Base):
     valid_max: Mapped[float | None] = mapped_column(Float)
     min_interval_s: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     is_cumulative: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # A calculated Tag: arithmetic over other Tag codes, evaluated by
+    # `domain/derived.py`. NULL means a Device publishes this value. Keeping the
+    # formula as data is what makes the client's "Need to Calculate" rows an
+    # INSERT rather than a release (migration 0020).
+    formula: Mapped[str | None] = mapped_column(Text)
+    derived_scope: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = created_at()
+
+    @property
+    def is_derived(self) -> bool:
+        return self.formula is not None
 
 
 class DeviceModelTag(Base):
@@ -109,3 +124,93 @@ class DeviceModelTag(Base):
         ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True
     )
     default_source_key: Mapped[str | None] = mapped_column(Text)
+    # Position within a repeating group — PV1..PV28 on an Inverter. NULL for a
+    # signal that appears once. A Device binds these up to its `string_count`,
+    # because how many strings a unit has is a fact about the unit, not the Model.
+    repeat_index: Mapped[int | None] = mapped_column(Integer)
+    # The order the client's own sheet lists the signal in. Alphabetical ordering
+    # of eighty PV rows is unreadable to the engineer commissioning the Device.
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class DashboardSlot(Base):
+    """A position on the fixed dashboard — `kpi.current_power`, not a Tag.
+
+    The layout is the same on every Plant; what varies is which Device is in a
+    position to answer. That is the whole argument against a drag-and-drop canvas:
+    a canvas makes every Plant a bespoke artefact nobody can compare against
+    another, where this makes every Plant the same screen answered by whatever
+    equipment it happens to have.
+
+    ⚠ Not `dashboards` (identity.py), which registers the dashboard *types* a User
+    may open. These are positions inside one.
+    """
+
+    __tablename__ = "dashboard_slots"
+    __table_args__ = (UniqueConstraint("panel", "position"),)
+
+    id: Mapped[int] = pk()
+    code: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    panel: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_hint: Mapped[str | None] = mapped_column(Text)
+    # A rooftop Plant has no winding temperature, and a permanent dash beside a
+    # transformer icon reads as a fault rather than as an absence.
+    hide_when_unresolved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    # The operational panel must show something when the settlement meter goes
+    # quiet; a Financial Report must not, and never resolves through here (I-8).
+    fallback_when_silent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = created_at()
+
+
+class DashboardSlotCandidate(Base):
+    """One way a slot could be answered. Lowest `priority` that the Plant is bound for wins.
+
+    Named by Device *Type*, never by Device or Plant (Guardrail 2): a Plant with
+    three MFMs and a Plant with one resolve through the same row.
+    """
+
+    __tablename__ = "dashboard_slot_candidates"
+    __table_args__ = (UniqueConstraint("slot_id", "priority"),)
+
+    id: Mapped[int] = pk()
+    slot_id: Mapped[int] = mapped_column(
+        ForeignKey("dashboard_slots.id", ondelete="CASCADE"), nullable=False
+    )
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    device_type_id: Mapped[int | None] = mapped_column(
+        ForeignKey("device_types.id", ondelete="CASCADE")
+    )
+    tag_id: Mapped[int | None] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"))
+    # How several Devices' readings become one number. Not cosmetic: eight
+    # Inverters produce eight lots of power, which sum, but sit at roughly one DC
+    # voltage, which does not.
+    aggregate: Mapped[str] = mapped_column(Text, nullable=False, default="first")
+    plant_attribute: Mapped[str | None] = mapped_column(Text)
+    online_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class DeviceTableColumn(Base):
+    """Which Tags form the columns of a per-Device table, by Device Type."""
+
+    __tablename__ = "device_table_columns"
+    __table_args__ = (
+        UniqueConstraint("device_type_id", "tag_id"),
+        UniqueConstraint("device_type_id", "position"),
+    )
+
+    id: Mapped[int] = pk()
+    device_type_id: Mapped[int] = mapped_column(
+        ForeignKey("device_types.id", ondelete="CASCADE"), nullable=False
+    )
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("tags.id", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)

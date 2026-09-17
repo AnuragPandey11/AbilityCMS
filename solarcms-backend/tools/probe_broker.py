@@ -110,9 +110,18 @@ async def probe(
             await client.subscribe(topic, qos=0)
             print(f"subscribed to {topic!r} on {host}:{port}", file=sys.stderr)
             async for message in client.messages:
-                observations[str(message.topic)].record(
-                    bytes(message.payload or b""), time.monotonic()
-                )
+                # aiomqtt types `payload` as any of str/bytes/bytearray/int/float
+                # because MQTT itself is untyped. Only the bytes-like cases carry
+                # a JSON body; anything else is recorded as an undecodable
+                # payload rather than coerced into one.
+                payload = message.payload
+                if isinstance(payload, bytes | bytearray):
+                    body = bytes(payload)
+                elif isinstance(payload, str):
+                    body = payload.encode()
+                else:
+                    body = b""
+                observations[str(message.topic)].record(body, time.monotonic())
 
     with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(consume(), timeout=seconds)

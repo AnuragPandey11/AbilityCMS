@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import text
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.cache import live
 from solarcms.domain.formulas import (
     availability,
     co2_avoided_kg,
@@ -23,8 +24,10 @@ from solarcms.schemas.assets import (
     BlockUpdate,
     DeviceCounts,
     PlantCreate,
+    PlantStatusChange,
     PlantUpdate,
 )
+from solarcms.services import dashboard
 
 router = APIRouter(prefix="/plants", tags=["plants"])
 # Block routes addressed by their own id sit at /blocks/{id}, not under
@@ -308,6 +311,48 @@ async def plant_sld(
     }
 
 
+@router.get("/{plant_id}/dashboard")
+async def plant_dashboard(
+    plant_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> dict[str, Any]:
+    """The fixed dashboard, resolved against whatever this Plant actually has.
+
+    Same panels, same positions, every Plant. What differs between an 8 MW Plant
+    with a settlement meter and a rooftop array publishing four Inverters is only
+    which Device answers each slot — and every resolved value carries that
+    provenance, so a tile can say whether it was measured or summed.
+    """
+    exists = (await session.execute(
+        text("SELECT 1 FROM plants WHERE id = :plant_id"), {"plant_id": plant_id}
+    )).first()
+    if exists is None:
+        # RLS makes an invisible Plant indistinguishable from a missing one here,
+        # which is the intended behaviour: 404 leaks nothing about another Client.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+    return await dashboard.render(session, plant_id)
+
+
+@router.get("/{plant_id}/sld-stages")
+async def plant_sld_stages(
+    plant_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> dict[str, Any]:
+    """The four-stage schematic: PV Array → Inverters → Transformer → Grid.
+
+    Always those four, always in that order, whatever the Plant contains — an
+    operator comparing two Plants cannot do it across two differently-shaped
+    diagrams. Every power-path Device folds into one stage by its Device Type
+    (`device_types.sld_stage`), and a stage with nothing in it still renders,
+    marked not instrumented.
+
+    `GET /plants/{id}/sld` remains the true `parent_device_id` tree, which is
+    what you want when something is wrong and you need to know *which* Inverter.
+    """
+    rendered = await dashboard.render(session, plant_id)
+    return {"plant_id": plant_id, **rendered["sld"]}
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_plant(
     body: PlantCreate, session: SessionDep,
@@ -414,6 +459,211 @@ async def update_plant(
                  before={k: v for k, v in before._mapping.items() if k != "client_id"},
                  after=after)
     return after
+
+
+@router.get("/{plant_id}/commissioning")
+async def commissioning_readiness(
+    plant_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> dict[str, Any]:
+    """What still stands between this Plant and going live.
+
+    Onboarding fails quietly, not loudly: a Device with no topic simply never
+    reports, a Device with no bindings decodes nothing, and both look exactly
+    like equipment that has not been switched on yet. This turns each of those
+    into a named, countable item, so that "the Plant is ready" is a check rather
+    than an opinion.
+
+    Read-only and advisory. Moving the Plant to `active` consults it, but an
+    operator who knows better can still force the transition.
+    """
+    plant = (await session.execute(text("""
+        SELECT id, code, name, status, ac_capacity_kw, dc_capacity_kwp, region_id
+          FROM plants WHERE id = :id
+    """), {"id": plant_id})).first()
+    if plant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+
+    devices = (await session.execute(text("""
+        SELECT d.id, d.code, d.name, d.source_address, d.string_count,
+               d.rated_capacity_kw, dt.code AS type_code, dt.in_power_path,
+               dm.variant, d.parent_device_id,
+               COALESCE(h.comm_status, 'unknown') AS comm_status,
+               (SELECT count(*) FROM device_tag_bindings b
+                 WHERE b.device_id = d.id AND b.enabled) AS binding_count,
+               (SELECT count(*) FROM device_model_tags mt
+                  JOIN tags t ON t.id = mt.tag_id
+                 WHERE mt.device_model_id = d.device_model_id
+                   AND t.formula IS NULL
+                   AND (mt.repeat_index IS NULL
+                        OR mt.repeat_index <= COALESCE(d.string_count, 0))
+               ) AS expected_binding_count
+          FROM devices d
+          JOIN device_models dm ON dm.id = d.device_model_id
+          JOIN device_types dt  ON dt.id = dm.device_type_id
+          LEFT JOIN device_health h ON h.device_id = d.id
+         WHERE d.plant_id = :plant_id AND d.status <> 'decommissioned'
+         ORDER BY d.code
+    """), {"plant_id": plant_id})).all()
+
+    issues: list[dict[str, Any]] = []
+
+    def flag(severity: str, code: str, detail: str, **extra: Any) -> None:
+        issues.append({"severity": severity, "code": code, "detail": detail, **extra})
+
+    if not devices:
+        flag("blocking", "no_devices",
+             "No Devices are registered, so nothing can report.")
+    if plant.dc_capacity_kwp is None:
+        # PR divides by it. Without it the KPI is undefined rather than wrong,
+        # which is correct behaviour and a blank tile nobody can explain.
+        flag("blocking", "no_dc_capacity",
+             "DC capacity is not set, so Performance Ratio cannot be computed.")
+    if plant.ac_capacity_kw is None:
+        flag("warning", "no_ac_capacity",
+             "AC capacity is not set, so CUF cannot be computed.")
+    if plant.region_id is None:
+        flag("warning", "no_region",
+             "No Region, so the grid emission factor falls back to the national "
+             "average in CO2 figures.")
+
+    kpi_devices = [d for d in devices if d.type_code == "PLANT_KPI"]
+    if not kpi_devices:
+        flag("warning", "no_kpi_panel",
+             "This Plant has no KPI panel Device, so PR, CUF and peak power have "
+             "nowhere to be written. Re-run the seed to create one.")
+
+    unmapped_total = 0
+    for device in devices:
+        if device.type_code == "PLANT_KPI":
+            continue  # computed, never published to: it needs no topic or binding
+        if not device.source_address:
+            flag("blocking", "device_without_topic",
+                 f"{device.code} has no MQTT topic, so nothing can be attributed "
+                 f"to it.", device_id=device.id, device_code=device.code)
+        if device.binding_count == 0:
+            flag("blocking", "device_without_bindings",
+                 f"{device.code} has no Tag bindings, so its payload decodes to "
+                 f"nothing.", device_id=device.id, device_code=device.code)
+        elif device.binding_count < device.expected_binding_count:
+            flag("warning", "device_partially_bound",
+                 f"{device.code} has {device.binding_count} of "
+                 f"{device.expected_binding_count} Tags bound.",
+                 device_id=device.id, device_code=device.code)
+        if device.comm_status in ("offline", "unknown"):
+            flag("warning", "device_never_heard",
+                 f"{device.code} has not been heard from "
+                 f"({device.comm_status}).",
+                 device_id=device.id, device_code=device.code)
+        if device.type_code == "INVERTER" and not device.rated_capacity_kw:
+            flag("warning", "inverter_without_capacity",
+                 f"{device.code} has no rated capacity, so its specific yield "
+                 f"cannot be computed.", device_id=device.id,
+                 device_code=device.code)
+        if device.in_power_path and device.parent_device_id is None:
+            # Not blocking: exactly one Device in the power path — the one that
+            # meets the grid — legitimately has no parent. Several is a diagram
+            # of disconnected fragments.
+            flag("info", "device_without_parent",
+                 f"{device.code} feeds into nothing, so it is a root of the "
+                 f"Single Line Diagram.", device_id=device.id,
+                 device_code=device.code)
+
+        keys = await live.read_unmapped_keys(device.id)
+        if keys:
+            unmapped_total += len(keys)
+            flag("warning", "device_unmapped_keys",
+                 f"{device.code} is publishing {len(keys)} signal(s) that no "
+                 f"binding maps: {', '.join(keys[:8])}"
+                 f"{'…' if len(keys) > 8 else ''}",
+                 device_id=device.id, device_code=device.code, keys=keys)
+
+    roots = [d for d in devices if d.in_power_path and d.parent_device_id is None]
+    if len(roots) > 1:
+        flag("warning", "multiple_sld_roots",
+             f"{len(roots)} Devices in the power path have no parent, so the "
+             f"Single Line Diagram will render as {len(roots)} separate trees.")
+
+    blocking = [i for i in issues if i["severity"] == "blocking"]
+    return {
+        "plant_id": plant.id, "status": plant.status,
+        "device_count": len(devices),
+        "unmapped_key_count": unmapped_total,
+        "ready": not blocking,
+        "blocking_count": len(blocking),
+        "issues": issues,
+        # What each status means, so the screen does not have to restate it.
+        "next_status": _next_status(plant.status),
+    }
+
+
+def _next_status(current: str) -> str | None:
+    return {"draft": "commissioning", "commissioning": "active"}.get(current)
+
+
+@router.post("/{plant_id}/status")
+async def change_plant_status(
+    plant_id: int, body: PlantStatusChange, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("plant.manage")),
+) -> dict[str, Any]:
+    """Move a Plant along `draft → commissioning → active` (MASTER §6.5).
+
+    Its own route rather than a PATCH field, because a transition is not an edit.
+    Going `active` publishes the Plant into every Portfolio total the Client sees
+    — a half-mapped Plant dragging fleet PR down is the exact failure the status
+    exists to prevent — so the readiness checks run first and a failure must be
+    overridden deliberately with `force`.
+    """
+    plant = (await session.execute(
+        text("SELECT id, code, status FROM plants WHERE id = :id"),
+        {"id": plant_id})).first()
+    if plant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+
+    if body.status == plant.status:
+        return {"plant_id": plant_id, "status": plant.status, "changed": False}
+
+    readiness = await commissioning_readiness(plant_id, session, user)
+    if body.status == "active" and not readiness["ready"] and not body.force:
+        # A plain sentence, not a structured payload. The error handler renders
+        # `detail` as a string, so a dict arrives at the browser as a Python repr
+        # — and the caller does not need the issues here anyway: the readiness
+        # endpoint is what the panel lists them from, in full, with remedies.
+        blocking = [i for i in readiness["issues"] if i["severity"] == "blocking"]
+        summary = "; ".join(i["detail"] for i in blocking[:3])
+        if len(blocking) > 3:
+            summary += f"; and {len(blocking) - 3} more"
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{len(blocking)} blocking issue(s) must be resolved before this Plant "
+            f"can go active, or activate anyway to override. {summary}",
+        )
+
+    # ⚠ Both uses of :status are CAST, and neither is decorative. The column is
+    # varchar(32) and the comparison literal is text, so asyncpg deduces two
+    # different types for one parameter and refuses the statement outright:
+    # "inconsistent types deduced for parameter $1". Same family as the `IS NULL`
+    # inference trap already recorded in CLAUDE.md, and the same remedy — an
+    # explicit CAST, since `:param::type` collides with SQLAlchemy's bind syntax.
+    row = (await session.execute(text("""
+        UPDATE plants SET status = CAST(:status AS text),
+               commissioned_on = CASE
+                   WHEN CAST(:status AS text) = 'active' AND commissioned_on IS NULL
+                   THEN CURRENT_DATE ELSE commissioned_on END
+         WHERE id = :id
+        RETURNING id, code, name, status, commissioned_on
+    """), {"id": plant_id, "status": body.status})).first()
+    assert row is not None
+
+    await _audit(session, user, "plant.status", "plants", plant_id,
+                 before={"status": plant.status},
+                 after={"status": body.status, "forced": body.force,
+                        "note": body.note,
+                        "blocking_issues": readiness["blocking_count"]})
+    changed: dict[str, Any] = dict(row._mapping)
+    changed.update(changed=True, forced=body.force,
+                   blocking_issues_at_change=readiness["blocking_count"])
+    return changed
 
 
 @router.get("/{plant_id}/blocks")

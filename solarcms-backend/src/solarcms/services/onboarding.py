@@ -6,13 +6,14 @@ aggregates, so a half-mapped Plant never drags fleet PR down.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Final
 
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solarcms.domain.assumptions import SOURCE_KEY_ALIASES, TAG_SPECS
+from solarcms.domain.assumptions import TAG_SPECS, alias_for
 
 log = structlog.get_logger(__name__)
 
@@ -131,6 +132,7 @@ async def upsert_device(
 
 async def bind_tags(
     session: AsyncSession, client_id: int, device_id: int, source_keys: list[str],
+    device_type_code: str | None = None,
 ) -> dict[str, int]:
     """Create per-Device Tag bindings from observed payload keys.
 
@@ -139,13 +141,21 @@ async def bind_tags(
     here is the Tag's assumed default — the authoritative value is whatever the
     client eventually supplies per Device (OPEN-15 / T-1).
 
+    `device_type_code` selects the Type-specific alias where one exists
+    (`SOURCE_KEY_ALIASES_BY_DEVICE_TYPE`). Omitting it falls back to the global
+    table, which is correct for most keys and wrong by 1000x for a few.
+
     Returns {bound, unmapped}. An unmapped key is not an error: it means the
     Device reports something the registry has no canonical Tag for yet, which is
     exactly the signal that commissioning is incomplete.
     """
     bound, unmapped = 0, 0
     for source_key in source_keys:
-        tag_code = SOURCE_KEY_ALIASES.get(source_key)
+        # ⚠ Type-aware, not a flat lookup. The client's broker sends `VRY` from
+        # both an Inverter (800 V, LT terminals) and an MFM (11.037, an 11 kV
+        # feeder); resolving both to HV_VOLTAGE_RY would store "799.9 kV" and two
+        # of the three phases would pass the range check while doing it.
+        tag_code = alias_for(source_key, device_type_code)
         if tag_code is None or tag_code not in TAG_SPECS:
             log.warning("no canonical Tag for source key",
                         source_key=source_key, device_id=device_id)
@@ -174,6 +184,135 @@ async def bind_tags(
     return {"bound": bound, "unmapped": unmapped}
 
 
+async def bind_from_model(
+    session: AsyncSession, client_id: int, device_id: int, *, replace: bool = False,
+) -> dict[str, int]:
+    """Seed a Device's bindings from its Model's signal schedule.
+
+    This is the step that turns "I picked Reference String Inverter" into a
+    working decode: every Tag on the Model's list gets a binding carrying the
+    default source key the client's own sheet uses. It is a *starting point* —
+    the commissioning engineer corrects it against what the Device really sends,
+    because field wiring never matches the datasheet (MASTER §5.2).
+
+    Two rules decide what is bound:
+
+    * **Repeating groups are sliced by `devices.string_count`.** A Model lists
+      PV1..PV28; a 12-string Inverter binds twelve. With no string count
+      recorded, none of the group is bound rather than all 28 — twenty-eight
+      Tags that never report look exactly like a broken Device to the health
+      sweep and to anyone reading the screen.
+    * **A derived Tag is never bound.** It has no source key because nothing
+      publishes it; `tags.formula` is what produces it, and binding it would
+      create a Tag waiting forever for a key that will never arrive.
+    """
+    device = (await session.execute(text("""
+        SELECT device_model_id, string_count FROM devices WHERE id = :id
+    """), {"id": device_id})).first()
+    if device is None:
+        raise ValueError(f"device {device_id} does not exist")
+
+    if replace:
+        await session.execute(
+            text("DELETE FROM device_tag_bindings WHERE device_id = :id"),
+            {"id": device_id},
+        )
+
+    rows = (await session.execute(text("""
+        SELECT t.id AS tag_id, t.code, t.scale_default, t.valid_min, t.valid_max,
+               mt.default_source_key, mt.repeat_index
+          FROM device_model_tags mt
+          JOIN tags t ON t.id = mt.tag_id
+         WHERE mt.device_model_id = :model_id
+           AND t.formula IS NULL
+           AND (mt.repeat_index IS NULL
+                OR mt.repeat_index <= COALESCE(:string_count, 0))
+         ORDER BY mt.sort_order
+    """), {"model_id": device.device_model_id,
+           "string_count": device.string_count})).all()
+
+    bound = 0
+    for row in rows:
+        # The Tag code is the fallback source key. A publisher that has adopted
+        # the canonical contract sends exactly these names, so a Device with no
+        # observed keys still decodes rather than landing wholly unmapped.
+        source_key = row.default_source_key or row.code
+        await session.execute(text("""
+            INSERT INTO device_tag_bindings (client_id, device_id, tag_id, source_key,
+                                             scale, value_offset, valid_min, valid_max)
+            VALUES (:client_id, :device_id, :tag_id, :source_key, 1.0, 0.0,
+                    :valid_min, :valid_max)
+            ON CONFLICT (device_id, tag_id) DO NOTHING
+        """), {
+            "client_id": client_id, "device_id": device_id, "tag_id": row.tag_id,
+            "source_key": source_key,
+            "valid_min": row.valid_min, "valid_max": row.valid_max,
+        })
+        bound += 1
+    return {"bound": bound, "strings": device.string_count or 0}
+
+
+async def ensure_plant_kpi_device(
+    session: AsyncSession, client_id: int, plant_id: int, plant_code: str,
+) -> int | None:
+    """Give a Plant the KPI panel its own figures are written to.
+
+    The client's Device List has a row for this — their `DASHBOARD` — and PR,
+    CUF, peak power and the start/stop times are Readings on it. Created with the
+    Plant rather than asked for, because a Plant without one silently has no KPIs
+    at all and the omission looks like a fault in the formulas.
+
+    Not in the power path, so it never appears in the Single Line Diagram.
+    """
+    model_id = (await session.execute(text("""
+        SELECT dm.id FROM device_models dm
+          JOIN device_types dt ON dt.id = dm.device_type_id
+         WHERE dt.code = 'PLANT_KPI'
+         ORDER BY dm.id LIMIT 1
+    """))).scalar()
+    if model_id is None:
+        # The catalogue has not been seeded. Onboarding a Plant must not fail for
+        # it — the KPI Device is added by the next seed run instead.
+        log.warning("no PLANT_KPI model in the catalogue; skipping KPI Device",
+                    plant_id=plant_id)
+        return None
+
+    return await _scalar_id(session, """
+        INSERT INTO devices (client_id, plant_id, device_model_id, code, name,
+                             expected_interval_s, status)
+        VALUES (:client_id, :plant_id, :model_id, :code, :name, 60, 'active')
+        ON CONFLICT (plant_id, code) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+    """, {"client_id": client_id, "plant_id": plant_id, "model_id": model_id,
+          # Derived from the Plant's code, not from its name: a code is stable
+          # and a name is edited. Still not a code path — no Plant name appears
+          # anywhere in the source (Guardrail 2).
+          "code": f"{plant_code}-KPI", "name": "Plant KPI Panel"})
+
+
+async def backfill_plant_kpi_devices(session: AsyncSession) -> int:
+    """Give every existing Plant a KPI panel. Idempotent; run from the seed.
+
+    Plants created before the KPI Device existed would otherwise show empty PR
+    and CUF tiles forever, with nothing to indicate why.
+    """
+    plants = (await session.execute(text("""
+        SELECT p.id, p.client_id, p.code FROM plants p
+         WHERE NOT EXISTS (
+            SELECT 1 FROM devices d
+              JOIN device_models dm ON dm.id = d.device_model_id
+              JOIN device_types dt  ON dt.id = dm.device_type_id
+             WHERE d.plant_id = p.id AND dt.code = 'PLANT_KPI')
+    """))).all()
+    created = 0
+    for plant in plants:
+        if await ensure_plant_kpi_device(session, plant.client_id, plant.id, plant.code):
+            created += 1
+    if created:
+        log.info("plant KPI devices created", count=created)
+    return created
+
+
 async def set_plant_status(session: AsyncSession, plant_id: int, status: str) -> None:
     await session.execute(
         text("UPDATE plants SET status = :status WHERE id = :plant_id"),
@@ -190,11 +329,25 @@ async def set_plant_status(session: AsyncSession, plant_id: int, status: str) ->
 # means nothing downstream needs a special case for "Plant-level" Readings.
 # ════════════════════════════════════════════════════════════════════════════
 
+# ⚠ **This list tracks a moving target.** The client's broker renamed its payload
+# keys wholesale between 10 and 16 September 2026, and moved its weather topic
+# (`MMS` → `WMS`) at the same time — see BROKER_OBSERVATIONS.md §7. The keys below
+# are the ones it is *currently* observed to publish, verified against live
+# traffic on 16 Sep. If a rebuild of this Plant produces Devices that decode
+# nothing, re-observe the broker before assuming this file is right: the earlier
+# revision of this list was correct when written and silently wrong a week later.
+#
+# The retired long-form keys (`VoltageRY`, `AverageGHI`, …) are still carried in
+# `SOURCE_KEY_ALIASES`, so a publisher that reverts still decodes.
 _TEST_BROKER_DEVICES: Final[tuple[tuple[str, str, str, str, tuple[str, ...]], ...]] = (
     (
+        # Short codes since 16 Sep. Previously VoltageRY / CurrentR /
+        # AvgPowerFactor / Frequency, which this Device decoded nothing under
+        # once the broker changed and nobody noticed for days — the Device kept
+        # reading as *online*, because it was still publishing perfectly on
+        # schedule. Only the content had changed.
         "MFM-01", "Feeder Meter", "MFM", "KULAR_GREEN/DATA",
-        ("VoltageRY", "VoltageYB", "VoltageBR", "CurrentR", "CurrentY", "CurrentB",
-         "AvgPowerFactor", "Frequency"),
+        ("VRY", "VYB", "VBR", "IR", "IY", "IB", "PF", "Hz"),
     ),
     (
         # ⚠ Registered as MFM, not ABT_METER, deliberately. Which meter is
@@ -202,14 +355,28 @@ _TEST_BROKER_DEVICES: Final[tuple[tuple[str, str, str, str, tuple[str, ...]], ..
         # Financial Reports from an MFM. Labelling it MFM means a Financial Report
         # refuses to run; labelling it ABT_METER on a guess would mean invoices
         # computed from an operational meter. The safe failure is the honest one.
+        #
+        # This Device's keys are the only ones that did *not* change in the 16 Sep
+        # revision, which is why it kept decoding while the other two went dark.
         "MFM-MAIN", "Main Generation Meter", "MFM", "KULAR_GREEN/GENERATION",
         ("ActivePower", "ReactivePower", "ApparentPower", "TodayExport", "TodayImport",
          "Import", "Export"),
     ),
     (
-        "WMS-01", "Weather Station", "WMS", "KULAR_GREEN/MMS",
-        ("AverageGHI", "AverageGTI", "WindDirection", "WindSpeed", "AmbientTemp",
-         "ModuleTemp", "PerformanceRatio"),
+        # Topic moved MMS → WMS, and the signal set grew from seven to thirteen:
+        # GHI/GTI (instantaneous) now arrive *alongside* AGHI/AGTI (cumulative),
+        # which is the first time this broker has distinguished the two — the
+        # distinction TAG_CATALOGUE §2.2 records and BROKER_OBSERVATIONS §4.1
+        # had to infer.
+        #
+        # ⚠ `PerformanceRatio` is deliberately absent: the broker stopped sending
+        # it in the same revision. It stays in SOURCE_KEY_ALIASES against its own
+        # Tag (REPORTED_PERFORMANCE_RATIO) so that if it returns it decodes
+        # immediately — binding it now would only create a Tag that never
+        # reports, which is indistinguishable from a failed sensor on every screen.
+        "WMS-01", "Weather Station", "WMS", "KULAR_GREEN/WMS",
+        ("GHI", "GTI", "AGHI", "AGTI", "WD", "WS", "AT", "MT",
+         "DIF", "DIFA", "DIR", "DA", "CC"),
     ),
 )
 
@@ -221,12 +388,27 @@ _TEST_BROKER_INTERVAL_S: Final = 3
 async def onboard_test_plant(session: AsyncSession) -> dict[str, Any]:
     """Register the client's test broker as a Client, Plant and three Devices.
 
+    This Plant is the one that does **not** follow the canonical topic contract:
+    its broker publishes `{PLANT}/{CATEGORY}` with no Device segment at all, so
+    each category is registered as the instrument it actually is and matched by
+    `devices.source_address` — an exact topic string — rather than by parsing a
+    Device code out of the topic. Nothing downstream knows the difference: once a
+    Reading is resolved it carries the same `(client, plant, device, tag)` as any
+    other, so the dashboards, the SLD and the KPI writer treat this Plant exactly
+    as they treat a canonical one.
+
+    Idempotent: every statement is an upsert keyed on a natural code, so re-running
+    this after the broker changes its keys *repairs* the bindings in place rather
+    than duplicating anything.
+
     ⚠ Several values here are inferences recorded in docs/BROKER_OBSERVATIONS.md,
     not client statements:
       * whether KULAR_GREEN is a Client or a Plant is unanswered (B-8), so it is
         used as the Plant code under a Client of the same name;
-      * the ~5,600 kWp capacity is derived arithmetic (§4.1), not a stated figure.
-    Both are one UPDATE to correct.
+      * the ~5,600 kWp capacity is derived arithmetic (§4.1), not a stated figure;
+      * the AC capacity is not set here at all, because nothing has ever stated
+        it — CUF stays undefined until someone does.
+    Each is one UPDATE to correct.
     """
     region_id = await upsert_region(session, "IN-UNKNOWN", "Region Not Yet Stated")
     client_id = await upsert_client(session, "kular-green", "Kular Green (provisional)")
@@ -253,4 +435,173 @@ async def onboard_test_plant(session: AsyncSession) -> dict[str, Any]:
         binding_counts = await bind_tags(session, client_id, device_id, list(keys))
         summary["devices"][code] = {"device_id": device_id, "topic": topic,
                                     **binding_counts}
+    return summary
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Commissioning a Plant from what the broker is actually publishing.
+#
+# The gap this closes: a publisher changes its topic shape or adds equipment,
+# and the platform silently stores nothing. That is not hypothetical — the
+# client's broker moved from a flat two-level shape to the canonical six-level
+# one and grew from 3 Devices to 20, and the only symptom was an empty chart.
+#
+# ⚠ This does **not** violate Guardrail 5. That rule forbids inferring a
+# Client from *payload contents* at ingest, where a wrong guess silently merges
+# two Clients' histories and nothing downstream can detect it. This runs at
+# commissioning, proposes a plan, prints it, and writes nothing without
+# `apply=True` — a human reads the proposal and accepts it. The topic remains the
+# sole authority for origin at runtime.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True, slots=True)
+class ObservedDevice:
+    """One topic seen on the broker, with the payload keys it carried."""
+
+    topic: str
+    plant_code: str
+    device_code: str
+    source_keys: tuple[str, ...]
+    client_code: str | None = None
+    collector_code: str | None = None
+    # Measured, never assumed: health detection multiplies this column, so a
+    # Device publishing every 3 s but registered at 60 s can sit silent for ten
+    # minutes and still read as healthy.
+    interval_s: int | None = None
+
+
+async def infer_device_type(session: AsyncSession, device_code: str) -> str | None:
+    """Match a Device code against the Device Type catalogue, longest code first.
+
+    `INVERTER_7` → `INVERTER`, `MFM` → `MFM`. Driven by the seeded catalogue
+    rather than a list in code, so a Client who adds a Type gets it for free and
+    no Plant or Client name ever reaches a code path (Guardrail 2).
+
+    Returns None when nothing matches, which is a question for the operator
+    rather than a default to fall back on.
+    """
+    codes: list[str] = [str(r.code) for r in (await session.execute(
+        text("SELECT code FROM device_types"))).all()]
+    upper = device_code.upper()
+
+    if upper in codes:
+        return upper
+    # `INVERTER_7` -> INVERTER: the code carries a unit number after the Type.
+    forward = [c for c in codes if upper.startswith(c)]
+    if forward:
+        return max(forward, key=len)
+    # `MCR` -> MCR_SECTION: the Type name is the longer of the two, because the
+    # catalogue spells out what the client abbreviates. Only accepted when
+    # exactly one Type could be meant — `M` must stay a question for the
+    # operator rather than silently becoming MFM, MCR_SECTION or MODULE_TRACKER.
+    reverse = [c for c in codes if c.startswith(upper)]
+    return reverse[0] if len(reverse) == 1 else None
+
+
+async def plan_commissioning(
+    session: AsyncSession, observed: list[ObservedDevice]
+) -> list[dict[str, Any]]:
+    """Work out what would be registered, and why, without writing anything."""
+    plan: list[dict[str, Any]] = []
+    for item in sorted(observed, key=lambda o: o.topic):
+        device_type = await infer_device_type(session, item.device_code)
+        mapped: list[str] = []
+        unmapped: list[str] = []
+        for key in item.source_keys:
+            tag = alias_for(key, device_type)
+            (mapped if tag and tag in TAG_SPECS else unmapped).append(key)
+        # Codes are matched case-insensitively here and here only. The broker
+        # says KULAR_GREEN where the Client row says kular-green, and a human is
+        # about to confirm this mapping. At runtime the topic is matched exactly.
+        plant = (await session.execute(text(
+            "SELECT id, client_id FROM plants WHERE upper(code) = upper(:code)"
+        ), {"code": item.plant_code})).first()
+        plan.append({
+            "topic": item.topic,
+            "device_code": item.device_code,
+            "device_type": device_type,
+            "plant_id": None if plant is None else plant.id,
+            "client_id": None if plant is None else plant.client_id,
+            "mapped_keys": len(mapped),
+            "unmapped_keys": unmapped,
+            "interval_s": item.interval_s,
+            "blocked": device_type is None or plant is None,
+        })
+    return plan
+
+
+async def commission_observed_devices(
+    session: AsyncSession, observed: list[ObservedDevice]
+) -> dict[str, Any]:
+    """Register the observed Devices, their collector, and their Tag bindings.
+
+    Three deliberate choices:
+
+    * **`source_address` is the exact topic.** That is the resolver's *first*
+      path — an exact match, before any pattern is tried — so it is immune to
+      the case and shape problems that pattern matching has to care about.
+    * **The collector becomes a Device, and everything under it reports via it.**
+      `{collector_code}` in the topic is what transmits these Devices, which is
+      `reports_via_device_id` and nothing else (I-10). Without it a failed
+      collector is recorded as twenty simultaneous equipment failures and
+      corrupts the availability figures.
+    * **`parent_device_id` is left NULL.** The topic says what *transmits* a
+      Device, never what it is *wired into*. Guessing the electrical tree from
+      the communication tree is precisely the collapse I-10 forbids. The
+      four-stage diagram does not need it — it folds by Device Type — so the
+      Plant is fully readable while the real wiring is still unknown.
+    """
+    summary: dict[str, Any] = {
+        "devices": 0, "bound": 0, "unmapped": 0, "collectors": 0, "skipped": []
+    }
+    collectors: dict[tuple[int, str], int] = {}
+
+    for item in sorted(observed, key=lambda o: o.topic):
+        device_type = await infer_device_type(session, item.device_code)
+        plant = (await session.execute(text(
+            "SELECT id, client_id FROM plants WHERE upper(code) = upper(:code)"
+        ), {"code": item.plant_code})).first()
+        if device_type is None or plant is None:
+            summary["skipped"].append(
+                {"topic": item.topic,
+                 "reason": "unknown Device Type" if plant else "no such Plant"}
+            )
+            continue
+
+        reports_via: int | None = None
+        if item.collector_code:
+            key = (plant.id, item.collector_code)
+            if key not in collectors:
+                collector_type = await infer_device_type(session, item.collector_code)
+                if collector_type is not None:
+                    model_id = await upsert_device_model(
+                        session, collector_type, "Unspecified",
+                        f"REF-{collector_type}",
+                    )
+                    collectors[key] = await upsert_device(
+                        session, plant.client_id, plant.id, model_id,
+                        code=item.collector_code,
+                        name=f"{item.collector_code} (collector)",
+                        expected_interval_s=item.interval_s or 60,
+                    )
+                    summary["collectors"] += 1
+            reports_via = collectors.get(key)
+
+        model_id = await upsert_device_model(
+            session, device_type, "Unspecified", f"REF-{device_type}"
+        )
+        device_id = await upsert_device(
+            session, plant.client_id, plant.id, model_id,
+            code=item.device_code, name=item.device_code.replace("_", " ").title(),
+            source_address=item.topic,
+            expected_interval_s=item.interval_s or 60,
+            reports_via_device_id=reports_via,
+        )
+        counts = await bind_tags(
+            session, plant.client_id, device_id, list(item.source_keys), device_type
+        )
+        summary["devices"] += 1
+        summary["bound"] += counts["bound"]
+        summary["unmapped"] += counts["unmapped"]
     return summary

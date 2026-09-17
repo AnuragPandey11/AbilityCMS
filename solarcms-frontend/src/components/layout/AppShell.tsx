@@ -17,6 +17,7 @@ import { ThemeToggle } from "@/theme/ThemeToggle";
 
 const ADMIN_LINKS = [
   { to: "/admin/onboarding", label: "Onboarding", permission: "plant.manage" },
+  { to: "/admin/hierarchy", label: "Plant Hierarchy", permission: "plant.manage" },
   { to: "/admin/bindings", label: "Device Bindings", permission: "config.modify" },
   { to: "/admin/alarm-rules", label: "Alarm Rules", permission: "config.modify" },
   { to: "/admin/users", label: "Users", permission: "user.manage" },

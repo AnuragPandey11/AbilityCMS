@@ -32,7 +32,9 @@ const FEW_SECONDS = { staleTime: 5_000 };
 export function useTags() {
   return useQuery({
     queryKey: qk.tags(),
-    queryFn: catalogApi.tags,
+    // Wrapped rather than passed directly: React Query calls the function with
+    // its own context object, which `tags()` would read as a filter.
+    queryFn: () => catalogApi.tags(),
     ...SESSION,
   });
 }
@@ -53,18 +55,28 @@ export function useDeviceTypes() {
   });
 }
 
-export function useDeviceModels() {
+export function useDeviceModels(deviceTypeCode?: string | null) {
   return useQuery({
-    queryKey: qk.deviceModels(),
-    queryFn: catalogApi.deviceModels,
+    queryKey: qk.deviceModels(deviceTypeCode),
+    queryFn: () => catalogApi.deviceModels(deviceTypeCode),
     ...SESSION,
   });
 }
 
-export function useDeviceModelTags(modelId: number | null) {
+/**
+ * A Model's signal schedule, optionally sliced to a string count.
+ *
+ * Passing the count the operator has typed shows exactly what a Device would
+ * bind — "59 Tags", not "107 Tags of which some apply" — before anything is
+ * created.
+ */
+export function useDeviceModelTags(
+  modelId: number | null,
+  stringCount?: number | null,
+) {
   return useQuery({
-    queryKey: qk.deviceModelTags(modelId ?? 0),
-    queryFn: () => catalogApi.deviceModelTags(modelId as number),
+    queryKey: qk.deviceModelTags(modelId ?? 0, stringCount),
+    queryFn: () => catalogApi.deviceModelTags(modelId as number, stringCount),
     enabled: modelId !== null,
     ...SESSION,
   });
@@ -141,6 +153,36 @@ export function usePlantDevices(
   });
 }
 
+/**
+ * The fixed dashboard, resolved for one Plant.
+ *
+ * Refetched on the same 30s cadence as the KPI panel: every slot resolves
+ * against current values, and a resolution that silently goes stale would show
+ * the last source that answered rather than the one answering now.
+ */
+/**
+ * The curated per-Device table columns. Part of the catalogue, so cached as hard
+ * as the Tag registry: it changes when somebody edits the configuration, not
+ * while an operator is looking at the screen.
+ */
+export function useDeviceTableColumns() {
+  return useQuery({
+    queryKey: qk.deviceTableColumns(),
+    queryFn: () => catalogApi.deviceTableColumns(),
+    staleTime: Infinity,
+  });
+}
+
+export function usePlantDashboard(plantId: number | null) {
+  return useQuery({
+    queryKey: qk.plantDashboard(plantId ?? 0),
+    queryFn: () => plantsApi.plantDashboard(plantId as number),
+    enabled: plantId !== null,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+}
+
 export function usePlantSld(plantId: number | null) {
   return useQuery({
     queryKey: qk.plantSld(plantId ?? 0),
@@ -181,6 +223,33 @@ export function useBindings(deviceId: number | null, enabled = true) {
     enabled: deviceId !== null && enabled,
     retry: false,
     ...SIXTY_SECONDS,
+  });
+}
+
+/**
+ * Signals a Device publishes that nothing is bound to.
+ *
+ * Refreshed rather than session-cached: this is what an engineer watches while
+ * correcting bindings, and a stale list showing solved problems is worse than
+ * no list at all.
+ */
+export function useUnmappedKeys(deviceId: number | null, enabled = true) {
+  return useQuery({
+    queryKey: qk.unmappedKeys(deviceId ?? 0),
+    queryFn: () => devicesApi.unmappedKeys(deviceId as number),
+    enabled: deviceId !== null && enabled,
+    retry: false,
+    ...FEW_SECONDS,
+  });
+}
+
+/** What still stands between this Plant and going live. */
+export function usePlantCommissioning(plantId: number | null, enabled = true) {
+  return useQuery({
+    queryKey: qk.plantCommissioning(plantId ?? 0),
+    queryFn: () => plantsApi.commissioningReport(plantId as number),
+    enabled: plantId !== null && enabled,
+    ...FEW_SECONDS,
   });
 }
 

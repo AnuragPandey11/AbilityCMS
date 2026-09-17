@@ -1,61 +1,47 @@
 /**
- * `plant_list` and `plant_overview` (§6.2).
+ * `plant_list` — the table (§6.2).
  *
- * A sortable, filterable table of Plants: code, name, region, capacity, status,
- * current power, today's energy, PR, device health summary, open alarms.
+ * A sortable, filterable, exportable table of Plants: code, name, region,
+ * capacity, status, live Devices, energy, PR, device health summary, open
+ * alarms. The screen for working through Plants systematically; the one for
+ * spotting which Plant needs attention is `PlantOverviewDashboard`, which draws
+ * the same data (`usePlantFleet`) as cards ordered by urgency.
  *
- * `GET /plants` is cursor-paginated. Follow `next_cursor`; never construct an
- * offset — the backend has no offset parameter and inventing one silently
- * repeats rows as the fleet grows.
+ * `GET /plants` is cursor-paginated and followed inside `usePlantFleet`; never
+ * construct an offset — the backend has no offset parameter and inventing one
+ * silently repeats rows as the fleet grows.
  */
 
-import { useQueries } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { useAlarms, useAllPlants, useDeviceHealth } from "@/api/hooks";
-import { qk } from "@/api/queryKeys";
-import * as plantsApi from "@/api/endpoints/plants";
-import type { PlantKpis, PlantListItem } from "@/api/schemas";
+import type { PlantListItem } from "@/api/schemas";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { Panel } from "@/components/ui";
-import { EmptyState, ErrorState, LoadingState } from "@/components/state";
-import {
-  DeviceHealthStrip,
-  PeriodPicker,
-  PlantStatusBadge,
-  isOnboarding,
-} from "@/components/domain";
+import {EmptyState, ErrorState, SkeletonKpiRow, SkeletonTable} from "@/components/state";
+import { DeviceHealthStrip, PeriodPicker, PlantStatusBadge } from "@/components/domain";
 import { UNDEFINED_DISPLAY, formatCapacity, formatNumber, formatRatioAsPercent, variantNote } from "@/format/value";
 import { usePermission } from "@/auth/usePermission";
 import { useSelection } from "@/state/selection";
-import { useLiveSocket } from "@/live/LiveSocket";
+import { usePlantFleet } from "./usePlantFleet";
 
-export function PlantListDashboard({
-  variant = "plant_list",
-}: {
-  /** Both dashboard codes render this component; the heading differs. */
-  variant?: "plant_list" | "plant_overview";
-}): JSX.Element {
+export function PlantListDashboard(): JSX.Element {
   const navigate = useNavigate();
   const { period, setPeriod, setPlantId } = useSelection();
   const canExport = usePermission("data.export");
-  const plantsQuery = useAllPlants();
-  const healthQuery = useDeviceHealth();
-  const alarmsQuery = useAlarms({ state: "active", limit: 500 });
-  const { devices: liveDevices } = useLiveSocket();
+  const fleet = usePlantFleet(period);
+  const { plants, active, onboarding, entryFor } = fleet;
 
-  const plants = plantsQuery.data ?? [];
-
-  const kpiQueries = useQueries({
-    queries: plants.map((plant) => ({
-      queryKey: qk.plantKpis(plant.id, period),
-      queryFn: () => plantsApi.plantKpis(plant.id, period),
-      staleTime: 30_000,
-    })),
-  });
-
-  if (plantsQuery.isLoading) return <LoadingState label="Loading Plants" />;
-  if (plantsQuery.isError) {
-    return <ErrorState error={plantsQuery.error} retry={() => void plantsQuery.refetch()} />;
+  // A skeleton in the shape of the list, so rows land in place rather than
+  // pushing the summary tiles down the page as they arrive.
+  if (fleet.isLoading) {
+    return (
+      <div className="space-y-6">
+        <SkeletonKpiRow tiles={6} />
+        <SkeletonTable rows={8} columns={7} />
+      </div>
+    );
+  }
+  if (fleet.isError) {
+    return <ErrorState error={fleet.error} retry={fleet.refetch} />;
   }
   if (plants.length === 0) {
     return (
@@ -66,24 +52,12 @@ export function PlantListDashboard({
     );
   }
 
-  const kpiFor = (plantId: number): PlantKpis | undefined =>
-    kpiQueries[plants.findIndex((plant) => plant.id === plantId)]?.data as
-      | PlantKpis
-      | undefined;
-
-  const healthFor = (plantId: number) =>
-    (healthQuery.data ?? []).filter((entry) => entry.plant_id === plantId);
-
-  const alarmCount = (plantId: number) =>
-    (alarmsQuery.data ?? []).filter((alarm) => alarm.plant_id === plantId).length;
-
-  /**
-   * "Current power" is derived from the live socket rather than requested: the
-   * REST path has no instantaneous endpoint, and the socket already carries the
-   * latest frame per Device. Absent frames render as "—", never as 0.
-   */
-  const liveDeviceCount = (plantId: number) =>
-    Object.values(liveDevices).filter((device) => device.plantId === plantId).length;
+  const kpiFor = (plantId: number) => entryFor(plantId)?.kpis;
+  const healthFor = (plantId: number) => entryFor(plantId)?.health ?? [];
+  const alarmCount = (plantId: number) => entryFor(plantId)?.alarms.length ?? 0;
+  // From the live socket rather than requested: the REST path has no
+  // instantaneous endpoint. Absent frames render as "—", never as 0.
+  const liveDeviceCount = (plantId: number) => entryFor(plantId)?.liveDeviceCount ?? 0;
 
   const columns: Column<PlantListItem>[] = [
     {
@@ -207,16 +181,11 @@ export function PlantListDashboard({
     },
   ];
 
-  const active = plants.filter((plant) => !isOnboarding(plant.status));
-  const onboarding = plants.filter((plant) => isOnboarding(plant.status));
-
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">
-            {variant === "plant_overview" ? "Plant Overview" : "Plant List"}
-          </h1>
+          <h1 className="text-lg font-semibold text-ink">Plant List</h1>
           <p className="text-xs text-ink-muted">
             {plants.length} visible Plant(s). Click a row to open it.
           </p>
