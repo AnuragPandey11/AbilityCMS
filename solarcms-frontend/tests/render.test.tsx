@@ -96,6 +96,7 @@ describe("the Single Line Diagram", () => {
         name: "Feeder Meter",
         type: "MFM",
         variant: null,
+        collector_code: null,
         children: [
           {
             device_id: 4,
@@ -103,13 +104,28 @@ describe("the Single Line Diagram", () => {
             name: "Inverter",
             type: "INVERTER",
             variant: "central",
+            collector_code: "MCR",
             children: [],
           },
         ],
       },
     ],
-    excluded_not_in_power_path: [{ device_id: 3, code: "WMS-01", type: "WMS" }],
+    excluded_not_in_power_path: [
+      { device_id: 3, code: "WMS-01", name: "Weather Station", type: "WMS",
+        variant: null, collector_code: null },
+    ],
     orphaned: [],
+    collectors: [
+      {
+        code: "MCR",
+        device_ids: [4],
+        device_count: 1,
+        in_power_path_count: 1,
+        // The one edge the box owns: the MCR feeds the meter. Said once, on
+        // the enclosure, instead of once per Device inside it.
+        parent_device_id: 1,
+      },
+    ],
   };
 
   it("draws the power-path nodes", () => {
@@ -131,6 +147,35 @@ describe("the Single Line Diagram", () => {
       />,
     );
     expect(screen.getByText(/no electrical tree to draw/i)).toBeInTheDocument();
+  });
+
+  it("labels the collector as an enclosure, and draws no node for it", () => {
+    wrap(
+      <SldTree
+        sld={sld}
+        overlay={{ commStatus: {}, livePower: {}, staleDevices: new Set() }}
+      />,
+    );
+    // The outline's label. Spelled out as "collector" beside the name,
+    // because an unlabelled dashed box is read as a selection by some people
+    // and as a fault region by others.
+    expect(screen.getByText("MCR")).toBeInTheDocument();
+    expect(screen.getByText(/collector · 1/)).toBeInTheDocument();
+    // Two Devices in the power path, two nodes. The room is not a third.
+    expect(screen.getByText("MFM-01")).toBeInTheDocument();
+    expect(screen.getByText("INV-01")).toBeInTheDocument();
+  });
+
+  it("offers zoom and full screen, because the diagram outgrows a phone", () => {
+    wrap(
+      <SldTree
+        sld={sld}
+        overlay={{ commStatus: {}, livePower: {}, staleDevices: new Set() }}
+      />,
+    );
+    for (const label of ["Zoom in", "Zoom out", "Fit to view", "Full screen"]) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
   });
 });
 

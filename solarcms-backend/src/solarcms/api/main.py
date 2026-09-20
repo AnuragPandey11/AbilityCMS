@@ -17,7 +17,9 @@ from solarcms.api.routers import (
     catalog,
     clients,
     devices,
+    discovery,
     health,
+    operations,
     plants,
     readings,
     regions,
@@ -66,9 +68,9 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, errors.unhandled_exception_handler)
 
     for router in (auth.router, clients.router, plants.router,
-                   plants.blocks_router, devices.router,
+                   plants.blocks_router, devices.router, discovery.router,
                    catalog.router, regions.router, readings.router, alarms.router,
-                   reports.router,
+                   reports.router, operations.router,
                    users.router, health.router, audit.router, ws_router):
         app.include_router(router)
 

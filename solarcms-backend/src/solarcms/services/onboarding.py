@@ -108,6 +108,7 @@ async def upsert_device(
         "block_id": fields.get("block_id"),
         "parent_device_id": fields.get("parent_device_id"),
         "reports_via_device_id": fields.get("reports_via_device_id"),
+        "collector_code": fields.get("collector_code"),
         "source_address": fields.get("source_address"),
         "expected_interval_s": fields.get("expected_interval_s", 60),
         "rated_capacity_kw": fields.get("rated_capacity_kw"),
@@ -115,16 +116,19 @@ async def upsert_device(
     }
     return await _scalar_id(session, """
         INSERT INTO devices (client_id, plant_id, device_model_id, code, name, block_id,
-                             parent_device_id, reports_via_device_id, source_address,
+                             parent_device_id, reports_via_device_id, collector_code,
+                             source_address,
                              expected_interval_s, rated_capacity_kw, status)
         VALUES (:client_id, :plant_id, :device_model_id, :code, :name, :block_id,
-                :parent_device_id, :reports_via_device_id, :source_address,
+                :parent_device_id, :reports_via_device_id, :collector_code,
+                :source_address,
                 :expected_interval_s, :rated_capacity_kw, :status)
         ON CONFLICT (plant_id, code) DO UPDATE
             SET name = EXCLUDED.name,
                 source_address = EXCLUDED.source_address,
                 expected_interval_s = EXCLUDED.expected_interval_s,
                 reports_via_device_id = EXCLUDED.reports_via_device_id,
+                collector_code = EXCLUDED.collector_code,
                 block_id = EXCLUDED.block_id
         RETURNING id
     """, params)
@@ -411,7 +415,14 @@ async def onboard_test_plant(session: AsyncSession) -> dict[str, Any]:
     Each is one UPDATE to correct.
     """
     region_id = await upsert_region(session, "IN-UNKNOWN", "Region Not Yet Stated")
-    client_id = await upsert_client(session, "kular-green", "Kular Green (provisional)")
+    # ⚠ The Client code must be **exactly what the publisher puts in the topic**,
+    # which is `KULAR_GREEN`. It was `kular-green` until 19 Sep 2026, and the
+    # mismatch was invisible: every registered Device resolves by an exact match
+    # on `devices.source_address`, which never compares the Client code at all.
+    # Only the *pattern* path does — the path a newly-appeared Device takes — so
+    # the first new Device the client added would have been quarantined as
+    # "no Device registered for this topic" while its topic was perfectly valid.
+    client_id = await upsert_client(session, "KULAR_GREEN", "Kular Green (provisional)")
     plant_id = await upsert_plant(
         session, client_id, "KULAR_GREEN", "Kular Green Solar",
         region_id=region_id,
@@ -511,9 +522,10 @@ async def plan_commissioning(
         for key in item.source_keys:
             tag = alias_for(key, device_type)
             (mapped if tag and tag in TAG_SPECS else unmapped).append(key)
-        # Codes are matched case-insensitively here and here only. The broker
-        # says KULAR_GREEN where the Client row says kular-green, and a human is
-        # about to confirm this mapping. At runtime the topic is matched exactly.
+        # The Plant code is matched case-insensitively here and here only,
+        # because a human is about to read this plan and confirm it. At runtime
+        # the topic is matched exactly — case-folding an origin would merge two
+        # Clients whose codes differ only by case (Guardrail 5).
         plant = (await session.execute(text(
             "SELECT id, client_id FROM plants WHERE upper(code) = upper(:code)"
         ), {"code": item.plant_code})).first()
@@ -521,6 +533,9 @@ async def plan_commissioning(
             "topic": item.topic,
             "device_code": item.device_code,
             "device_type": device_type,
+            # Shown in the plan so the operator can see the enclosure being
+            # recorded — and see that no Device is being created for it.
+            "collector_code": item.collector_code,
             "plant_id": None if plant is None else plant.id,
             "client_id": None if plant is None else plant.client_id,
             "mapped_keys": len(mapped),
@@ -534,28 +549,38 @@ async def plan_commissioning(
 async def commission_observed_devices(
     session: AsyncSession, observed: list[ObservedDevice]
 ) -> dict[str, Any]:
-    """Register the observed Devices, their collector, and their Tag bindings.
+    """Register the observed Devices with their Collector and Tag bindings.
 
     Three deliberate choices:
 
     * **`source_address` is the exact topic.** That is the resolver's *first*
       path — an exact match, before any pattern is tried — so it is immune to
       the case and shape problems that pattern matching has to care about.
-    * **The collector becomes a Device, and everything under it reports via it.**
-      `{collector_code}` in the topic is what transmits these Devices, which is
-      `reports_via_device_id` and nothing else (I-10). Without it a failed
-      collector is recorded as twenty simultaneous equipment failures and
-      corrupts the availability figures.
-    * **`parent_device_id` is left NULL.** The topic says what *transmits* a
-      Device, never what it is *wired into*. Guessing the electrical tree from
-      the communication tree is precisely the collapse I-10 forbids. The
-      four-stage diagram does not need it — it folds by Device Type — so the
-      Plant is fully readable while the real wiring is still unknown.
+    * **The Collector is recorded on the Device, and is never registered as a
+      Device itself** (migration 0022). `{collector_code}` names the enclosure
+      the equipment sits in — an MCR, an ICR, a panel. It publishes nothing and
+      carries no current, so registering it as a Device invents a piece of
+      equipment and puts it in the electrical diagram, where the operator then
+      has to explain why the room is wired between the Inverters and the meter.
+      It is a box drawn around the Devices, not a box in the chain.
+
+      ⚠ This changed on 2026-09-19. It used to create an `MCR_SECTION` Device
+      and point every Device beneath it at that row through
+      `reports_via_device_id`. Devices registered by the old path are repaired
+      by `python -m solarcms.cli collectors-from-topics`, which is dry-run by
+      default; nothing here deletes them, because removing a row a human may
+      have since edited is a decision and not a side effect of a re-run.
+    * **`parent_device_id` is left NULL.** The topic says where a Device *sits*,
+      never what it is *wired into*. Guessing the electrical tree from the
+      communication one is precisely the collapse I-10 forbids. The four-stage
+      diagram does not need it — it folds by Device Type — so the Plant is
+      readable while the real wiring is still unknown, and the hierarchy editor
+      is where the wiring is said.
     """
     summary: dict[str, Any] = {
         "devices": 0, "bound": 0, "unmapped": 0, "collectors": 0, "skipped": []
     }
-    collectors: dict[tuple[int, str], int] = {}
+    seen_collectors: set[tuple[int, str]] = set()
 
     for item in sorted(observed, key=lambda o: o.topic):
         device_type = await infer_device_type(session, item.device_code)
@@ -569,24 +594,14 @@ async def commission_observed_devices(
             )
             continue
 
-        reports_via: int | None = None
+        # A Collector is a name, so there is nothing to create and nothing to
+        # look up — only a count of the distinct enclosures this run touched,
+        # for the report the operator reads before accepting the plan.
         if item.collector_code:
             key = (plant.id, item.collector_code)
-            if key not in collectors:
-                collector_type = await infer_device_type(session, item.collector_code)
-                if collector_type is not None:
-                    model_id = await upsert_device_model(
-                        session, collector_type, "Unspecified",
-                        f"REF-{collector_type}",
-                    )
-                    collectors[key] = await upsert_device(
-                        session, plant.client_id, plant.id, model_id,
-                        code=item.collector_code,
-                        name=f"{item.collector_code} (collector)",
-                        expected_interval_s=item.interval_s or 60,
-                    )
-                    summary["collectors"] += 1
-            reports_via = collectors.get(key)
+            if key not in seen_collectors:
+                seen_collectors.add(key)
+                summary["collectors"] += 1
 
         model_id = await upsert_device_model(
             session, device_type, "Unspecified", f"REF-{device_type}"
@@ -596,7 +611,7 @@ async def commission_observed_devices(
             code=item.device_code, name=item.device_code.replace("_", " ").title(),
             source_address=item.topic,
             expected_interval_s=item.interval_s or 60,
-            reports_via_device_id=reports_via,
+            collector_code=item.collector_code,
         )
         counts = await bind_tags(
             session, plant.client_id, device_id, list(item.source_keys), device_type

@@ -12,6 +12,7 @@
  * silently repeats rows as the fleet grows.
  */
 
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { PlantListItem } from "@/api/schemas";
 import { DataTable, type Column } from "@/components/tables/DataTable";
@@ -28,7 +29,43 @@ export function PlantListDashboard(): JSX.Element {
   const { period, setPeriod, setPlantId } = useSelection();
   const canExport = usePermission("data.export");
   const fleet = usePlantFleet(period);
-  const { plants, active, onboarding, entryFor } = fleet;
+  const { plants, entryFor } = fleet;
+
+  /**
+   * Which Client's Plants to show. `"all"` until someone narrows it.
+   *
+   * Client-side, over the fleet already loaded, because the fleet is loaded
+   * whole for the portfolio totals anyway and a server round trip per filter
+   * change would be slower for no gain. The server-side `client_id` parameter
+   * exists for callers that do not need the whole fleet.
+   */
+  const [clientFilter, setClientFilter] = useState<number | "all">("all");
+
+  /**
+   * The Clients actually present in what this session can see.
+   *
+   * Derived from the rows rather than from `GET /clients`, which is Super
+   * Admin only: a Client Admin would get a 403 and lose the column. It also
+   * means the list can never offer a Client whose Plants are all invisible.
+   */
+  const clients = useMemo(() => {
+    const byId = new Map<number, string>();
+    for (const plant of plants) {
+      if (!byId.has(plant.client_id)) {
+        byId.set(plant.client_id, plant.client_name ?? plant.client_code ?? `Client #${plant.client_id}`);
+      }
+    }
+    return [...byId].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [plants]);
+
+  // One Client means there is nothing to choose between, and a filter with a
+  // single option is furniture. A Client Admin sees exactly one, always.
+  const showClientFilter = clients.length > 1;
+
+  const matchesClient = (plant: PlantListItem): boolean =>
+    clientFilter === "all" || plant.client_id === clientFilter;
+  const active = fleet.active.filter(matchesClient);
+  const onboarding = fleet.onboarding.filter(matchesClient);
 
   // A skeleton in the shape of the list, so rows land in place rather than
   // pushing the summary tiles down the page as they arrive.
@@ -60,6 +97,23 @@ export function PlantListDashboard(): JSX.Element {
   const liveDeviceCount = (plantId: number) => entryFor(plantId)?.liveDeviceCount ?? 0;
 
   const columns: Column<PlantListItem>[] = [
+    // Only where it distinguishes anything. A Client Admin sees one Client by
+    // construction, and a column repeating their own name in every row is
+    // noise in a table that is already wide.
+    ...(showClientFilter
+      ? [
+          {
+            key: "client",
+            header: "Client",
+            render: (plant: PlantListItem) =>
+              plant.client_name ?? plant.client_code ?? `#${plant.client_id}`,
+            sortValue: (plant: PlantListItem) => plant.client_name ?? "",
+            filterValue: (plant: PlantListItem) =>
+              `${plant.client_name ?? ""} ${plant.client_code ?? ""}`,
+            width: "150px",
+          } satisfies Column<PlantListItem>,
+        ]
+      : []),
     {
       key: "code",
       header: "Code",
@@ -187,10 +241,37 @@ export function PlantListDashboard(): JSX.Element {
         <div>
           <h1 className="text-lg font-semibold text-ink">Plant List</h1>
           <p className="text-xs text-ink-muted">
-            {plants.length} visible Plant(s). Click a row to open it.
+            {clientFilter === "all"
+              ? `${plants.length} visible Plant(s)`
+              : `${active.length + onboarding.length} of ${plants.length} Plant(s)`}
+            {showClientFilter ? ` across ${clients.length} Client(s)` : ""}. Click
+            a row to open it.
           </p>
         </div>
-        <PeriodPicker value={period} onChange={setPeriod} />
+        <div className="flex flex-wrap items-center gap-2">
+          {showClientFilter ? (
+            <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+              Client
+              <select
+                value={clientFilter}
+                onChange={(event) =>
+                  setClientFilter(
+                    event.target.value === "all" ? "all" : Number(event.target.value),
+                  )
+                }
+                className="rounded-control border border-line bg-surface-raised px-2 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
+              >
+                <option value="all">All Clients</option>
+                {clients.map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <PeriodPicker value={period} onChange={setPeriod} />
+        </div>
       </div>
 
       <Panel title="Plants">

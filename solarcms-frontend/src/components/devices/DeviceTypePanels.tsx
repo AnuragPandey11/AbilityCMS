@@ -20,9 +20,15 @@
  * A Device that has published nothing shows as silent rather than as zero. Zero
  * is a claim about the equipment; silence is the absence of one, and an operator
  * must never be shown the first when the second is true.
+ *
+ * The card shows the first few measurements and hides the rest behind a control
+ * that opens them. It previously said "+6 more" as plain text, which names
+ * something the operator cannot reach: an Inverter bound to eighty Tags once its
+ * strings are counted would report that most of what it publishes exists
+ * somewhere else, without saying where. The count is now the button.
  */
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import type { DeviceListItem, Tag } from "@/api/schemas";
 import { useTagsById } from "@/api/hooks";
 import { useLiveSocket } from "@/live/LiveSocket";
@@ -31,6 +37,7 @@ import { ageSeconds } from "@/format/datetime";
 import { formatValue } from "@/format/value";
 import { Badge, Panel } from "@/components/ui";
 import { EmptyState } from "@/components/state";
+import { DeviceIcon } from "@/components/devices/DeviceIcon";
 
 /** Category order: what an operator looks at first, first. */
 const CATEGORY_ORDER = [
@@ -40,6 +47,22 @@ const CATEGORY_ORDER = [
   "status",
   "diagnostic",
 ] as const;
+
+/** Measurements a card shows before it has to be asked for the rest. */
+const COLLAPSED_ROWS = 8;
+
+function Chevron({ up }: { up: boolean }): JSX.Element {
+  return (
+    <svg
+      width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true"
+      stroke="currentColor" strokeWidth={2.4}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={`transition-transform ${up ? "rotate-180" : ""}`}
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
 
 interface DeviceValues {
   values: Record<number, number>;
@@ -164,6 +187,15 @@ function DeviceCard({
   const measurements = rows.filter((row) => row.tag.category !== "status");
   const contacts = rows.filter((row) => row.tag.category === "status");
 
+  // Collapsed by default: the card sits in a grid of its peers and is meant to
+  // be scanned, so the common case stays one comparable height. Expanding is
+  // per Device and deliberately not remembered — it is a "look closer at this
+  // one" action, not a display preference.
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const hidden = Math.max(0, measurements.length - COLLAPSED_ROWS);
+  const shown = expanded ? measurements : measurements.slice(0, COLLAPSED_ROWS);
+
   return (
     <div
       className={`rounded-lg border bg-surface p-3 ${
@@ -175,9 +207,24 @@ function DeviceCard({
       }`}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-ink">{device.code}</p>
-          <p className="truncate text-[11px] text-ink-muted">{device.name}</p>
+        <div className="flex min-w-0 items-center gap-2">
+          {/* Tinted with the card's own state, so a wall of cards can be read
+              for trouble by colour before any of the codes are read at all. */}
+          <span
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+              silent
+                ? "bg-surface-sunken text-ink-faint"
+                : stale
+                  ? "bg-warn/10 text-warn"
+                  : "bg-ok/10 text-ok"
+            }`}
+          >
+            <DeviceIcon typeCode={device.type_code} size={17} />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-ink">{device.code}</p>
+            <p className="truncate text-[11px] text-ink-muted">{device.name}</p>
+          </div>
         </div>
         <Badge
           tone={silent ? "neutral" : stale ? "warn" : "ok"}
@@ -202,8 +249,8 @@ function DeviceCard({
       ) : (
         <>
           {measurements.length > 0 ? (
-            <dl className="mt-3 space-y-1">
-              {measurements.slice(0, 8).map((row) => (
+            <dl className="mt-3 space-y-1" id={listId}>
+              {shown.map((row) => (
                 <div
                   key={row.tag.id}
                   className="flex items-baseline justify-between gap-2"
@@ -227,10 +274,17 @@ function DeviceCard({
                   </dd>
                 </div>
               ))}
-              {measurements.length > 8 ? (
-                <p className="pt-1 text-[11px] text-ink-faint">
-                  +{measurements.length - 8} more
-                </p>
+              {hidden > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setExpanded((open) => !open)}
+                  aria-expanded={expanded}
+                  aria-controls={listId}
+                  className="mt-1 flex w-full items-center justify-center gap-1 rounded border border-line bg-surface-sunken py-1 text-[11px] font-medium text-ink-muted transition hover:border-accent/40 hover:text-ink"
+                >
+                  <Chevron up={expanded} />
+                  {expanded ? "Show fewer" : `Show ${hidden} more`}
+                </button>
               ) : null}
             </dl>
           ) : null}

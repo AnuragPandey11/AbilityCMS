@@ -5,6 +5,10 @@
     python -m solarcms.cli onboard-test-plant
     python -m solarcms.cli commission-from-broker --seconds 45
     python -m solarcms.cli commission-from-broker --seconds 45 --apply
+    python -m solarcms.cli collectors-from-topics
+    python -m solarcms.cli collectors-from-topics --apply --retire-devices
+    python -m solarcms.cli create-client-user --email a@b.com --password ... \
+        --client-code KULAR_GREEN --role admin
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from typing import Any
 from sqlalchemy import text
 
 from solarcms.config import get_settings
-from solarcms.db.rls import SecurityContext
+from solarcms.db.rls import INGEST_ROLE, SecurityContext
 from solarcms.db.session import dispose_engine, scoped_session
 from solarcms.domain.decoding import parse_topic
 from solarcms.logging import configure_logging, get_logger
@@ -179,6 +183,233 @@ async def _commission_from_broker(
     return 0
 
 
+async def _backfill_device(device_id: int, apply: bool) -> int:
+    """Replay one Device's quarantined messages into Readings.
+
+    ⚠ Runs under the **ingest** role, not the API's. The API holds no privilege
+    at all on `readings` (0008/0010) and would fail here, which is the design
+    working — so recovering history is a deliberate command, never a side effect
+    of opening a screen.
+    """
+    from solarcms.services.backfill import replay
+
+    async with scoped_session(
+        SecurityContext.platform(user_id=0), role=INGEST_ROLE
+    ) as session:
+        stats = await replay(session, device_id, apply=apply)
+
+    if stats.get("error"):
+        log.error("backfill refused", **stats)
+        return 1
+    log.info("backfill complete" if apply else "backfill plan", **stats)
+    if not apply:
+        print("\n  Dry run. Nothing written. Re-run with --apply.\n")
+    return 0
+
+
+async def _create_client_user(
+    email: str, password: str, full_name: str, client_code: str, role_code: str,
+    all_plants: bool, all_dashboards: bool,
+) -> int:
+    """Create (or re-password) a User inside one Client, with a Role.
+
+    `create-superadmin` makes a *platform* administrator, who belongs to no
+    Client and therefore has no Plants of their own. That is the wrong account
+    for a Client's own administrator, and making one by hand means four inserts
+    across `users`, `memberships`, `user_plant_access` and
+    `user_dashboard_access` — three of which fail silently in the sense that
+    matters: the User signs in and sees nothing.
+
+    ⚠ **Zero Plant assignments means zero Plants, never all of them**
+    (Guardrail 7). `--all-plants` therefore writes a row per Plant rather than
+    leaving the table empty and hoping the reader treats empty as "everything".
+    It is a convenience for the Client's own admin, whose Plants are by
+    definition all of their Client's; it is not a default.
+    """
+    from solarcms.api.auth import hash_password
+
+    async with scoped_session(SecurityContext.platform(user_id=0), role=None) as session:
+        client = (await session.execute(
+            text("SELECT id, name FROM clients WHERE code = :code"),
+            {"code": client_code})).first()
+        if client is None:
+            log.error("no such Client; create it first", client_code=client_code)
+            return 1
+        role = (await session.execute(
+            text("SELECT id FROM roles WHERE code = :code"),
+            {"code": role_code})).first()
+        if role is None:
+            log.error("no such Role; run `seed` first", role_code=role_code)
+            return 1
+
+        # Idempotent on the email: re-running resets the password rather than
+        # failing, which is what an operator running this twice actually wants.
+        user_id = (await session.execute(text("""
+            INSERT INTO users (email, password_hash, full_name, platform_role)
+            VALUES (:email, :password_hash, :full_name, 'none')
+            ON CONFLICT (email) DO UPDATE
+                SET password_hash = EXCLUDED.password_hash,
+                    full_name = EXCLUDED.full_name,
+                    is_active = true
+            RETURNING id
+        """), {"email": email, "password_hash": hash_password(password),
+               "full_name": full_name})).scalar()
+        assert user_id is not None
+
+        # Plant and dashboard access hang off the *membership*, not the User: a
+        # User may belong to several Clients, and "can see Plant 4" is only
+        # meaningful inside the Client that owns Plant 4.
+        membership_id = (await session.execute(text("""
+            INSERT INTO memberships (user_id, client_id, role_id)
+            VALUES (:user_id, :client_id, :role_id)
+            ON CONFLICT (user_id, client_id) DO UPDATE SET role_id = EXCLUDED.role_id
+            RETURNING id
+        """), {"user_id": user_id, "client_id": client.id,
+               "role_id": role.id})).scalar()
+        assert membership_id is not None
+
+        plants = 0
+        if all_plants:
+            # RETURNING and a row count, rather than `rowcount`: the async
+            # Result does not carry one, and "how many Plants can this User
+            # now see" is the fact worth printing.
+            plants = len((await session.execute(text("""
+                INSERT INTO user_plant_access (membership_id, plant_id)
+                SELECT :membership_id, p.id
+                  FROM plants p WHERE p.client_id = :client_id
+                ON CONFLICT (membership_id, plant_id) DO NOTHING
+                RETURNING plant_id
+            """), {"membership_id": membership_id, "client_id": client.id})).all())
+
+        dashboards = 0
+        if all_dashboards:
+            dashboards = len((await session.execute(text("""
+                INSERT INTO user_dashboard_access (membership_id, dashboard_id)
+                SELECT :membership_id, d.id FROM dashboards d
+                ON CONFLICT (membership_id, dashboard_id) DO NOTHING
+                RETURNING dashboard_id
+            """), {"membership_id": membership_id})).all())
+
+    log.info("client user ready", email=email, client=client_code, role=role_code,
+             plants_granted=plants, dashboards_granted=dashboards)
+    return 0
+
+
+async def _collectors_from_topics(apply: bool, retire_devices: bool) -> int:
+    """Repair the Collector grouping after migration 0022.
+
+    Two separate repairs, both dry-run by default:
+
+    1. **Backfill `devices.collector_code` from `devices.source_address`.** The
+       enclosure has always been in the topic; until 0022 there was nowhere to
+       put it.
+    2. **Retire Collector-Devices**, with `--retire-devices`. Commissioning used
+       to register the `{collector_code}` segment as an `MCR_SECTION` Device and
+       point everything beneath it at that row. A Collector is a room: it
+       publishes nothing, carries no current, and as a node in the Single Line
+       Diagram it claims the plant is wired *through* the building.
+
+       A Device is only ever proposed for retirement when all of the following
+       hold, which together mean commissioning created it and nobody has since
+       given it a job: it has no `source_address` of its own, it has no Tag
+       bindings, it has never stored a Reading, and its code is the Collector
+       segment of some other Device's topic at the same Plant. Its children are
+       re-pointed at *its* parent first, so the electrical chain closes over the
+       gap rather than losing a limb.
+
+       ⚠ A `device_health` row is deliberately **not** part of that test. The
+       sweep writes one for every active Device on its first pass, so every
+       Collector-Device has one within a minute of being created — it is
+       evidence that the sweep ran, not that anyone uses this Device.
+    """
+    async with scoped_session(SecurityContext.platform(user_id=0), role=None) as session:
+        patterns = await load_topic_patterns(session)
+        rows = (await session.execute(text("""
+            SELECT d.id, d.plant_id, d.code, d.collector_code, d.source_address,
+                   d.parent_device_id, p.code AS plant_code
+              FROM devices d JOIN plants p ON p.id = d.plant_id
+             ORDER BY d.plant_id, d.code
+        """))).all()
+
+        # ── 1. What the topic says each Device's enclosure is ────────────────
+        changes: list[tuple[int, str, str | None, str | None]] = []
+        enclosures: dict[int, set[str]] = {}
+        for row in rows:
+            if not row.source_address:
+                continue
+            captured = parse_topic(row.source_address, patterns) or {}
+            collector = captured.get("collector_code")
+            if collector:
+                enclosures.setdefault(row.plant_id, set()).add(collector)
+            if collector != row.collector_code:
+                changes.append((row.id, row.code, row.collector_code, collector))
+
+        print(f"\n  Collector recorded on the Device ({len(changes)} to change)")
+        for _id, code, was, now in changes:
+            print(f"    {code:<22} {was or '—':<12} →  {now or '—'}")
+
+        # ── 2. Collector-Devices to retire ───────────────────────────────────
+        retire: list[Any] = []
+        for row in rows:
+            if row.code not in enclosures.get(row.plant_id, set()):
+                continue
+            if row.source_address:
+                continue  # it publishes; it is a Device whatever it is named
+            busy = (await session.execute(text("""
+                SELECT (SELECT count(*) FROM device_tag_bindings b
+                         WHERE b.device_id = :id) AS bindings,
+                       (SELECT count(*) FROM readings_v r
+                         WHERE r.device_id = :id) AS readings
+            """), {"id": row.id})).first()
+            assert busy is not None
+            if busy.bindings or busy.readings:
+                print(f"    keeping {row.code}: it has {busy.bindings} "
+                      f"binding(s) and {busy.readings} Reading(s), so it is "
+                      f"being used as a Device and removing it would lose data")
+                continue
+            retire.append(row)
+
+        print(f"\n  Collector-Devices to retire ({len(retire)})")
+        for row in retire:
+            children = (await session.execute(text("""
+                SELECT count(*) FROM devices WHERE parent_device_id = :id
+            """), {"id": row.id})).scalar()
+            print(f"    {row.code:<22} at plant {row.plant_code}: "
+                  f"{children} child Device(s) re-pointed at "
+                  f"{row.parent_device_id or 'the grid'}")
+
+        if not apply:
+            print("\n  Dry run. Nothing written. Re-run with --apply.\n")
+            return 0
+
+        for device_id, _code, _was, collector in changes:
+            await session.execute(
+                text("UPDATE devices SET collector_code = :c WHERE id = :id"),
+                {"c": collector, "id": device_id})
+
+        retired = 0
+        if retire_devices:
+            for row in retire:
+                # The chain closes over the gap: whatever fed into the room now
+                # feeds into whatever the room fed into. Doing this before the
+                # delete is what stops the composite FK refusing it, and what
+                # stops seventeen Inverters becoming roots.
+                await session.execute(text("""
+                    UPDATE devices SET parent_device_id = :new_parent
+                     WHERE parent_device_id = :id
+                """), {"new_parent": row.parent_device_id, "id": row.id})
+                await session.execute(text("""
+                    UPDATE devices SET reports_via_device_id = NULL
+                     WHERE reports_via_device_id = :id
+                """), {"id": row.id})
+                await session.execute(
+                    text("DELETE FROM devices WHERE id = :id"), {"id": row.id})
+                retired += 1
+
+    log.info("collectors repaired", recorded=len(changes), retired=retired)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
@@ -206,6 +437,38 @@ def main(argv: list[str] | None = None) -> int:
     commission.add_argument("--apply", action="store_true",
                             help="write the plan. Without it, nothing is written.")
 
+    backfill = sub.add_parser(
+        "backfill-device",
+        help="replay a Device's quarantined messages into Readings")
+    backfill.add_argument("--device-id", type=int, required=True)
+    backfill.add_argument("--apply", action="store_true",
+                          help="write the Readings. Without it, nothing is written.")
+
+    client_user = sub.add_parser(
+        "create-client-user",
+        help="create a User inside one Client, with a Role and Plant access")
+    client_user.add_argument("--email", required=True)
+    client_user.add_argument("--password", required=True)
+    client_user.add_argument("--client-code", required=True)
+    client_user.add_argument("--role", default="admin",
+                             help="role code: super_admin, admin, employee, guest")
+    client_user.add_argument("--full-name", default=None)
+    client_user.add_argument(
+        "--no-plants", action="store_true",
+        help="grant no Plant access. Zero assignments means zero Plants (Guardrail 7).")
+    client_user.add_argument("--no-dashboards", action="store_true",
+                             help="grant no dashboards")
+
+    collectors = sub.add_parser(
+        "collectors-from-topics",
+        help="record each Device's Collector from its topic, and retire "
+             "Collector-Devices left by the old commissioning path")
+    collectors.add_argument("--apply", action="store_true",
+                            help="write the changes. Without it, nothing is written.")
+    collectors.add_argument(
+        "--retire-devices", action="store_true",
+        help="also delete the Collector-Devices, re-pointing their children first")
+
     args = parser.parse_args(argv)
 
     async def run() -> int:
@@ -217,6 +480,17 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "commission-from-broker":
                 return await _commission_from_broker(
                     args.host, args.port, args.topic, args.seconds, args.apply)
+            if args.command == "create-client-user":
+                return await _create_client_user(
+                    args.email, args.password,
+                    args.full_name or args.email.split("@")[0].title(),
+                    args.client_code, args.role,
+                    all_plants=not args.no_plants,
+                    all_dashboards=not args.no_dashboards)
+            if args.command == "collectors-from-topics":
+                return await _collectors_from_topics(args.apply, args.retire_devices)
+            if args.command == "backfill-device":
+                return await _backfill_device(args.device_id, args.apply)
             if args.command == "onboard-test-plant":
                 from solarcms.services.onboarding import onboard_test_plant
 

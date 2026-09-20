@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildStages } from "@/components/sld/PlantFlow";
+import { buildStages, isUnwired } from "@/components/sld/PlantFlow";
 import type { DeviceListItem } from "@/api/schemas";
 
 function device(
@@ -30,6 +30,7 @@ function device(
     block_id: null,
     parent_device_id,
     reports_via_device_id: null,
+    collector_code: null,
     source_address: null,
     expected_interval_s: 60,
     type_code,
@@ -166,5 +167,194 @@ describe("buildStages", () => {
       device(3, "C", "MFM", 1),
     ]);
     expect(stages.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Ordering ties by electrical position rather than alphabetically.
+ *
+ * This is the case that was silently wrong in production. On an unwired Plant
+ * every Device sits at depth 0, so the tie-break decides the entire row — and
+ * ordering by type code put the settlement meter upstream of the transformer,
+ * because `MFM` sorts before `TRANSFORMER`. The row looked authoritative and
+ * was alphabetical.
+ */
+describe("stage ordering", () => {
+  const STAGES: Record<string, string> = {
+    INVERTER: "INVERTERS",
+    MFM: "GRID",
+    TRANSFORMER: "TRANSFORMER",
+    VCB: "TRANSFORMER",
+  };
+
+  function staged(
+    id: number,
+    code: string,
+    type_code: string,
+    parent: number | null = null,
+  ): DeviceListItem {
+    return device(id, code, type_code, parent, {
+      sld_stage: STAGES[type_code] ?? null,
+    });
+  }
+
+  it("orders an unwired Plant by electrical position, not by type code", () => {
+    const stages = buildStages([
+      staged(1, "INVERTER_1", "INVERTER"),
+      staged(2, "MFM", "MFM"),
+      staged(3, "TRANSFORMER", "TRANSFORMER"),
+      staged(4, "VCB", "VCB"),
+    ]);
+    // Alphabetically this was INVERTER, MFM, TRANSFORMER, VCB — the meter
+    // second, upstream of the transformer it actually sits behind.
+    expect(stages.map((s) => s.typeCode)).toEqual([
+      "INVERTER",
+      "TRANSFORMER",
+      "VCB",
+      "MFM",
+    ]);
+  });
+
+  it("still lets real wiring beat the stage default", () => {
+    // An LT feeder meter genuinely wired upstream of the transformer: depth
+    // decides, and depth outranks the tie-break.
+    const stages = buildStages([
+      staged(1, "INVERTER_1", "INVERTER", 2),
+      staged(2, "MFM_LT", "MFM", 3),
+      staged(3, "TRANSFORMER", "TRANSFORMER", null),
+    ]);
+    expect(stages.map((s) => s.typeCode)).toEqual([
+      "INVERTER",
+      "MFM",
+      "TRANSFORMER",
+    ]);
+  });
+
+  it("honours an accepted per-Device stage override", () => {
+    const stages = buildStages([
+      staged(1, "INVERTER_1", "INVERTER"),
+      device(2, "MFM_LT", "MFM", null, {
+        sld_stage: "GRID",
+        sld_stage_override: "INVERTERS",
+      }),
+      staged(3, "TRANSFORMER", "TRANSFORMER"),
+    ]);
+    // Pinned to Inverters, so it no longer sorts out at the grid end.
+    expect(stages.map((s) => s.typeCode)).toEqual([
+      "INVERTER",
+      "MFM",
+      "TRANSFORMER",
+    ]);
+  });
+
+  it("sorts a Type with no stage last rather than in front of generation", () => {
+    const stages = buildStages([
+      staged(1, "INVERTER_1", "INVERTER"),
+      device(2, "MYSTERY", "NEW_TYPE", null, { sld_stage: null }),
+    ]);
+    expect(stages.map((s) => s.typeCode)).toEqual(["INVERTER", "NEW_TYPE"]);
+  });
+});
+
+describe("isUnwired", () => {
+  it("is true when no power-path Device is wired to anything", () => {
+    expect(
+      isUnwired([device(1, "INVERTER_1", "INVERTER"), device(2, "MFM", "MFM")]),
+    ).toBe(true);
+  });
+
+  it("is false as soon as one edge exists", () => {
+    expect(
+      isUnwired([device(1, "INVERTER_1", "INVERTER", 2), device(2, "MFM", "MFM")]),
+    ).toBe(false);
+  });
+
+  it("is false for a Plant with nothing in the power path to wire", () => {
+    expect(
+      isUnwired([device(1, "WMS", "WMS", null, { in_power_path: false })]),
+    ).toBe(false);
+  });
+});
+
+/**
+ * A room's outgoing edge counts as its occupants' connection.
+ *
+ * Seventeen Inverters in an MCR do not each run a cable to the transformer, and
+ * the server refuses the per-Device version of that edge outright. So the room's
+ * edge is the *only* statement of what those Devices feed — and reading only
+ * `parent_device_id` left a correctly wired Plant looking entirely unwired,
+ * which would have sent the operator straight back to the edit the server
+ * rejects.
+ */
+describe("collector edges", () => {
+  const inMcr = (id: number, code: string, type_code: string): DeviceListItem =>
+    device(id, code, type_code, null, {
+      collector_code: "MCR",
+      sld_stage: type_code === "INVERTER" ? "INVERTERS" : null,
+    });
+
+  const outside = (id: number, code: string, type_code: string): DeviceListItem =>
+    device(id, code, type_code, null, {
+      sld_stage: type_code === "TRANSFORMER" ? "TRANSFORMER" : "GRID",
+    });
+
+  it("places a collector's occupants upstream of what the room feeds", () => {
+    const devices = [
+      inMcr(1, "INVERTER_1", "INVERTER"),
+      inMcr(2, "INVERTER_2", "INVERTER"),
+      outside(20, "TRANSFORMER", "TRANSFORMER"),
+    ];
+    const stages = buildStages(devices, { MCR: 20 });
+    expect(stages.map((s) => s.typeCode)).toEqual(["INVERTER", "TRANSFORMER"]);
+    // Upstream of the transformer, not tied with it at depth 0.
+    expect(stages[0].depth).toBe(1);
+    expect(stages[1].depth).toBe(0);
+  });
+
+  it("is unwired when the room's edge is not recorded", () => {
+    const devices = [
+      inMcr(1, "INVERTER_1", "INVERTER"),
+      outside(20, "TRANSFORMER", "TRANSFORMER"),
+    ];
+    expect(isUnwired(devices)).toBe(true);
+    expect(isUnwired(devices, { MCR: null })).toBe(true);
+  });
+
+  it("is wired once the room's edge is recorded", () => {
+    const devices = [
+      inMcr(1, "INVERTER_1", "INVERTER"),
+      outside(20, "TRANSFORMER", "TRANSFORMER"),
+    ];
+    expect(isUnwired(devices, { MCR: 20 })).toBe(false);
+  });
+
+  it("lets a Device's own parent win over its room's edge", () => {
+    // Hierarchy within an enclosure is normal, and more specific than the box.
+    const devices = [
+      device(1, "INVERTER_1", "INVERTER", 2, {
+        collector_code: "MCR",
+        sld_stage: "INVERTERS",
+      }),
+      inMcr(2, "ACDB", "ACDB"),
+      outside(20, "TRANSFORMER", "TRANSFORMER"),
+    ];
+    const stages = buildStages(devices, { MCR: 20 });
+    // INVERTER_1 -> ACDB -> (MCR edge) -> TRANSFORMER: two hops, not one.
+    const inverter = stages.find((s) => s.typeCode === "INVERTER");
+    expect(inverter?.depth).toBe(2);
+  });
+
+  it("ignores an edge pointing at a Device that is not there", () => {
+    const devices = [inMcr(1, "INVERTER_1", "INVERTER")];
+    expect(() => buildStages(devices, { MCR: 999 })).not.toThrow();
+    expect(buildStages(devices, { MCR: 999 })[0].depth).toBe(0);
+  });
+
+  it("does not hang when a room's edge closes a ring", () => {
+    const devices = [
+      inMcr(1, "INVERTER_1", "INVERTER"),
+      device(2, "TX", "TRANSFORMER", 1, { sld_stage: "TRANSFORMER" }),
+    ];
+    expect(() => buildStages(devices, { MCR: 2 })).not.toThrow();
   });
 });

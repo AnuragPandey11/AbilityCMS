@@ -101,6 +101,61 @@ export function Button({
   );
 }
 
+/**
+ * Pick one of a few mutually exclusive modes.
+ *
+ * Used where a screen owns a noun but two genuinely different *jobs* — adding
+ * one and editing an existing one. Those were previously an editor with a
+ * "+ New" button tucked beside the picker, which reads as an action on the
+ * thing being edited rather than as a different task, so people looking to
+ * create went hunting for a screen that did not exist.
+ *
+ * Rendered as a radio group, not a row of buttons: the options are exclusive
+ * and one is always chosen, which is what a radio group means to assistive
+ * technology and what arrow-key navigation is for.
+ */
+export function SegmentedControl<T extends string>({
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  value: T;
+  onChange: (value: T) => void;
+  options: { value: T; label: ReactNode; hint?: string }[];
+  /** Names the group for a screen reader — the visible heading rarely does. */
+  label: string;
+}): JSX.Element {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="inline-flex rounded-control border border-line bg-surface-sunken p-0.5"
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={option.hint}
+            onClick={() => onChange(option.value)}
+            className={`rounded-control px-3 py-1.5 text-xs font-medium transition ${
+              active
+                ? "bg-surface-raised text-ink shadow-soft"
+                : "text-ink-muted hover:text-ink"
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Field({
   label,
   hint,

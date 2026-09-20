@@ -26,6 +26,8 @@ import { useTagsById } from "@/api/hooks";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { formatValue } from "@/format/value";
 import { Badge } from "@/components/ui";
+import { DeviceIcon } from "@/components/devices/DeviceIcon";
+import { DiagramCanvas } from "./DiagramCanvas";
 
 /**
  * Units whose values *add up* across several Devices. Everything else is
@@ -59,13 +61,56 @@ const CATEGORY_PRIORITY = ["performance", "electrical", "environmental"] as cons
  */
 const GENERATION_SOURCE_TYPES = new Set(["PV_ARRAY"]);
 
+/**
+ * Left to right, generation to grid — the same four the spine draws.
+ *
+ * Used to break ties between stages at the same depth. It replaced ordering by
+ * type code, which is alphabetical and electrically meaningless: on a Plant
+ * nobody has wired yet every Device sits at depth 0, the tie-break decides the
+ * whole row, and `INVERTER < MFM < TRANSFORMER < VCB` drew the settlement meter
+ * upstream of the transformer. Reading the order off each Device's own
+ * `sld_stage` keeps it in the catalogue rather than in a list here.
+ */
+const STAGE_ORDER = ["PV_ARRAY", "INVERTERS", "TRANSFORMER", "GRID"];
+
+function stagePosition(device: DeviceListItem): number {
+  const stage = device.sld_stage_override ?? device.sld_stage ?? "";
+  const index = STAGE_ORDER.indexOf(stage);
+  // A Type with no stage sorts last rather than first: an unknown box belongs
+  // beside the grid, not in front of the generation.
+  return index === -1 ? STAGE_ORDER.length : index;
+}
+
+/**
+ * Collector code → the Device that enclosure feeds into.
+ *
+ * A Collector is **not a Device** (Guardrail 12): it has no Model, no Tags and
+ * no topic, it never appears in a Device list, and it is drawn as a box around
+ * its occupants rather than as a node in the chain. This carries the one thing
+ * that can be said about it beyond its name.
+ */
+export type CollectorEdges = Record<string, number | null | undefined>;
+
 export interface FlowStage {
   key: string;
   typeCode: string;
   /** Distance from the grid; larger is further upstream, drawn further left. */
   depth: number;
+  /** Index into the four stages, used only to break ties at equal depth. */
+  stagePosition: number;
   devices: DeviceListItem[];
   online: number;
+  /**
+   * The enclosure every Device in this stage sits in, or null when they do not
+   * agree on one.
+   *
+   * Null covers two different situations on purpose — a stage whose Devices
+   * are in no Collector, and a stage split across two — because the view does
+   * the same thing in both: it draws no box. Claiming a stage is "in the MCR"
+   * when half of it is in the ICR would be worse than saying nothing, and the
+   * detailed tree is where a split like that is visible anyway.
+   */
+  collector: string | null;
 }
 
 /**
@@ -76,9 +121,31 @@ export interface FlowStage {
  * transformers side by side collapse together; a transformer and a meter at the
  * same depth stay apart, because they are not the same thing.
  */
-export function buildStages(devices: DeviceListItem[]): FlowStage[] {
+export function buildStages(
+  devices: DeviceListItem[],
+  collectorEdges: CollectorEdges = {},
+): FlowStage[] {
   const inPath = devices.filter((d) => d.in_power_path);
   const byId = new Map(inPath.map((d) => [d.id, d]));
+
+  /**
+   * What this Device is wired into — its own parent, or its enclosure's.
+   *
+   * ⚠ Seventeen Inverters in an MCR do not each run a cable to the transformer;
+   * the room has one outgoing connection, recorded once on the box. The server
+   * refuses the per-Device version outright — a Device inside a Collector may
+   * not point at one outside it — so for those Devices the room's edge is the
+   * *only* statement of what they feed, and reading only `parent_device_id`
+   * would leave a correctly wired Plant looking entirely unwired.
+   *
+   * A Device with its own parent keeps it: hierarchy *within* an enclosure is
+   * normal and more specific than the box's edge.
+   */
+  const feedsInto = (device: DeviceListItem): number | null => {
+    if (device.parent_device_id !== null) return device.parent_device_id;
+    const code = device.collector_code;
+    return code ? collectorEdges[code] ?? null : null;
+  };
 
   const depthOf = (device: DeviceListItem): number => {
     let depth = 0;
@@ -89,7 +156,7 @@ export function buildStages(devices: DeviceListItem[]): FlowStage[] {
     // recurses.
     while (cursor && !seen.has(cursor.id)) {
       seen.add(cursor.id);
-      const parentId: number | null = cursor.parent_device_id;
+      const parentId: number | null = feedsInto(cursor);
       if (parentId === null) break;
       const parent = byId.get(parentId);
       if (!parent) break;
@@ -109,6 +176,7 @@ export function buildStages(devices: DeviceListItem[]): FlowStage[] {
     } else {
       groups.set(key, {
         key, typeCode: device.type_code, depth, devices: [device], online: 0,
+        collector: null, stagePosition: stagePosition(device),
       });
     }
   }
@@ -117,6 +185,9 @@ export function buildStages(devices: DeviceListItem[]): FlowStage[] {
   for (const stage of stages) {
     stage.devices.sort((a, b) => a.code.localeCompare(b.code));
     stage.online = stage.devices.filter((d) => d.comm_status === "online").length;
+    const collectors = new Set(stage.devices.map((d) => d.collector_code ?? ""));
+    const only = [...collectors][0];
+    stage.collector = collectors.size === 1 && only ? only : null;
   }
   // Generation sources first, then furthest-from-the-grid first, so the row
   // always reads generation → grid. The Grid itself is not a stage at all: it is
@@ -127,64 +198,43 @@ export function buildStages(devices: DeviceListItem[]): FlowStage[] {
     return (
       aSource - bSource ||
       b.depth - a.depth ||
+      // Ties broken by electrical position, never alphabetically. Two stages at
+      // the same depth are the same distance from the grid, and the only
+      // meaningful thing left to order them by is the stage each folds into.
+      a.stagePosition - b.stagePosition ||
       a.typeCode.localeCompare(b.typeCode)
     );
   });
   return stages;
 }
 
-/** A small glyph per Device Type. Presentation only — an unknown type still renders. */
-function TypeIcon({ typeCode }: { typeCode: string }): JSX.Element {
-  const common = {
-    width: 22, height: 22, viewBox: "0 0 24 24", fill: "none",
-    stroke: "currentColor", strokeWidth: 1.7,
-    strokeLinecap: "round" as const, strokeLinejoin: "round" as const,
-  };
-  switch (typeCode) {
-    case "INVERTER":
-      return (
-        <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2" />
-          <path d="M7 14c1.5-4 3.5-4 5 0s3.5 4 5 0" /></svg>
-      );
-    case "TRANSFORMER":
-      return (
-        <svg {...common}><circle cx="9" cy="12" r="5" /><circle cx="15" cy="12" r="5" /></svg>
-      );
-    case "MFM": case "ABT_METER": case "NET_METER":
-      return (
-        <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M12 12l4-3" />
-          <path d="M12 7v1" /></svg>
-      );
-    case "VCB": case "ISOLATOR":
-      return (
-        <svg {...common}><path d="M6 18V9" /><path d="M18 18V6" />
-          <path d="M6 9l12-3" /><circle cx="6" cy="18" r="1.6" />
-          <circle cx="18" cy="18" r="1.6" /></svg>
-      );
-    case "PV_ARRAY": case "SMB":
-      return (
-        <svg {...common}><rect x="3" y="7" width="18" height="11" rx="1" />
-          <path d="M3 12h18M9 7v11M15 7v11" /></svg>
-      );
-    case "DCDB": case "ACDB":
-      return (
-        <svg {...common}><rect x="4" y="3" width="16" height="18" rx="2" />
-          <path d="M8 8h8M8 12h8M8 16h4" /></svg>
-      );
-    case "WMS":
-      return (
-        <svg {...common}><circle cx="12" cy="9" r="3.5" />
-          <path d="M12 2v1.5M12 14.5V16M5 9H3.5M20.5 9H19M7 4l-1-1M18 4l1-1" />
-          <path d="M5 20h14" /></svg>
-      );
-    default:
-      return (
-        <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2" />
-          <path d="M9 12h6" /></svg>
-      );
-  }
+/**
+ * True when no Device in the power path is wired to anything.
+ *
+ * Depth is the only electrical signal the row has, and depth comes entirely
+ * from `parent_device_id`. With none set, every stage ties and the order is a
+ * default rather than something derived — which the view must say, because a
+ * confidently-drawn wrong diagram is worse than an absent one.
+ */
+export function isUnwired(
+  devices: DeviceListItem[],
+  collectorEdges: CollectorEdges = {},
+): boolean {
+  const inPath = devices.filter((d) => d.in_power_path);
+  if (inPath.length === 0) return false;
+  // A Plant whose rooms are wired is wired. Counting only `parent_device_id`
+  // would tell an operator who had correctly set "the MCR feeds the
+  // transformer" that they had done nothing — the worst possible answer, since
+  // the per-Device edit they would reach for next is the one the server
+  // refuses.
+  return inPath.every(
+    (d) =>
+      d.parent_device_id === null &&
+      !(d.collector_code && collectorEdges[d.collector_code]),
+  );
 }
 
+/** A small glyph per Device Type. Presentation only — an unknown type still renders. */
 /** The stage's headline reading, summed or averaged per its unit. */
 function stageReading(
   stage: FlowStage,
@@ -228,22 +278,33 @@ function stageReading(
   return formatValue(value, best.tag.unit);
 }
 
+/** Stable identity, so an omitted prop does not rebuild the stages every render. */
+const EMPTY_EDGES: CollectorEdges = {};
+
 const STATUS_TONE = (online: number, total: number): "ok" | "warn" | "bad" =>
   online === total ? "ok" : online === 0 ? "bad" : "warn";
 
 export function PlantFlow({
   devices,
   dcCapacityKwp,
+  collectorEdges,
 }: {
   devices: DeviceListItem[];
   /** Shown on the leftmost stage when the Plant records one. */
   dcCapacityKwp?: number | null;
+  /**
+   * What each enclosure feeds into. Without it a Plant wired only at the room
+   * level reads as unwired, because its occupants carry no parent of their own
+   * — the server refuses that edge, so the room's is the only one there is.
+   */
+  collectorEdges?: CollectorEdges;
 }): JSX.Element {
   const tagsById = useTagsById();
   const { devices: live } = useLiveSocket();
   const [openStage, setOpenStage] = useState<string | null>(null);
 
-  const stages = useMemo(() => buildStages(devices), [devices]);
+  const edges = collectorEdges ?? EMPTY_EDGES;
+  const stages = useMemo(() => buildStages(devices, edges), [devices, edges]);
   const selected = stages.find((s) => s.key === openStage) ?? null;
 
   if (stages.length === 0) {
@@ -256,26 +317,33 @@ export function PlantFlow({
     );
   }
 
-  return (
-    <div>
-      <div className="overflow-x-auto pb-1">
-        <div className="flex min-w-max items-start gap-1">
-          {stages.map((stage, index) => (
-            <div key={stage.key} className="flex items-start gap-1">
+  // Runs of neighbouring stages that sit in the same enclosure. Consecutive
+  // only: a Collector holding the first and third stage but not the second is
+  // two boxes, because one box would enclose the stage in between and say
+  // something untrue about where it is.
+  const segments: { collector: string | null; stages: FlowStage[] }[] = [];
+  for (const stage of stages) {
+    const last = segments[segments.length - 1];
+    if (last && last.collector === stage.collector) last.stages.push(stage);
+    else segments.push({ collector: stage.collector, stages: [stage] });
+  }
+
+  const renderStage = (stage: FlowStage, index: number): JSX.Element => (
+            <div key={stage.key} className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() =>
                   setOpenStage((current) => (current === stage.key ? null : stage.key))
                 }
-                className={`flex w-[104px] flex-col items-center gap-1.5 rounded-lg border p-2 text-center transition ${
+                className={`flex w-[128px] flex-col items-center gap-2 rounded-xl border p-3 text-center shadow-sm transition ${
                   openStage === stage.key
-                    ? "border-accent bg-accent/10"
-                    : "border-line bg-surface hover:border-line-strong"
+                    ? "border-accent bg-accent/10 shadow-soft ring-1 ring-accent/25"
+                    : "border-line bg-surface hover:border-line-strong hover:shadow-soft"
                 }`}
                 title={`${stage.devices.length} ${stage.typeCode} — click for detail`}
               >
                 <span
-                  className={`flex h-10 w-10 items-center justify-center rounded-lg ${
+                  className={`flex h-11 w-11 items-center justify-center rounded-xl ${
                     stage.online === stage.devices.length
                       ? "bg-ok/10 text-ok"
                       : stage.online === 0
@@ -283,9 +351,9 @@ export function PlantFlow({
                         : "bg-warn/10 text-warn"
                   }`}
                 >
-                  <TypeIcon typeCode={stage.typeCode} />
+                  <DeviceIcon typeCode={stage.typeCode} />
                 </span>
-                <span className="text-[11px] font-semibold leading-tight text-ink">
+                <span className="text-xs font-semibold leading-tight text-ink">
                   {/* A Plant can have the same type at two points in the chain —
                       a meter at the transformer and another at the grid tie. The
                       type name alone would label both identically, so a stage
@@ -298,7 +366,7 @@ export function PlantFlow({
                 <Badge tone={STATUS_TONE(stage.online, stage.devices.length)}>
                   {stage.online} / {stage.devices.length} online
                 </Badge>
-                <span className="font-mono text-[10px] leading-tight text-ink-muted">
+                <span className="font-mono text-xs font-semibold leading-tight text-ink">
                   {stageReading(stage, live, tagsById) ??
                     (index === 0 && dcCapacityKwp
                       ? `${dcCapacityKwp} kWp`
@@ -307,23 +375,84 @@ export function PlantFlow({
               </button>
               <ArrowRight />
             </div>
-          ))}
+  );
+
+  const unwired = isUnwired(devices, edges);
+
+  return (
+    <div>
+      {/*
+        ⚠ Said plainly rather than drawn over. With nothing wired, depth is
+        constant and the row below is a default order, not one derived from this
+        Plant — and a diagram that looks authoritative while being a guess is
+        worse than one that admits it.
+      */}
+      {unwired ? (
+        <p className="mb-2 rounded-control border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] leading-relaxed text-warn">
+          <span className="font-medium">Hierarchy not set.</span> No Device in
+          the power path is wired to anything, so this order is a default by
+          equipment type — not derived from this Plant. Set “feeds into” in
+          Wiring &amp; Diagram and the chain below becomes the real one.
+        </p>
+      ) : null}
+      <DiagramCanvas
+        height={210}
+        label={
+          unwired
+            ? `${stages.length} stage(s), default order`
+            : `${stages.length} stage(s), generation → grid`
+        }
+        fitKey={`${devices.length}:${stages.length}:${segments.length}`}
+      >
+        <div className="flex min-w-max items-center gap-1.5 p-2">
+          {segments.map((segment, segmentIndex) => {
+            const offset = segments
+              .slice(0, segmentIndex)
+              .reduce((sum, s) => sum + s.stages.length, 0);
+            const inside = segment.stages.map((stage, i) =>
+              renderStage(stage, offset + i),
+            );
+            if (!segment.collector) {
+              return (
+                <div key={`open-${segmentIndex}`} className="flex items-center gap-1.5">
+                  {inside}
+                </div>
+              );
+            }
+            return (
+              // Dashed, and labelled "collector", because this is an enclosure
+              // and not a component: nothing is wired through it, and it must
+              // not be mistaken for a stage of its own.
+              <div
+                key={`collector-${segment.collector}-${segmentIndex}`}
+                className="relative flex items-center gap-1.5 rounded-xl border border-dashed border-line-strong bg-surface-sunken/60 px-2 pb-2 pt-5"
+              >
+                <span className="absolute left-2.5 top-1 text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
+                  {segment.collector}
+                </span>
+                <span className="absolute right-2.5 top-1 text-[10px] text-ink-faint">
+                  collector
+                </span>
+                {inside}
+              </div>
+            );
+          })}
 
           {/* The grid is not a Device — it is what "feeds into nothing" means. */}
-          <div className="flex w-[104px] flex-col items-center gap-1.5 rounded-lg border border-dashed border-line p-2 text-center">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-sunken text-ink-muted">
+          <div className="flex w-[128px] flex-col items-center gap-2 rounded-xl border border-dashed border-line p-3 text-center">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-surface-sunken text-ink-muted">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
                    stroke="currentColor" strokeWidth={1.7} strokeLinecap="round">
                 <path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5" />
               </svg>
             </span>
-            <span className="text-[11px] font-semibold leading-tight text-ink">Grid</span>
-            <span className="text-[10px] leading-tight text-ink-faint">
+            <span className="text-xs font-semibold leading-tight text-ink">Grid</span>
+            <span className="text-[11px] leading-tight text-ink-faint">
               beyond the plant
             </span>
           </div>
         </div>
-      </div>
+      </DiagramCanvas>
 
       {/* ── Drill-down ─────────────────────────────────────────────────── */}
       {selected ? (
@@ -358,14 +487,14 @@ export function PlantFlow({
 function ArrowRight(): JSX.Element {
   return (
     <svg
-      width="30" height="72" viewBox="0 0 30 72" aria-hidden="true"
+      width="28" height="16" viewBox="0 0 28 16" aria-hidden="true"
       className="shrink-0 text-line-strong"
     >
       <path
-        d="M2 30 H22" stroke="currentColor" strokeWidth={2}
+        d="M1 8 H21" stroke="currentColor" strokeWidth={2}
         strokeDasharray="4 3" strokeLinecap="round"
       />
-      <path d="M22 25 L28 30 L22 35 Z" fill="currentColor" />
+      <path d="M21 3 L27 8 L21 13 Z" fill="currentColor" />
     </svg>
   );
 }

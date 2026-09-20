@@ -3,6 +3,21 @@
  * Client → Plant (`draft`) → Blocks *(optional)* → Devices → bindings →
  * `commissioning` → `active`.
  *
+ * ⚠ **The Client is a step, not a mode.** Every Plant belongs to exactly one
+ * Client — `plants.client_id` is NOT NULL — so the wizard asks which one
+ * before it asks anything else, and the answer is visible in the header for
+ * the rest of the flow. A Client Admin sees their own Client and confirms it;
+ * a Super Admin picks one or creates one.
+ *
+ * This replaced a worse arrangement worth naming, because the shape of it
+ * recurs: the Client used to be chosen by **switching the session into it**,
+ * since the API took `client_id` from the token alone. That made the choice a
+ * one-way door (the picker never rendered again once a session had a Client),
+ * it cleared every cached query as a side effect of answering a form field,
+ * and worst of all it made the Plant land under whichever Client the session
+ * happened to be in rather than the one the operator named. The Client now
+ * travels in the request, where it belongs, and the session is left alone.
+ *
  * ⚠ **`expected_interval_s` is required and prominent**, with the reason
  * attached. The 60s default is an assumption and the client's broker publishes
  * every ~2.78s; health thresholds multiply this column, so a Device registered
@@ -13,7 +28,7 @@
  * skipping it is the unremarkable path.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDeviceModels, useDeviceTypes } from "@/api/hooks";
 import { qk } from "@/api/queryKeys";
@@ -31,11 +46,19 @@ import { useAuth } from "@/auth/AuthProvider";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 
 const STEPS = [
+  { key: "client", label: "Client" },
   { key: "plant", label: "Plant" },
   { key: "blocks", label: "Blocks (optional)" },
   { key: "devices", label: "Devices" },
   { key: "commission", label: "Commission" },
 ] as const;
+
+/** Step indices, named. Off-by-one in a five-step wizard is invisible. */
+const STEP_CLIENT = 0;
+const STEP_PLANT = 1;
+const STEP_BLOCKS = 2;
+const STEP_DEVICES = 3;
+const STEP_COMMISSION = 4;
 
 interface DraftDevice {
   code: string;
@@ -50,9 +73,36 @@ interface DraftDevice {
    * datasheet covers a 12-string and a 24-string machine.
    */
   string_count: string;
+  /**
+   * The enclosure this Device sits in — an MCR, an ICR, a panel.
+   *
+   * A *name*, not a row in the Device list beside it, because a Collector is
+   * not a Device: it publishes nothing and carries no current, and the diagram
+   * draws it as a box around its Devices rather than as one of them. Left
+   * empty for equipment that sits in no enclosure, which is normal.
+   */
+  collector_code: string;
   block_index: number | null;
-  parent_index: number | null;
-  reports_via_index: number | null;
+}
+
+/**
+ * The Collector segment of a canonical topic, if it has one.
+ *
+ * `scms/v1/{client}/{plant}/{collector}/{device}` is six segments and
+ * `scms/v1/{client}/{plant}/{device}` is five, so counting them is the whole
+ * test — and it is why the five-segment shape needed its own registry row
+ * rather than an optional segment.
+ *
+ * ⚠ A suggestion for an empty form field and nothing more. At runtime the
+ * topic is matched against the registry in `topic_patterns`, which is data; a
+ * parser in the browser must never become a second, quietly diverging
+ * definition of what a topic means (Guardrail 5).
+ */
+function collectorFromTopic(topic: string): string | null {
+  const segments = topic.trim().split("/");
+  if (segments.length !== 6) return null;
+  const collector = segments[4]?.trim();
+  return collector ? collector : null;
 }
 
 const emptyDevice = (): DraftDevice => ({
@@ -65,28 +115,23 @@ const emptyDevice = (): DraftDevice => ({
   expected_interval_s: "",
   rated_capacity_kw: "",
   string_count: "",
+  collector_code: "",
   block_index: null,
-  parent_index: null,
-  reports_via_index: null,
 });
 
 export function OnboardingWizard(): JSX.Element {
   const canManage = usePermission("plant.manage");
   const isPlatformAdmin = usePermission("system.admin");
-  const { me, switchClient } = useAuth();
+  const { me } = useAuth();
   const queryClient = useQueryClient();
   const modelsQuery = useDeviceModels();
   const typesQuery = useDeviceTypes();
 
-  // A Plant belongs to a Client, and the backend takes that Client from the
-  // token alone (I-9) — never from the request. A Super Admin signs in with no
-  // active Client, so the wizard cannot start until one is chosen.
-  const needsClient = me !== null && me.client_id === null;
+  // A Client Admin's Client comes from their session and is not theirs to
+  // change (I-9) — the API ignores any client_id they send. A Super Admin
+  // belongs to no Client and must name one, which is why this is a step.
+  const sessionClientId = me?.client_id ?? null;
 
-  // ⚠ Deliberately NOT gated on `needsClient`. It was, and that made the Client
-  // step a one-way door: once a session had switched into a Client, the flag was
-  // false forever, the chooser never rendered again, and a Super Admin who had
-  // onboarded one Client could not create or reach a second without signing out.
   const clientsQuery = useQuery({
     queryKey: qk.clients(),
     queryFn: clientsApi.listClients,
@@ -94,13 +139,27 @@ export function OnboardingWizard(): JSX.Element {
     retry: false,
   });
 
+  /**
+   * Which Client this Plant will belong to.
+   *
+   * Seeded from the session for a Client Admin, who has exactly one and cannot
+   * choose another. Null for a Super Admin until they pick — and the Plant
+   * step is unreachable until they do, because there is no such thing as an
+   * unfiled Plant.
+   */
+  const [clientId, setClientId] = useState<number | null>(sessionClientId);
+
+  // `me` can arrive after the first render, and a Client Admin's Client comes
+  // from it. Without this they land on the Client step with nothing selected
+  // and no way to select anything — the list is Super-Admin-only.
+  useEffect(() => {
+    if (sessionClientId !== null) setClientId((current) => current ?? sessionClientId);
+  }, [sessionClientId]);
+
   const [step, setStep] = useState(0);
   // The furthest step reached. `step` alone cannot drive the tabs: stepping back
   // to 1 would lower it and strand the work done at 3 with no way forward.
   const [maxStep, setMaxStep] = useState(0);
-  // Set when a Super Admin asks for the Client chooser again on purpose, as
-  // opposed to arriving without a Client at all.
-  const [changingClient, setChangingClient] = useState(false);
   const [plantId, setPlantId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,11 +176,6 @@ export function OnboardingWizard(): JSX.Element {
     commissioned_on: "",
   });
 
-  // Planned Device count per Device Type code, as typed. Kept as strings so an
-  // empty box stays empty rather than becoming a 0 the operator never entered —
-  // "none planned" and "not filled in" are different statements, and only the
-  // first should be stored.
-  const [deviceCounts, setDeviceCounts] = useState<Record<string, string>>({});
 
   const [blocks, setBlocks] = useState<
     { code: string; name: string; capacity_kwp: string; id: number | null }[]
@@ -146,14 +200,26 @@ export function OnboardingWizard(): JSX.Element {
    * stale `maxStep` after a reset would otherwise let step 3 act on nothing.
    */
   const goToStep = (index: number): void => {
-    if (index > maxStep) return;
-    if (index > 0 && plantId === null) return;
+    if (!stepReachable(index)) return;
     setError(null);
     setStep(index);
   };
 
-  const stepReachable = (index: number): boolean =>
-    index <= maxStep && (index === 0 || plantId !== null);
+  /**
+   * Which steps can be opened.
+   *
+   * Two gates, not one, because two different things have to exist. The Plant
+   * step needs a Client — a Plant with no Client cannot be created and the
+   * form would be a dead end. Every step past it needs the Plant itself: they
+   * all act on a Plant id, and a stale `maxStep` after a reset would otherwise
+   * point step 4 at nothing.
+   */
+  function stepReachable(index: number): boolean {
+    if (index > maxStep) return false;
+    if (index >= STEP_PLANT && clientId === null) return false;
+    if (index > STEP_PLANT && plantId === null) return false;
+    return true;
+  }
 
   /**
    * Clear everything belonging to one Plant.
@@ -164,8 +230,8 @@ export function OnboardingWizard(): JSX.Element {
    * later steps at another Client\u2019s Plant.
    */
   const resetWizard = (): void => {
-    setStep(0);
-    setMaxStep(0);
+    setStep(STEP_PLANT);
+    setMaxStep(STEP_PLANT);
     setPlantId(null);
     setPlant({
       code: "",
@@ -178,23 +244,27 @@ export function OnboardingWizard(): JSX.Element {
       longitude: "",
       commissioned_on: "",
     });
-    setDeviceCounts({});
     setBlocks([]);
     setDevices([emptyDevice()]);
     setCreatedDevices([]);
     setError(null);
   };
 
-  /** Switch the session into a Client, then start its onboarding clean. */
-  const switchToClient = (clientId: number, label: string): void => {
+  /**
+   * Choose the Client and move on to the Plant.
+   *
+   * Nothing about the session changes — no token is re-issued and no cache is
+   * cleared. The Client is a field on the next request, so picking a different
+   * one only has to discard the Plant draft that was being written for the
+   * previous one.
+   */
+  const chooseClient = (id: number, label: string): void => {
     setError(null);
-    switchClient(clientId)
-      .then(() => {
-        resetWizard();
-        setChangingClient(false);
-        setMessage(`Now onboarding under ${label}.`);
-      })
-      .catch(() => setError(`Could not switch to ${label}.`));
+    if (id !== clientId) resetWizard();
+    setClientId(id);
+    setMessage(`Onboarding a Plant for ${label}.`);
+    setStep(STEP_PLANT);
+    setMaxStep((previous) => Math.max(previous, STEP_PLANT));
   };
 
   const createPlant = useMutation({
@@ -202,6 +272,10 @@ export function OnboardingWizard(): JSX.Element {
       plantsApi.createPlant({
         code: plant.code,
         name: plant.name,
+        // Named in the request rather than taken from the session. A Client
+        // Admin's copy is ignored by the API in favour of their own Client,
+        // which is what stops one Client filing a Plant under another (I-9).
+        client_id: clientId,
         region_code: plant.region_code || null,
         ac_capacity_kw: plant.ac_capacity_kw
           ? Number(plant.ac_capacity_kw)
@@ -213,17 +287,12 @@ export function OnboardingWizard(): JSX.Element {
         latitude: plant.latitude ? Number(plant.latitude) : null,
         longitude: plant.longitude ? Number(plant.longitude) : null,
         commissioned_on: plant.commissioned_on || null,
-        device_counts: Object.fromEntries(
-          Object.entries(deviceCounts)
-            .filter(([, value]) => value.trim() !== "")
-            .map(([code, value]) => [code, Number(value)]),
-        ),
       }),
     onSuccess: (created) => {
       setPlantId(created.id);
       setError(null);
       setMessage(`Plant created in draft (id ${created.id}).`);
-      advanceTo(1);
+      advanceTo(STEP_BLOCKS);
       void queryClient.invalidateQueries({ queryKey: ["plants"] });
     },
     onError: (err) =>
@@ -260,7 +329,7 @@ export function OnboardingWizard(): JSX.Element {
       setBlocks(result);
       setError(null);
       setMessage(`${result.length} Block(s) created.`);
-      advanceTo(2);
+      advanceTo(STEP_DEVICES);
     },
     onError: (err) =>
       setError(
@@ -280,6 +349,9 @@ export function OnboardingWizard(): JSX.Element {
           ? Number(device.rated_capacity_kw)
           : null,
         string_count: device.string_count ? Number(device.string_count) : null,
+        // A name, sent as typed. Empty means "in no enclosure", which is a
+        // real answer — the five-segment topic shape has no collector at all.
+        collector_code: device.collector_code.trim() || null,
         block_id:
           device.block_index !== null
             ? (blocks[device.block_index]?.id ?? null)
@@ -293,43 +365,20 @@ export function OnboardingWizard(): JSX.Element {
         payload,
       );
 
-      // Wiring is applied as a second pass, on purpose. Creation is
-      // all-or-nothing and inserts in order, so no Device in the batch can
-      // reference another's id — they do not exist yet. Patching afterwards is
-      // the only way the form's "feeds into" and "reports via" choices can
-      // become real without giving up the atomic create.
-      const wiring = devices
-        .map((device, index) => ({ device, index }))
-        .filter(
-          ({ device }) =>
-            device.parent_index !== null || device.reports_via_index !== null,
-        );
-      let wired = 0;
-      for (const { device, index } of wiring) {
-        const id = result.devices[index]?.id;
-        if (id === undefined) continue;
-        await devicesApi.updateDevice(id, {
-          parent_device_id:
-            device.parent_index !== null
-              ? (result.devices[device.parent_index]?.id ?? null)
-              : null,
-          reports_via_device_id:
-            device.reports_via_index !== null
-              ? (result.devices[device.reports_via_index]?.id ?? null)
-              : null,
-        });
-        wired += 1;
-      }
-      return { ...result, wired };
+      // ⚠ No second pass any more. Registration used to PATCH each Device
+      // afterwards to apply "feeds into" and "reports via" chosen on the form;
+      // neither is asked for now, so there is nothing to apply and the
+      // all-or-nothing create stands on its own.
+      return result;
     },
     onSuccess: (result) => {
       setCreatedDevices(result.devices);
       setError(null);
       setMessage(
-        `${result.created} Device(s) registered` +
-          (result.wired ? `, ${result.wired} wired into the diagram.` : "."),
+        `${result.created} Device(s) registered. Wire them up in Plant ` +
+          `Hierarchy, where the diagram is beside you as you do it.`,
       );
-      advanceTo(3);
+      advanceTo(STEP_COMMISSION);
       void queryClient.invalidateQueries({ queryKey: ["plants"] });
     },
     onError: (err) =>
@@ -423,28 +472,53 @@ export function OnboardingWizard(): JSX.Element {
       Number(device.expected_interval_s) > 0,
   );
 
-  // Shown when the session has no Client at all, or when a Super Admin has
-  // asked to change it. A Client Admin never sees it: their token is bound to
-  // one Client (I-9) and switching is not theirs to do.
-  const showClientPicker =
-    step === 0 && (needsClient || (changingClient && isPlatformAdmin));
-
-  const activeClient =
-    clientsQuery.data?.find((entry) => entry.id === me?.client_id) ?? null;
-  const activeClientLabel = activeClient
-    ? `${activeClient.code} · ${activeClient.name}`
-    : me?.client_id !== null && me?.client_id !== undefined
-      ? `Client #${me.client_id}`
-      : "no Client";
+  const chosenClient =
+    clientsQuery.data?.find((entry) => entry.id === clientId) ?? null;
+  // The Clients list is Super-Admin-only, so a Client Admin's label comes from
+  // their own `/auth/me` instead. Falling through to "Client #2" told someone
+  // their company's id and nothing else.
+  const clientLabel = chosenClient
+    ? `${chosenClient.code} · ${chosenClient.name}`
+    : clientId !== null && clientId === sessionClientId && me?.client_name
+      ? `${me.client_code ?? ""} · ${me.client_name}`.replace(/^ · /, "")
+      : clientId !== null
+        ? `Client #${clientId}`
+        : "no Client chosen";
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-ink">Plant onboarding</h1>
-        <p className="text-xs text-ink-muted">
-          A Plant is created in <span className="font-mono">draft</span>,
-          populated, then commissioned and activated.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold text-ink">Plant onboarding</h1>
+          <p className="text-xs text-ink-muted">
+            A Client, then a Plant in <span className="font-mono">draft</span>,
+            populated, then commissioned and activated.
+          </p>
+        </div>
+        {/* Which Client this Plant is being filed under, visible from every
+            step. Six screens later "whose Plant is this" must not need a
+            scroll back to step one. */}
+        {clientId !== null ? (
+          <div className="flex shrink-0 items-center gap-2 rounded-control border border-line bg-surface-raised px-2.5 py-1.5">
+            <span className="text-[11px] uppercase tracking-wide text-ink-faint">
+              Client
+            </span>
+            <span className="text-xs font-medium text-ink">{clientLabel}</span>
+            {isPlatformAdmin ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMessage(null);
+                  setStep(STEP_CLIENT);
+                }}
+                className="text-[11px] text-accent hover:underline"
+                title="Choose a different Client. The Plant draft is cleared, because a draft belongs to the Client it was started for."
+              >
+                change
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/*
@@ -501,25 +575,38 @@ export function OnboardingWizard(): JSX.Element {
         </div>
       ) : null}
 
-      {step === 0 && showClientPicker ? (
+      {step === STEP_CLIENT ? (
         <Panel
           title="1 · Client"
-          subtitle={
-            needsClient
-              ? "A Plant is created under the active Client, which this session does not have yet."
-              : `Currently onboarding under ${activeClientLabel}. Choosing another clears this Plant draft.`
-          }
-          actions={
-            !needsClient ? (
-              <Button onClick={() => setChangingClient(false)}>Cancel</Button>
-            ) : undefined
-          }
+          subtitle="Every Plant belongs to exactly one Client. Choose it before the Plant exists, so it can never be filed under the wrong one."
         >
           {!isPlatformAdmin ? (
-            <p className="text-xs text-ink-muted">
-              Your account has no Client membership. Ask a Super Admin to add
-              you to a Client before onboarding a Plant.
-            </p>
+            // A Client Admin has exactly one Client and the API ignores any
+            // other they might send. So this confirms rather than asks — but
+            // it still appears, because "which Client is this Plant for" is
+            // worth stating once rather than assuming.
+            sessionClientId === null ? (
+              <p className="max-w-2xl text-xs text-ink-muted">
+                Your account has no Client membership, so there is no Client to
+                create a Plant under. Ask a Super Admin to add you to one.
+              </p>
+            ) : (
+              <div className="max-w-2xl space-y-3">
+                <div className="rounded border border-line bg-surface px-3 py-2">
+                  <p className="text-sm text-ink">{clientLabel}</p>
+                  <p className="mt-0.5 text-xs text-ink-muted">
+                    Your Client. A Plant you create belongs to it, and to no
+                    other — that is enforced by the server, not by this form.
+                  </p>
+                </div>
+                <Button
+                  variant="primary"
+                  onClick={() => chooseClient(sessionClientId, clientLabel)}
+                >
+                  Continue to the Plant
+                </Button>
+              </div>
+            )
           ) : clientsQuery.isPending ? (
             <LoadingState />
           ) : clientsQuery.isError ? (
@@ -528,80 +615,89 @@ export function OnboardingWizard(): JSX.Element {
               retry={() => void clientsQuery.refetch()}
             />
           ) : (
-            <div className="max-w-2xl space-y-4">
-              <div>
-                <h3 className="mb-2 text-sm font-medium text-ink">
-                  New Client
-                </h3>
+            <div className="max-w-2xl space-y-5">
+              {clientsQuery.data.length > 0 ? (
+                <div>
+                  <h3 className="mb-1 text-sm font-medium text-ink">
+                    Existing Client
+                  </h3>
+                  <p className="mb-2 text-xs text-ink-muted">
+                    A Client can have any number of Plants. Choosing one here
+                    does not change your session — nothing else you have open
+                    is affected.
+                  </p>
+                  <ul className="space-y-1">
+                    {clientsQuery.data.map((client) => (
+                      <li key={client.id}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            chooseClient(
+                              client.id,
+                              `${client.code} · ${client.name}`,
+                            )
+                          }
+                          className={`flex w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left transition ${
+                            client.id === clientId
+                              ? "border-accent bg-accent/10"
+                              : "border-line bg-surface hover:border-line-strong"
+                          }`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm text-ink">
+                              {client.name}
+                            </span>
+                            <span className="block truncate font-mono text-[11px] text-ink-muted">
+                              {client.code}
+                            </span>
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            {client.is_demo ? (
+                              <Badge tone="warn" title="A demonstration Client — Guests may reach it.">
+                                demo
+                              </Badge>
+                            ) : null}
+                            <Badge tone={client.id === clientId ? "accent" : "neutral"}>
+                              {client.id === clientId ? "chosen" : client.status}
+                            </Badge>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-xs text-ink-muted">
+                  No Clients exist yet. Create the first one below — a Plant
+                  cannot be created without one.
+                </p>
+              )}
+
+              <div className="border-t border-line pt-4">
+                <h3 className="mb-1 text-sm font-medium text-ink">New Client</h3>
                 <p className="mb-3 text-xs text-ink-muted">
-                  Create the Client this Plant belongs to. The session switches
-                  into it and the Plant form follows.
+                  Create the Client, then continue straight into its first Plant.
                 </p>
                 <NewClientForm
                   submitLabel="Create Client and continue"
                   onCreated={(client) => {
                     setError(null);
-                    setMessage(`Client ${client.code} created.`);
-                    switchToClient(client.id, client.code);
+                    void queryClient.invalidateQueries({ queryKey: qk.clients() });
+                    chooseClient(client.id, `${client.code} · ${client.name}`);
                   }}
                 />
               </div>
-              {clientsQuery.data.length > 0 ? (
-                <div>
-                  <h3 className="mb-2 text-sm font-medium text-ink">
-                    Existing Client
-                  </h3>
-                  <p className="mb-3 text-xs text-ink-muted">
-                    Or choose one that already exists. Switching Client clears
-                    every cached query — nothing from another Client survives.
-                  </p>
-                  <ul className="space-y-1">
-                    {clientsQuery.data.map((client) => (
-                      <li
-                        key={client.id}
-                        className="flex items-center justify-between rounded border border-line bg-surface px-3 py-1.5"
-                      >
-                        <span className="text-sm text-ink">
-                          <span className="font-mono text-xs text-ink-muted">
-                            {client.code}
-                          </span>{" "}
-                          {client.name}
-                        </span>
-                        <Button
-                          variant="primary"
-                          disabled={client.id === me?.client_id}
-                          onClick={() => switchToClient(client.id, client.code)}
-                        >
-                          {client.id === me?.client_id
-                            ? "Current Client"
-                            : "Use this Client"}
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
             </div>
           )}
         </Panel>
       ) : null}
 
-      {step === 0 && !showClientPicker ? (
+      {step === STEP_PLANT ? (
         <Panel
-          title="1 · Plant"
-          subtitle={`Created in draft under ${activeClientLabel}, and excluded from portfolio totals until it is active.`}
+          title="2 · Plant"
+          subtitle={`Created in draft for ${clientLabel}, and excluded from portfolio totals until it is active.`}
           actions={
-            isPlatformAdmin ? (
-              <Button
-                onClick={() => {
-                  setMessage(null);
-                  setChangingClient(true);
-                }}
-                title="Pick a different Client, or create a new one."
-              >
-                Change Client
-              </Button>
-            ) : undefined
+            <Button onClick={() => setStep(STEP_CLIENT)}>Back</Button>
           }
         >
           <div className="grid max-w-2xl grid-cols-2 gap-3">
@@ -707,65 +803,19 @@ export function OnboardingWizard(): JSX.Element {
           </div>
 
           {/*
-            Planned Device counts, driven by the seeded Device Type catalogue
-            rather than a hardcoded list of fields — a Type added by a later seed
-            appears here with no code change.
+            ⚠ The "planned Device counts" input was removed on 19 Sep 2026.
 
-            ⚠ These are the contract or design-sheet figures, not the Devices
-            themselves. Registering the Devices is step 3; this records how many
-            there are *meant* to be, so commissioning progress is measurable
-            before any of them exist.
+            It asked, at the moment a Plant was created, how many Devices of
+            each Type it was *meant* to have — a figure typed from a contract
+            before a single Device existed, which began drifting from reality
+            the moment anyone registered one. Nothing downstream depended on it
+            being right, so nothing ever caught it being wrong.
+
+            The count that matters is the count of Devices that actually exist,
+            and that needs no input at all: it is `count(*)` on `devices`, shown
+            on the Plant Setup screen where Devices are registered. The table
+            and the API field remain, unused, so no history is destroyed.
           */}
-          <div className="mt-6 max-w-2xl border-t border-line pt-4">
-            <h3 className="text-sm font-medium text-ink">
-              Planned Device counts
-            </h3>
-            <p className="mb-3 mt-1 text-xs leading-relaxed text-ink-muted">
-              Optional. How many of each Device this Plant is designed to have,
-              from the contract. This is not the same as registering them —
-              that happens in step 3 — and the difference between the two is
-              what is left to commission. Leave a box empty if the figure is
-              unknown; enter 0 to state that the Plant has none.
-            </p>
-            {typesQuery.isPending ? (
-              <LoadingState />
-            ) : typesQuery.isError ? (
-              <ErrorState
-                error={typesQuery.error}
-                retry={() => void typesQuery.refetch()}
-              />
-            ) : (
-              <div className="grid grid-cols-3 gap-2">
-                {[...typesQuery.data]
-                  // Power-path Types first: an operator filling this in is
-                  // thinking about Inverters and Transformers, and the
-                  // Annunciator can wait for the bottom of the list.
-                  .sort((a, b) =>
-                    a.in_power_path === b.in_power_path
-                      ? a.name.localeCompare(b.name)
-                      : a.in_power_path
-                        ? -1
-                        : 1,
-                  )
-                  .map((type) => (
-                    <Field key={type.code} label={type.name}>
-                      <input
-                        type="number"
-                        min={0}
-                        value={deviceCounts[type.code] ?? ""}
-                        onChange={(event) =>
-                          setDeviceCounts((previous) => ({
-                            ...previous,
-                            [type.code]: event.target.value,
-                          }))
-                        }
-                        className={inputClass}
-                      />
-                    </Field>
-                  ))}
-              </div>
-            )}
-          </div>
 
           <Button
             variant="primary"
@@ -778,9 +828,9 @@ export function OnboardingWizard(): JSX.Element {
         </Panel>
       ) : null}
 
-      {step === 1 ? (
+      {step === STEP_BLOCKS ? (
         <Panel
-          title="2 · Blocks"
+          title="3 · Blocks"
           subtitle="Optional. A Plant with zero Blocks is valid and normal — most are."
         >
           <p className="mb-3 max-w-2xl text-xs leading-relaxed text-ink-muted">
@@ -861,7 +911,7 @@ export function OnboardingWizard(): JSX.Element {
               </Button>
             ) : null}
             {/* Skipping is the ordinary path, not an escape hatch. */}
-            <Button onClick={() => advanceTo(2)}>
+            <Button onClick={() => advanceTo(STEP_DEVICES)}>
               {blocks.length === 0
                 ? "Continue without Blocks"
                 : "Skip remaining"}
@@ -870,9 +920,9 @@ export function OnboardingWizard(): JSX.Element {
         </Panel>
       ) : null}
 
-      {step === 2 ? (
+      {step === STEP_DEVICES ? (
         <Panel
-          title="3 · Devices"
+          title="4 · Devices"
           subtitle="Imported all-or-nothing. A parent Device must be listed before its children."
         >
           <div className="mb-4 rounded border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] leading-relaxed text-ink-muted">
@@ -884,6 +934,18 @@ export function OnboardingWizard(): JSX.Element {
             what the Device actually publishes — the client's broker publishes
             roughly every 2.8s — rather than accepting a default.
           </div>
+
+          {/* Every enclosure already named on this form, offered to the next
+              row. Two Devices in the same room must end up with the same
+              spelling, or the diagram draws two boxes that look like one. */}
+          <datalist id="wizard-collector-codes">
+            {[...new Set(devices.map((d) => d.collector_code.trim()))]
+              .filter((code) => code !== "")
+              .sort((a, b) => a.localeCompare(b))
+              .map((code) => (
+                <option key={code} value={code} />
+              ))}
+          </datalist>
 
           <div className="space-y-3">
             {devices.map((device, index) => (
@@ -957,16 +1019,41 @@ export function OnboardingWizard(): JSX.Element {
                 </Field>
                 <Field
                   label="MQTT topic"
-                  hint="scms/v1/{client}/{plant}/{collector}/{device} — the sole authority for origin."
+                  hint="scms/v1/{client}/{plant}/{collector}/{device}, or scms/v1/{client}/{plant}/{device} where there is no collector. The sole authority for origin."
                 >
                   <input
                     value={device.source_address}
+                    onChange={(event) => {
+                      const topic = event.target.value;
+                      updateDevice(index, {
+                        source_address: topic,
+                        // Read out of the topic the operator just typed, but
+                        // only to fill an empty box. The topic is the sole
+                        // authority for origin, so it is the best guess
+                        // available — and overwriting a name they typed by
+                        // hand would make the field feel possessed.
+                        ...(device.collector_code.trim() === ""
+                          ? { collector_code: collectorFromTopic(topic) ?? "" }
+                          : {}),
+                      });
+                    }}
+                    className={`${inputClass} font-mono text-xs`}
+                  />
+                </Field>
+                <Field
+                  label="Collector"
+                  hint="The enclosure it sits in — an MCR, an ICR, a panel. Not a Device: nothing is wired through it, and the diagram draws it as a box around its Devices. Leave empty if it sits in none."
+                >
+                  <input
+                    list="wizard-collector-codes"
+                    value={device.collector_code}
+                    placeholder="none"
                     onChange={(event) =>
                       updateDevice(index, {
-                        source_address: event.target.value,
+                        collector_code: event.target.value,
                       })
                     }
-                    className={`${inputClass} font-mono text-xs`}
+                    className={inputClass}
                   />
                 </Field>
                 <Field label="Rated capacity (kW)">
@@ -1023,62 +1110,21 @@ export function OnboardingWizard(): JSX.Element {
                   </Field>
                 ) : null}
                 {/*
-                  The two relationships that are not "where it is". Collapsing
-                  either into the Block makes both unanswerable: without "feeds
-                  into" there is no Single Line Diagram, and without "reports
-                  via" a failed collector is recorded as equipment downtime and
-                  corrupts every availability figure.
+                  ⚠ "Feeds into" and "Reports via" were removed from Device
+                  registration on 19 Sep 2026, and their absence is deliberate.
+
+                  Both are *discovered*, not designed. Which Collector transmits
+                  a Device is already stated by its topic, and what a Device is
+                  wired into is routinely corrected after the first day of real
+                  data — so asking for either at the moment of registration
+                  invites a guess, and a guess drawn into the Single Line
+                  Diagram is indistinguishable from a fact.
+
+                  Both are still first-class (MASTER §3.4); they are simply set
+                  where they can be checked against something. The Collector
+                  comes from the topic, and the wiring is set in Plant Hierarchy
+                  beside the diagram it produces.
                 */}
-                <Field
-                  label="Feeds into"
-                  hint="Electrical parent — this is what draws the Single Line Diagram."
-                >
-                  <select
-                    value={device.parent_index ?? ""}
-                    onChange={(event) =>
-                      updateDevice(index, {
-                        parent_index: event.target.value
-                          ? Number(event.target.value)
-                          : null,
-                      })
-                    }
-                    className={inputClass}
-                  >
-                    <option value="">Nothing (a diagram root)</option>
-                    {devices.map((other, otherIndex) =>
-                      otherIndex === index ? null : (
-                        <option key={otherIndex} value={otherIndex}>
-                          {other.code || `Device ${otherIndex + 1}`}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                </Field>
-                <Field
-                  label="Reports via"
-                  hint="Which Collector transmits it. Separates comms loss from downtime."
-                >
-                  <select
-                    value={device.reports_via_index ?? ""}
-                    onChange={(event) =>
-                      updateDevice(index, {
-                        reports_via_index: event.target.value
-                          ? Number(event.target.value)
-                          : null,
-                      })
-                    }
-                    className={inputClass}
-                  >
-                    <option value="">Publishes for itself</option>
-                    {devices.map((other, otherIndex) =>
-                      otherIndex === index ? null : (
-                        <option key={otherIndex} value={otherIndex}>
-                          {other.code || `Device ${otherIndex + 1}`}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                </Field>
                 <div className="col-span-2 flex items-center justify-between border-t border-line pt-2 lg:col-span-4">
                   <span className="text-[11px] text-ink-faint">
                     {modelSummary(device.device_model_id, device.string_count)}
@@ -1122,9 +1168,9 @@ export function OnboardingWizard(): JSX.Element {
         </Panel>
       ) : null}
 
-      {step === 3 ? (
+      {step === STEP_COMMISSION ? (
         <Panel
-          title="4 · Bindings, then commission"
+          title="5 · Bindings, then commission"
           subtitle="A Device decodes nothing until its Tags are bound."
         >
           <p className="max-w-2xl text-xs leading-relaxed text-ink-muted">
@@ -1183,21 +1229,23 @@ export function OnboardingWizard(): JSX.Element {
             <Button
               onClick={() => {
                 resetWizard();
-                setMessage("Ready for another Plant.");
+                setMessage(`Ready for another Plant for ${clientLabel}.`);
               }}
+              title="Keep the same Client and start a second Plant for it. One Client can have any number."
             >
-              Onboard another Plant
+              Another Plant for this Client
             </Button>
             {isPlatformAdmin ? (
               <Button
                 className="ml-2"
                 onClick={() => {
                   resetWizard();
-                  setChangingClient(true);
+                  setStep(STEP_CLIENT);
+                  setMaxStep(STEP_CLIENT);
                   setMessage(null);
                 }}
               >
-                Onboard a different Client
+                A Plant for a different Client
               </Button>
             ) : null}
           </div>

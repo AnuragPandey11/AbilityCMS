@@ -158,6 +158,11 @@ class DeviceFacts:
     # Weather Station belongs on neither, a new switchgear Type nobody has
     # assigned a stage to belongs on the first.
     in_power_path: bool = False
+    # An accepted correction to which stage this Device folds into, overriding
+    # its Type's default for this Device alone (migration 0027). NULL is the
+    # normal case, and slot resolution ignores this entirely — it matters only
+    # to the four-stage fold.
+    sld_stage_override: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

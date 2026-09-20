@@ -42,6 +42,7 @@ export function SldNode({
   stale,
   selected,
   onSelect,
+  unwired = false,
 }: {
   node: SldNodeData;
   x: number;
@@ -51,6 +52,15 @@ export function SldNode({
   stale: boolean;
   selected: boolean;
   onSelect?: (deviceId: number) => void;
+  /**
+   * This Device carries no current — a Weather Station, a plant controller.
+   *
+   * It is drawn so it is visible where it physically sits (a WMS in the MCR
+   * belongs in the MCR box), but it has no place in the power path and no
+   * edges, so it must never read as part of the chain. Dashed border and a
+   * muted fill say "monitored, not electrical" without a legend.
+   */
+  unwired?: boolean;
 }): JSX.Element {
   const left = x - NODE_WIDTH / 2;
   const top = y - NODE_HEIGHT / 2;
@@ -65,15 +75,26 @@ export function SldNode({
       <title>
         {`${node.code} — ${node.name}\nType: ${node.type}${
           node.variant ? ` (${node.variant})` : ""
+        }${
+          // The enclosure, not a connection: "in MCR" and "feeds into MCR" are
+          // different claims, and only the first is true of a Collector.
+          node.collector_code ? `\nIn collector: ${node.collector_code}` : ""
         }\n${STATUS_TITLE[commStatus]}`}
       </title>
       <rect
         width={NODE_WIDTH}
         height={NODE_HEIGHT}
         rx={5}
-        fill={selected ? token("accent-soft") : token("surface-raised")}
+        fill={
+          selected
+            ? token("accent-soft")
+            : unwired
+              ? token("surface-sunken")
+              : token("surface-raised")
+        }
         stroke={selected ? token("accent") : stroke}
         strokeWidth={selected ? 2 : 1.4}
+        strokeDasharray={unwired && !selected ? "5 3" : undefined}
         opacity={stale ? 0.55 : 1}
       />
       <circle cx={10} cy={11} r={3.5} fill={stroke} />
@@ -83,6 +104,7 @@ export function SldNode({
       <text x={8} y={29} fill={token("ink-muted")} fontSize={9}>
         {node.type}
         {node.variant ? ` · ${node.variant}` : ""}
+        {unwired ? " · no current" : ""}
       </text>
       <text
         x={NODE_WIDTH - 8}

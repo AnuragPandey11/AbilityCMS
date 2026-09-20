@@ -873,6 +873,43 @@ SOURCE_KEY_ALIASES_BY_DEVICE_TYPE: Final[dict[str, dict[str, str]]] = {
         # readings of the same quantity is not a measurement difference.
         "MT": "DEVICE_TEMPERATURE",
     },
+    # The client's broker abbreviates every signal on these two Types, and the
+    # abbreviations are generic words — `ON`, `TRIP`, `TEST`, `SPR` mean
+    # something else on almost any other equipment — so they are Type-scoped
+    # rather than global, for the same reason `VRY` is. Transcribed from the
+    # signal schedule's own ordering; observed on KULAR_GREEN 20 Sep 2026.
+    "VCB": {
+        "ON": "VCB_ON_FEEDBACK",
+        "TRIP": "VCB_TRIP_FEEDBACK",
+        "TEST": "VCB_IN_TEST_MODE",
+        "SERV": "VCB_IN_SERVICE",
+        "SPR": "VCB_SPRING_CHARGE",
+        "OCR": "VCB_OC_RELAY",
+        "ACF": "AC_FAIL",
+        "DCF": "DC_FAIL",
+        "TCH": "VCB_TC_HEALTHY",
+        "EPB": "VCB_EMERGENCY_PB",
+        "RLYF": "VCB_RELAY_UNHEALTHY",
+        "REM": "VCB_REMOTE_SELECTION",
+    },
+    "TRANSFORMER": {
+        "OTA": "OIL_TEMP_ALARM",
+        "OTT": "OIL_TEMP_TRIP",
+        "WT1A": "WINDING_TEMP_1_ALARM",
+        "WT1T": "WINDING_TEMP_1_TRIP",
+        "WT2A": "WINDING_TEMP_2_ALARM",
+        "WT2T": "WINDING_TEMP_2_TRIP",
+        "BRA": "BUCHHOLZ_RELAY_ALARM",
+        "BRT": "BUCHHOLZ_RELAY_TRIP",
+        "MOGA": "MOG_ALARM",
+        # `OT` is Oil Temperature throughout the DI names, so `OTI` is its
+        # Indicator, and `WTI` the Winding one. The schedule names two winding
+        # indicators; this machine publishes a single one, so WTI_2_TEMPERATURE
+        # is simply never bound — a Tag the Model offers and this Device does
+        # not report, which is the normal case and not a gap.
+        "OTI": "OTI_TEMPERATURE",
+        "WTI": "WTI_1_TEMPERATURE",
+    },
 }
 
 
@@ -922,6 +959,19 @@ ALARM_RULE_SEEDS: Final[tuple[AlarmRuleSeed, ...]] = (
                   None, "special", None, None, 300, "medium"),
     AlarmRuleSeed("COLLECTOR_OFFLINE", "Collector Offline", "global",
                   None, "special", None, None, 300, "high"),
+    # Equipment that is publishing and registered to nothing. Every message is
+    # quarantined rather than decoded, so the Device runs and produces no
+    # history at all — a loss that is permanent past raw retention and that
+    # nothing else in the system reports. High rather than critical: the
+    # equipment is healthy, it is the record that is being lost.
+    AlarmRuleSeed("UNREGISTERED_DEVICE_PUBLISHING", "Unregistered Device Publishing",
+                  "global", None, "special", None, None, 300, "high"),
+    # A whole Plant delivering nothing. Unbuildable per Device, because every
+    # per-Device check is driven by data that is no longer arriving: a
+    # subscription filter matching nothing delivers no message, quarantines no
+    # message, and fires no rule. Critical — the Plant is dark to us.
+    AlarmRuleSeed("PLANT_SILENT", "Plant Silent", "global",
+                  None, "special", None, None, 0, "critical"),
     # ⚠ CORRECTED 10 Sep 2026. These were 440 V and 380 V — sensible on a 415 V
     # LV board, and wrong by a factor of 1000 here. The client's MFM reports in
     # kV (TAG_CATALOGUE §2.3) and the broker publishes 11.37. These are the ±10%
@@ -1049,6 +1099,20 @@ HEALTH_DEGRADED_MULTIPLIER: Final = 2
 HEALTH_OFFLINE_MULTIPLIER: Final = 10
 FROZEN_VALUE_READING_COUNT: Final = 60
 STALE_SOURCE_TIME_MULTIPLIER: Final = 2  # quality classification, §6.4
+
+# ⚠ ASSUMED. How long a topic with no computable interval may be quiet before
+# discovery stops offering it as something to register. A topic seen once has no
+# gap to measure, so it gets this rather than a multiple of nothing; it is also
+# the floor under every measured interval, so a Device on a 5 s cycle is not
+# called dead thirty seconds after a momentary drop.
+UNREGISTERED_LIVENESS_FLOOR_S: Final = 900  # 15 minutes
+
+# ⚠ ASSUMED. The window the Plant-level heartbeat looks back over. A Plant with
+# registered, topic-carrying Devices that delivers *nothing* for longer than
+# this — and longer than its slowest Device's own interval — is silent as a
+# whole, which no per-Device check can see: per-Device alarming is driven by
+# data arriving, and here none is.
+PLANT_SILENCE_WINDOW_S: Final = 600  # 10 minutes
 
 
 # ════════════════════════════════════════════════════════════════════════════

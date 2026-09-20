@@ -28,6 +28,8 @@ from typing import Any
 
 import aiomqtt
 
+from solarcms.domain.decoding import normalise_payload
+
 
 class TopicObservation:
     """Accumulated facts about one topic."""
@@ -60,10 +62,34 @@ class TopicObservation:
         if not isinstance(doc, dict):
             self.non_numeric_keys.add(f"<json {type(doc).__name__}>")
             return
-        for key, raw in doc.items():
+
+        # ⚠ Reduce the envelope before reading keys, using the *same* function
+        # ingest uses — never a copy of the rule.
+        #
+        # Two payload shapes are published (BACKEND_SPEC §6.2): the flat body
+        # the client's test broker sends, and the canonical envelope the
+        # contract specifies, `{device, timestamp, readings:[{tag, value}]}`.
+        # Reading `doc.items()` directly is correct for the first and silently
+        # wrong for the second: it records `device`, `timestamp` and `readings`
+        # as this Device's three signals.
+        #
+        # That is not a cosmetic difference in a report. `commission-from-broker`
+        # binds Tags from exactly these keys, so against an envelope publisher
+        # it would register every Device with **zero bindings** — equipment that
+        # exists, appears on every screen, and decodes nothing, which is
+        # indistinguishable from equipment that is broken.
+        flat, _timestamp = normalise_payload(doc)
+        for key, raw in flat.items():
             self.keys.add(key)
             if isinstance(raw, str):
                 self.string_typed = True
+            # `normalise_payload` returns values as `object`, because a payload
+            # can carry anything. Narrowed here rather than coerced: a nested
+            # dict or a null is a fact about the publisher worth reporting, not
+            # something to quietly drop on a failed float().
+            if not isinstance(raw, str | int | float):
+                self.non_numeric_keys.add(key)
+                continue
             try:
                 value = float(raw)
             except (TypeError, ValueError):

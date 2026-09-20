@@ -14,10 +14,12 @@
  */
 
 import { useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
-import { useAlarms, useAllPlants, useDeviceHealth } from "@/api/hooks";
-import { qk } from "@/api/queryKeys";
-import * as plantsApi from "@/api/endpoints/plants";
+import {
+  useAlarms,
+  useAllPlants,
+  useDeviceHealth,
+  usePlantKpiFanout,
+} from "@/api/hooks";
 import type {
   Alarm,
   DeviceHealth,
@@ -77,16 +79,11 @@ export function usePlantFleet(period: KpiPeriod): PlantFleet {
 
   const plants = useMemo(() => plantsQuery.data ?? [], [plantsQuery.data]);
 
-  const kpiQueries = useQueries({
-    queries: plants.map((plant) => ({
-      queryKey: qk.plantKpis(plant.id, period),
-      queryFn: () => plantsApi.plantKpis(plant.id, period),
-      staleTime: 30_000,
-    })),
-  });
-
-  // `useQueries` preserves the order it was given, so index i is plants[i].
-  const kpiData = kpiQueries.map((query) => query.data as PlantKpis | undefined);
+  // Shared with the Portfolio, deliberately. Both screens fan out one KPI
+  // request per Plant, and when each owned its own copy of that fan-out the
+  // two carried different refresh settings — neither of which actually
+  // refreshed. Index i is plants[i]; `useQueries` preserves input order.
+  const { kpis: kpiData } = usePlantKpiFanout(plants, period);
   const health = healthQuery.data;
   const alarms = alarmsQuery.data;
 

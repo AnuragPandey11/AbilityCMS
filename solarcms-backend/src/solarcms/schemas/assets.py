@@ -24,6 +24,16 @@ DeviceCounts = dict[str, int]
 class PlantCreate(BaseModel):
     code: str = Field(max_length=64)
     name: str
+    # Which Client this Plant belongs to. **Ignored for a Client Admin** — their
+    # `client_id` comes from the session and nothing else, so they cannot create
+    # a Plant under another Client even by supplying its id (I-9).
+    #
+    # A Super Admin signs in with no Client context at all, and every Plant must
+    # still belong to exactly one Client. Rather than making them switch session
+    # context first — which used to be the only path, and produced Plants filed
+    # under whichever Client the session happened to be in — they name the
+    # Client here, and the route refuses without one.
+    client_id: int | None = None
     region_code: str | None = None
     ac_capacity_kw: float | None = Field(default=None, ge=0)
     dc_capacity_kwp: float | None = Field(default=None, ge=0)
@@ -58,6 +68,19 @@ class PlantUpdate(BaseModel):
     device_counts: DeviceCounts | None = None
 
 
+class CollectorEdge(BaseModel):
+    """What an enclosure feeds into — the single edge a Collector owns.
+
+    A Collector is not a Device (Guardrail 12), so it has no Model, no Tags and
+    no topic of its own; this is the only thing that can be said about it beyond
+    its name. `parent_device_id = None` clears the connection, which is a real
+    state — an enclosure whose outward wiring nobody has recorded yet.
+    """
+
+    parent_device_id: int | None = None
+    note: str | None = None
+
+
 class BlockCreate(BaseModel):
     code: str = Field(max_length=64)
     name: str
@@ -82,6 +105,11 @@ class DeviceCreate(BaseModel):
     block_id: int | None = None
     parent_device_id: int | None = None
     reports_via_device_id: int | None = None
+    # The enclosure this Device sits in — the `{collector_code}` segment of its
+    # topic. A Collector is a logical box, never a Device (migration 0022), so
+    # this is a name and not an id. Omit it for a Device that publishes on the
+    # five-segment shape: it sits in no enclosure, which is a real answer.
+    collector_code: str | None = Field(default=None, max_length=64)
     source_address: str | None = Field(
         default=None,
         description="The MQTT topic this Device publishes on. Must be unique.",
@@ -120,6 +148,7 @@ class DeviceUpdate(BaseModel):
     block_id: int | None = None
     parent_device_id: int | None = None
     reports_via_device_id: int | None = None
+    collector_code: str | None = Field(default=None, max_length=64)
     source_address: str | None = None
     expected_interval_s: int | None = Field(default=None, ge=1)
     rated_capacity_kw: float | None = Field(default=None, ge=0)
@@ -127,12 +156,19 @@ class DeviceUpdate(BaseModel):
     installed_on: date | None = None
     status: str | None = Field(
         default=None, pattern="^(active|maintenance|faulty|decommissioned)$")
+    # Which of the four SLD stages this Device folds into, overriding its Type's
+    # default for this Device alone. Set only by accepting a reported conflict
+    # between the wiring and that default — clearing it returns the Device to
+    # its Type, which is the normal state.
+    sld_stage_override: str | None = Field(
+        default=None, pattern="^(PV_ARRAY|INVERTERS|TRANSFORMER|GRID)$")
     # Clearing a grouping needs a way to say "none", which an omitted field
     # cannot: `null` and "unchanged" are the same JSON without it.
     clear: list[str] | None = Field(
         default=None,
         description="Fields to set to NULL: block_id, parent_device_id, "
-                    "reports_via_device_id, source_address, string_count.",
+                    "reports_via_device_id, collector_code, source_address, "
+                    "string_count, sld_stage_override.",
     )
 
 

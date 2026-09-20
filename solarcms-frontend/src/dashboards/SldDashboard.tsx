@@ -2,13 +2,21 @@
  * `sld` — Single Line Diagram (§6.4).
  *
  * The backend returns a ready-built tree; this renders it and overlays live
- * state. The three rules it exists to honour are in `SldTree`, and they are all
- * about what must **not** appear or be dropped: no Blocks in the tree, non-power-path
- * Devices beside it rather than removed, and orphans surfaced as a warning.
+ * state. The four rules it exists to honour are in `SldTree`, and they are all
+ * about what must **not** appear or be dropped: no Blocks in the tree, no
+ * Collector drawn as a Device, non-power-path Devices beside it rather than
+ * removed, and orphans surfaced as a warning.
  *
- * ⚠ Today the tree is usually two meters — there is no equipment hierarchy in
- * the live data yet (§0.4). That is a data state, not a fault, and it is said
- * plainly rather than left as a thin diagram someone reads as broken.
+ * Clicking a node opens everything recorded about that Device — its three
+ * groupings, its enclosure, its topic, its health, its model. A diagram whose
+ * boxes are inert makes you leave it to find out anything, and the question
+ * that brought you here ("which Inverter, and what is wrong with it") is
+ * answered in two places or not at all.
+ *
+ * ⚠ Today the tree is often thin — there is no equipment hierarchy in the live
+ * data until someone sets it in the hierarchy editor (§0.4). That is a data
+ * state, not a fault, and it is said plainly rather than left as a small
+ * diagram someone reads as broken.
  */
 
 import { useState } from "react";
@@ -16,13 +24,13 @@ import { usePlantDevices, usePlantSld, useTagsById } from "@/api/hooks";
 import { SldTree, type SldOverlay } from "@/components/sld/SldTree";
 import { PlantFlow } from "@/components/sld/PlantFlow";
 import { Panel, Badge } from "@/components/ui";
-import {EmptyState, ErrorState, SkeletonPanel} from "@/components/state";
+import { EmptyState, ErrorState, SkeletonPanel } from "@/components/state";
 import { CommStatusBadge, PlantPicker } from "@/components/domain";
+import { DeviceDetailCard } from "@/components/devices/DeviceDetailCard";
 import { usePlantScope } from "@/state/usePlantScope";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
 import { formatValue } from "@/format/value";
-import { formatAge } from "@/format/datetime";
 import type { CommStatus } from "@/api/schemas";
 
 export function SldDashboard(): JSX.Element {
@@ -54,6 +62,18 @@ export function SldDashboard(): JSX.Element {
   }
 
   const sld = sldQuery.data!;
+  /**
+   * What each enclosure feeds into, keyed by code.
+   *
+   * The schematic derives depth from what a Device is wired into, and a Device
+   * inside a collector has no parent of its own — the server refuses that edge,
+   * because the room owns it. Without this a correctly wired Plant reads as
+   * unwired. The Collector is still never a node: this only tells the row where
+   * its occupants sit in the chain.
+   */
+  const collectorEdges = Object.fromEntries(
+    sld.collectors.map((c) => [c.code, c.parent_device_id]),
+  );
   const devices = devicesQuery.data ?? [];
 
   const commStatus: Record<number, CommStatus> = {};
@@ -86,6 +106,7 @@ export function SldDashboard(): JSX.Element {
 
   const overlay: SldOverlay = { commStatus, livePower, staleDevices };
   const selectedDevice = devices.find((device) => device.id === selected) ?? null;
+  const devicesById = new Map(devices.map((device) => [device.id, device]));
 
   const sparse = sld.device_count > 0 && sld.roots.length > 0 && sld.device_count <= 2;
 
@@ -96,7 +117,11 @@ export function SldDashboard(): JSX.Element {
           <h1 className="text-lg font-semibold text-ink">Single Line Diagram</h1>
           <p className="text-xs text-ink-muted">
             The electrical path — what each Device is wired into. {sld.device_count}{" "}
-            Device(s) in the power path.
+            Device(s) in the power path
+            {sld.collectors.length > 0
+              ? `, in ${sld.collectors.length} collector(s)`
+              : ""}
+            .
           </p>
         </div>
         <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" />
@@ -139,23 +164,76 @@ export function SldDashboard(): JSX.Element {
         title="Plant schematic"
         subtitle="Derived from the wiring, not from a fixed sequence — a Plant with a meter mid-chain or two transformers draws itself."
       >
-        <PlantFlow devices={devices} />
+        <PlantFlow devices={devices} collectorEdges={collectorEdges} />
       </Panel>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_18rem]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_20rem]">
         <Panel
           title="Power path"
-          subtitle="Blocks are deliberately absent — a Block says where a Device is, not what it feeds."
+          subtitle="Blocks are deliberately absent — a Block says where a Device is, not what it feeds. A dashed outline is a collector: a room, not a component."
+          className="min-w-0"
         >
           <SldTree
             sld={sld}
             overlay={overlay}
             onSelect={setSelected}
             selectedDeviceId={selected}
+            height={460}
+            label={
+              selectedDevice
+                ? `Selected: ${selectedDevice.code}`
+                : "Tap a Device for its detail"
+            }
           />
         </Panel>
 
         <div className="space-y-4">
+          {selectedDevice ? (
+            <DeviceDetailCard
+              device={selectedDevice}
+              devicesById={devicesById}
+              live={liveDevices[selectedDevice.id] ?? null}
+              tagsById={tagsById}
+              onClose={() => setSelected(null)}
+            />
+          ) : (
+            <Panel title="Device detail">
+              <p className="text-xs text-ink-faint">
+                Select a box in the diagram to see everything recorded about that
+                Device — its wiring, its collector, its topic and its health.
+              </p>
+            </Panel>
+          )}
+
+          {sld.collectors.length > 0 ? (
+            <Panel
+              title="Collectors"
+              subtitle="Enclosures, not equipment. Nothing is wired through one."
+            >
+              <ul className="space-y-1.5">
+                {sld.collectors.map((collector) => (
+                  <li
+                    key={collector.code}
+                    className="rounded border border-dashed border-line-strong bg-surface-sunken px-2 py-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs font-medium text-ink">
+                        {collector.code}
+                      </span>
+                      <Badge tone="neutral">{collector.device_count} Device(s)</Badge>
+                    </div>
+                    {collector.in_power_path_count < collector.device_count ? (
+                      <p className="mt-0.5 text-[11px] text-ink-faint">
+                        {collector.in_power_path_count} in the power path; the rest
+                        carry no current and are not drawn in the tree.
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          ) : null}
+
           <Panel
             title="Not in the power path"
             subtitle="Real, monitored Devices that carry no current."
@@ -165,80 +243,30 @@ export function SldDashboard(): JSX.Element {
             ) : (
               <ul className="space-y-1.5">
                 {sld.excluded_not_in_power_path.map((device) => (
-                  <li
-                    key={device.device_id}
-                    className="flex items-center justify-between rounded border border-line bg-surface px-2 py-1.5"
-                  >
-                    <span className="text-xs text-ink">{device.code}</span>
-                    <Badge
-                      tone="neutral"
-                      title="Monitored, but outside the electrical diagram — a Weather Station or a plant controller carries no current."
+                  <li key={device.device_id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(device.device_id)}
+                      className="flex w-full items-center justify-between gap-2 rounded border border-line bg-surface px-2 py-1.5 text-left hover:border-line-strong"
                     >
-                      {device.type}
-                    </Badge>
+                      <span className="truncate text-xs text-ink">{device.code}</span>
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <CommStatusBadge
+                          status={commStatus[device.device_id] ?? "unknown"}
+                        />
+                        <Badge
+                          tone="neutral"
+                          title="Monitored, but outside the electrical diagram — a Weather Station or a plant controller carries no current."
+                        >
+                          {device.type}
+                        </Badge>
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>
             )}
           </Panel>
-
-          {selectedDevice ? (
-            <Panel title={selectedDevice.code} subtitle={selectedDevice.name}>
-              <dl className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <dt className="text-ink-muted">Type</dt>
-                  <dd className="text-ink">
-                    {selectedDevice.type_code}
-                    {selectedDevice.variant ? ` · ${selectedDevice.variant}` : ""}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-ink-muted">Comms</dt>
-                  <dd>
-                    <CommStatusBadge status={selectedDevice.comm_status} />
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-ink-muted">Expected interval</dt>
-                  <dd className="font-mono text-ink">
-                    {selectedDevice.expected_interval_s}s
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-ink-muted">Last seen</dt>
-                  <dd className="text-ink">
-                    {selectedDevice.last_seen_at
-                      ? formatAge(
-                          (Date.now() - Date.parse(selectedDevice.last_seen_at)) / 1000,
-                        )
-                      : "never"}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-ink-muted" title="The Device that transmits this one.">
-                    Reports via
-                  </dt>
-                  <dd className="text-ink">
-                    {selectedDevice.reports_via_device_id
-                      ? `#${selectedDevice.reports_via_device_id}`
-                      : "direct"}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-ink-muted" title="Geographic grouping — never drawn in this diagram.">
-                    Block
-                  </dt>
-                  <dd className="text-ink">
-                    {selectedDevice.block_id ? `#${selectedDevice.block_id}` : "none"}
-                  </dd>
-                </div>
-              </dl>
-            </Panel>
-          ) : (
-            <Panel title="Device detail">
-              <p className="text-xs text-ink-faint">Select a node to inspect it.</p>
-            </Panel>
-          )}
         </div>
       </div>
     </div>

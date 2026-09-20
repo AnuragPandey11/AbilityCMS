@@ -6,7 +6,7 @@
  * unit and every Tag name in the UI comes from it and it changes monthly.
  */
 
-import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { useQueries, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import * as catalogApi from "./endpoints/catalog";
 import * as regionsApi from "./endpoints/regions";
 import * as plantsApi from "./endpoints/plants";
@@ -17,7 +17,8 @@ import * as healthApi from "./endpoints/health";
 import * as reportsApi from "./endpoints/reports";
 import * as usersApi from "./endpoints/users";
 import { qk } from "./queryKeys";
-import type { KpiPeriod, Tag } from "./schemas";
+import { useLiveSocket } from "@/live/LiveSocket";
+import type { KpiPeriod, PlantKpis, Tag } from "./schemas";
 
 const SESSION = {
   staleTime: Number.POSITIVE_INFINITY,
@@ -26,9 +27,101 @@ const SESSION = {
 const SIXTY_SECONDS = { staleTime: 60_000 };
 const FEW_SECONDS = { staleTime: 5_000 };
 
+/**
+ * How often a figure that is supposed to read "now" is re-asked.
+ *
+ * ⚠ These are **not** a cache policy, they are the refresh rate of a monitoring
+ * screen, which is a different thing and is why they live apart from the
+ * `staleTime` constants above. A dashboard whose number is thirty seconds old
+ * is not showing the plant; it is showing the plant as it was, without saying
+ * so — and the operator has no way to tell the difference between a figure that
+ * is not moving and a figure that is not being asked for.
+ *
+ * `staleTime` is set to match rather than left at its default, so that a
+ * component mounting between ticks serves the cached value instead of firing
+ * its own request; the interval, not the mount, decides the cadence.
+ */
+/**
+ * The refresh timer when the live socket is carrying the Plant.
+ *
+ * With `useLiveRefresh` triggering a refetch as readings actually arrive, the
+ * timer stops being how a figure stays current and becomes a safety net: it
+ * catches the case where the socket is up but silent for a reason we have not
+ * thought of. So it is deliberately slow — polling every 5 seconds *as well as*
+ * refetching on arrival would be strictly more requests than before, which is
+ * the opposite of the point.
+ */
+const LIVE_SOCKET_FALLBACK = { staleTime: 30_000, refetchInterval: 30_000 };
+
+const LIVE_BACKED = {
+  // `/plants/{id}/dashboard` resolves every slot against the Redis values that
+  // ingest writes on each accepted message, so the data behind it is already
+  // current — the only lag left was how often it was asked for.
+  staleTime: 5_000,
+  refetchInterval: 5_000,
+};
+
+const LIVE_KPI = {
+  // `/plants/{id}/kpis` runs a handful of aggregate reads. Measured at 5–10 ms
+  // per Plant against the real-time tiers (migration 0023), so a ten-second
+  // cadence across a fleet is not a load question at the F-2 ceiling.
+  staleTime: 10_000,
+  refetchInterval: 10_000,
+};
+
+/**
+ * Refetch when the tab comes back, on live figures only.
+ *
+ * The global default is `refetchOnWindowFocus: false`, which is right for the
+ * catalogue and for configuration — refetching a Tag registry because someone
+ * alt-tabbed is noise. It is wrong for a figure claiming to be current: a
+ * background tab has its interval throttled to about once a minute by the
+ * browser, and can be suspended outright, so the first thing an operator sees
+ * on returning is a number from some unknowable time ago.
+ */
+const ON_RETURN = { refetchOnWindowFocus: true } as const;
+
 // ── Catalogue ───────────────────────────────────────────────────────────────
 
 /** The Tag registry: the only source of units in the application (§4.1). */
+export { LIVE_KPI, LIVE_SOCKET_FALLBACK, ON_RETURN };
+
+/**
+ * KPIs for a set of Plants — one request each, on the live cadence.
+ *
+ * There is no fleet KPI endpoint by design, so every screen showing more than
+ * one Plant fans out. That fan-out lives here **once**, because it did not:
+ * `usePlantFleet` and `PortfolioDashboard` each grew their own copy, both with
+ * `staleTime` and neither with `refetchInterval`, and the two drifted
+ * independently while looking identical. Fixing one left the other frozen,
+ * which is precisely how the Portfolio came to sit on figures from page load.
+ *
+ * `kpis` is positional — `useQueries` preserves input order, so index `i` is
+ * `plants[i]`, and an entry is `undefined` until that Plant's request lands.
+ * Callers render per-Plant placeholders from that rather than blocking the
+ * whole screen on the slowest of N requests.
+ */
+export function usePlantKpiFanout(
+  plants: { id: number }[],
+  period: KpiPeriod,
+): { kpis: (PlantKpis | undefined)[]; isLoading: boolean } {
+  const results = useQueries({
+    queries: plants.map((plant) => ({
+      queryKey: qk.plantKpis(plant.id, period),
+      queryFn: () => plantsApi.plantKpis(plant.id, period),
+      ...LIVE_KPI,
+      ...ON_RETURN,
+    })),
+  });
+  return {
+    kpis: results.map((query) => query.data as PlantKpis | undefined),
+    // `isLoading` only — never `isFetching`. A refetch on the live interval
+    // must not put the screen back into a loading state every ten seconds;
+    // the figure on display stays until its replacement arrives.
+    isLoading: results.some((query) => query.isLoading),
+  };
+}
+
 export function useTags() {
   return useQuery({
     queryKey: qk.tags(),
@@ -101,7 +194,9 @@ export function usePlants(params: plantsApi.ListPlantsParams = {}) {
 export function useAllPlants() {
   return useQuery({
     queryKey: qk.allPlants(),
-    queryFn: plantsApi.listAllPlants,
+    // Wrapped: react-query calls the fn with its own context object,
+    // which `listAllPlants` would read as filter parameters.
+    queryFn: () => plantsApi.listAllPlants(),
     ...SIXTY_SECONDS,
   });
 }
@@ -120,13 +215,13 @@ export function usePlantKpis(
   period: KpiPeriod,
   options: Partial<UseQueryOptions> = {},
 ) {
+  const socketOpen = useLiveSocket().status === "open";
   return useQuery({
     queryKey: qk.plantKpis(plantId ?? 0, period),
     queryFn: () => plantsApi.plantKpis(plantId as number, period),
     enabled: plantId !== null,
-    // KPIs every 30s — the freshness requirement §1 names.
-    staleTime: 30_000,
-    refetchInterval: 30_000,
+    ...(socketOpen ? LIVE_SOCKET_FALLBACK : LIVE_KPI),
+    ...ON_RETURN,
     ...(options as object),
   });
 }
@@ -174,12 +269,17 @@ export function useDeviceTableColumns() {
 }
 
 export function usePlantDashboard(plantId: number | null) {
+  // When the socket is open, `useLiveRefresh` refetches on arrival and the
+  // timer is only a backstop. When it is closed — a dropped connection, a
+  // User with no room assigned — the timer is the *only* thing keeping the
+  // figure current, so it tightens back up to the original cadence.
+  const { status } = useLiveSocket();
   return useQuery({
     queryKey: qk.plantDashboard(plantId ?? 0),
     queryFn: () => plantsApi.plantDashboard(plantId as number),
     enabled: plantId !== null,
-    staleTime: 30_000,
-    refetchInterval: 30_000,
+    ...(status === "open" ? LIVE_SOCKET_FALLBACK : LIVE_BACKED),
+    ...ON_RETURN,
   });
 }
 
@@ -197,7 +297,8 @@ export function useBlockKpis(blockId: number | null, period: KpiPeriod) {
     queryKey: qk.blockKpis(blockId ?? 0, period),
     queryFn: () => plantsApi.blockKpis(blockId as number, period),
     enabled: blockId !== null,
-    staleTime: 30_000,
+    ...LIVE_KPI,
+    ...ON_RETURN,
   });
 }
 
@@ -272,8 +373,14 @@ export function useAlarms(query: alarmsApi.AlarmQuery = {}) {
   return useQuery({
     queryKey: qk.alarms(query),
     queryFn: () => alarmsApi.listAlarms(query),
+    // Left at 30s rather than sped up: an Alarm cannot appear faster than the
+    // pipeline raises one (`min_interval_s + duration_s`, BACKEND_SPEC §12.4),
+    // so polling harder would only ask more often for the same answer. The
+    // focus refetch is what matters — a tab restored after an hour must not
+    // show an alarm count from an hour ago.
     staleTime: 15_000,
     refetchInterval: 30_000,
+    ...ON_RETURN,
   });
 }
 
@@ -293,8 +400,11 @@ export function useDeviceHealth(plantId?: number | null) {
   return useQuery({
     queryKey: qk.deviceHealth(plantId),
     queryFn: () => healthApi.deviceHealth(plantId),
+    // Also left at 30s: `device_health` is rewritten by the sweeper on its own
+    // 60s cycle, so this already asks twice per change.
     staleTime: 20_000,
     refetchInterval: 30_000,
+    ...ON_RETURN,
   });
 }
 

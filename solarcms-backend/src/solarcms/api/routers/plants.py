@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,7 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import text
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.api.patching import patch_assignments
 from solarcms.cache import live
+from solarcms.domain.absence import assess_coverage
+from solarcms.domain.decoding import TopicPattern, parse_topic
 from solarcms.domain.formulas import (
     availability,
     co2_avoided_kg,
@@ -19,9 +23,16 @@ from solarcms.domain.formulas import (
     specific_yield,
 )
 from solarcms.domain.sld import SldDevice, build_sld
+from solarcms.domain.sld_conflicts import (
+    WiredDevice,
+    detect_stage_conflicts,
+    stale_overrides,
+)
+from solarcms.domain.tiering import select_tier
 from solarcms.schemas.assets import (
     BlockCreate,
     BlockUpdate,
+    CollectorEdge,
     DeviceCounts,
     PlantCreate,
     PlantStatusChange,
@@ -38,6 +49,7 @@ blocks_router = APIRouter(prefix="/blocks", tags=["plants"])
 async def _audit(
     session: Any, user: CurrentUser, action: str, entity_type: str, entity_id: int,
     *, before: dict[str, Any] | None = None, after: dict[str, Any] | None = None,
+    client_id: int | None = None,
 ) -> None:
     """Write the audit row in the SAME transaction as the change (BACKEND_SPEC §8.3).
 
@@ -50,7 +62,12 @@ async def _audit(
         VALUES (:client_id, :user_id, :action, :entity_type, :entity_id,
                 CAST(:before AS jsonb), CAST(:after AS jsonb))
     """), {
-        "client_id": user.client_id, "user_id": user.user_id, "action": action,
+        # A Super Admin holds no Client context, so the acting user's client_id
+        # is NULL — and an audit row filed against no Client is invisible to the
+        # Client whose Plant was just created, which is precisely who needs to
+        # read it. The caller names the owning Client where it knows it.
+        "client_id": client_id if client_id is not None else user.client_id,
+        "user_id": user.user_id, "action": action,
         "entity_type": entity_type, "entity_id": entity_id,
         "before": json.dumps(before, default=str) if before else None,
         "after": json.dumps(after, default=str) if after else None,
@@ -141,22 +158,42 @@ async def list_plants(
     limit: int = Query(50, ge=1, le=200),
     cursor: int | None = None,
     status_filter: str | None = Query(None, alias="status"),
+    client_id: int | None = Query(
+        None, description="Narrow to one Client. A convenience for a Super "
+                          "Admin, who can see every Client; it never widens "
+                          "what a Client Admin sees."),
 ) -> dict[str, Any]:
     """RLS-filtered, paginated, sortable, filterable.
 
-    No client_id predicate appears here on purpose: the policies supply it, and
-    adding one in application code would suggest the isolation depends on
-    remembering to write it.
+    No client_id predicate is *required* here: the policies supply it, and
+    relying on one written in application code would suggest the isolation
+    depends on remembering to write it.
+
+    ⚠ The optional `client_id` filter is exactly that — a filter, never a
+    grant. It ANDs with the policy, so a Client Admin passing another Client's
+    id gets an empty page rather than that Client's Plants. It exists because a
+    Super Admin legitimately sees every Client's Plants at once and needs to
+    narrow the list; every row carries its Client for the same reason.
     """
     rows = (await session.execute(text("""
         SELECT p.id, p.code, p.name, p.status, p.ac_capacity_kw, p.dc_capacity_kwp,
                r.code AS region_code,
+               p.client_id, c.code AS client_code, c.name AS client_name,
                (SELECT count(*) FROM devices d WHERE d.plant_id = p.id) AS device_count
-          FROM plants p LEFT JOIN regions r ON r.id = p.region_id
+          FROM plants p
+          -- LEFT, not INNER. `clients` carries its own RLS policy, and it is
+          -- not the same predicate as the one on `plants`: a Guest on a
+          -- non-demonstration Client cannot read the Client row. An inner join
+          -- would make their Plants vanish from a list they are entitled to,
+          -- turning a label into an access control by accident.
+          LEFT JOIN clients c ON c.id = p.client_id
+          LEFT JOIN regions r ON r.id = p.region_id
          WHERE (CAST(:cursor AS bigint) IS NULL OR p.id > :cursor)
            AND (CAST(:status AS text) IS NULL OR p.status = :status)
+           AND (CAST(:client_id AS bigint) IS NULL OR p.client_id = :client_id)
          ORDER BY p.id LIMIT :limit
-    """), {"cursor": cursor, "status": status_filter, "limit": limit})).all()
+    """), {"cursor": cursor, "status": status_filter, "limit": limit,
+           "client_id": client_id})).all()
 
     items = [dict(row._mapping) for row in rows]
     return {"items": items,
@@ -170,8 +207,16 @@ async def get_plant(
 ) -> dict[str, Any]:
     row = (await session.execute(text("""
         SELECT p.*, r.code AS region_code,
-               r.grid_emission_factor_kg_per_kwh AS grid_factor
-          FROM plants p LEFT JOIN regions r ON r.id = p.region_id
+               r.grid_emission_factor_kg_per_kwh AS grid_factor,
+               -- The Client's own code, because broker discovery is keyed on
+               -- what the *topic* says. LEFT, for the reason the list is: a
+               -- Guest on a non-demonstration Client can read the Plant and not
+               -- the Client row, and an inner join would turn a label into an
+               -- access control.
+               c.code AS client_code, c.name AS client_name
+          FROM plants p
+          LEFT JOIN clients c ON c.id = p.client_id
+          LEFT JOIN regions r ON r.id = p.region_id
          WHERE p.id = :plant_id
     """), {"plant_id": plant_id})).first()
     if row is None:
@@ -207,19 +252,40 @@ async def plant_kpis(
     now = datetime.now(UTC)
     start = now - PERIODS[period]
 
+    # ⚠ The tier is *selected*, not hardcoded. It used to be `agg_1h_v` for
+    # every period, which made "today" the worst-served figure on the platform:
+    # the hourly tier sits furthest down a hierarchical cascade and is the last
+    # to see a Reading, so the one KPI an operator watches minute to minute was
+    # computed from the coarsest and slowest source available.
+    #
+    # `select_tier` already answers this — it is the same function the readings
+    # read path uses — and for a one-day range it returns `agg_1m`, one bucket
+    # above raw. Coarser periods still get coarser tiers, which is correct:
+    # a month-to-date total does not need minute resolution and should not pay
+    # for 43,200 buckets per Tag to compute one subtraction.
+    tier = select_tier(start, now, now)
+    # The `_v` security_barrier view, never the aggregate itself: the API holds
+    # no privilege at all on the telemetry relations (migrations 0008/0010), and
+    # reaching for the bare name here would fail — which is the design working.
+    relation = f"{tier.value}_v"
+
     # Energy from the export counter's endpoints, and irradiation from the WMS.
     # Aggregates, never raw readings (MASTER §6.6).
-    energy = (await session.execute(text("""
+    #
+    # The relation name is interpolated rather than bound: it is a table name,
+    # which no driver can parameterise, and it comes from the `Tier` enum rather
+    # than from anything a caller can influence.
+    energy = (await session.execute(text(f"""
         SELECT max(last_value) - min(last_value) AS delta
-          FROM agg_1h_v a JOIN tags t ON t.id = a.tag_id
+          FROM {relation} a JOIN tags t ON t.id = a.tag_id
           JOIN devices d ON d.id = a.device_id
          WHERE d.plant_id = :plant_id AND t.code = 'ENERGY_EXPORT_TOTAL'
            AND a.bucket >= :start
     """), {"plant_id": plant_id, "start": start})).scalar()
 
-    irradiation = (await session.execute(text("""
+    irradiation = (await session.execute(text(f"""
         SELECT max(last_value) AS total
-          FROM agg_1h_v a JOIN tags t ON t.id = a.tag_id
+          FROM {relation} a JOIN tags t ON t.id = a.tag_id
           JOIN devices d ON d.id = a.device_id
          WHERE d.plant_id = :plant_id AND t.code = 'GHI_CUMULATIVE'
            AND a.bucket >= :start
@@ -247,17 +313,88 @@ async def plant_kpis(
     """), {"plant_id": plant_id})).scalar()
     avail = availability(float(uptime or 0.0) * hours * 3600, hours * 3600)
 
+    # ── How much of the period these figures actually saw ───────────────────
+    # A gap does not make a figure look wrong; it makes it look *low*. An
+    # average over fewer samples is still an average and a total over a hole is
+    # simply smaller, so a communication outage reads as underperformance — and
+    # for availability, as nothing having happened. Reporting coverage beside
+    # the value is what makes the difference visible. It never corrects the
+    # figure: correcting it would be inventing data.
+    period_s = PERIODS[period].total_seconds()
+    # ⚠ Per *binding*, and against the Tag's own throttle — not per Device.
+    #
+    # A Device publishing every 86 s does not store 86 s of every Tag: ingest
+    # throttles each Tag to its `min_interval_s`, so a Tag throttled to 300 s
+    # stores one sample in every three or four messages. Counting one sample per
+    # Tag per message expected 367k readings a day from this Plant against
+    # 26.6k stored and reported 7% coverage on a Plant that was entirely
+    # healthy — a false alarm of exactly the kind this is meant to remove.
+    #
+    # `created_at` clamps the window too: a Device registered an hour ago owes
+    # nothing for the twenty-three before it existed.
+    expected_row = (await session.execute(text("""
+        SELECT coalesce(sum(
+                   GREATEST(0, EXTRACT(EPOCH FROM (
+                       now() - GREATEST(:start, d.created_at)
+                   )))
+                   / GREATEST(d.expected_interval_s,
+                              coalesce(t.min_interval_s, 0), 1)
+               ), 0)::bigint AS expected
+          FROM device_tag_bindings b
+          JOIN devices d ON d.id = b.device_id
+          JOIN tags t    ON t.id = b.tag_id
+         WHERE d.plant_id = :plant_id AND d.status = 'active'
+           AND d.source_address IS NOT NULL AND b.enabled
+    """), {"plant_id": plant_id, "start": start})).scalar()
+
+    received_row = (await session.execute(text(f"""
+        SELECT coalesce(sum(a.sample_count), 0)::bigint AS received
+          FROM {relation} a JOIN devices d ON d.id = a.device_id
+         WHERE d.plant_id = :plant_id AND a.bucket >= :start
+    """), {"plant_id": plant_id, "start": start})).scalar()
+
+    # Planned work is an *explained* absence and must not count against the
+    # Plant. A gap is an unexplained one and must stay visible.
+    excluded_s = (await session.execute(text("""
+        SELECT coalesce(sum(EXTRACT(EPOCH FROM (
+                   least(coalesce(w.ends_at, now()), now())
+                 - greatest(w.starts_at, :start)))), 0)
+          FROM maintenance_windows w
+         WHERE w.plant_id = :plant_id AND w.device_id IS NULL
+           AND coalesce(w.ends_at, now()) > :start
+    """), {"plant_id": plant_id, "start": start})).scalar()
+
+    coverage = assess_coverage(
+        int(expected_row or 0), int(received_row or 0), period_s,
+        excluded_seconds=float(excluded_s or 0.0),
+    )
+
     def render(result: Any) -> dict[str, Any]:
         return {"value": result.value, "variant": result.variant,
                 "undefined_reason": result.undefined_reason}
 
     return {
         "plant_id": plant_id, "period": period,
+        # Which tier answered. Provenance, for the same reason a dashboard slot
+        # carries it: two figures computed from different tiers are different
+        # claims, and "the number looks stale" is otherwise unanswerable.
+        "source_tier": tier.value,
         "energy_kwh": energy_kwh,
         "performance_ratio": render(pr),
         "cuf": render(cuf_result),
         "availability": render(avail),
         "co2_avoided_kg": render(co2),
+        # ⚠ Read this before the figures above. A period with a hole in it
+        # produces numbers that look plausible and are low, and nothing else on
+        # the response can tell you that happened.
+        "coverage": {
+            "ratio": coverage.ratio,
+            "complete": coverage.complete,
+            "expected_samples": coverage.expected_samples,
+            "received_samples": coverage.received_samples,
+            "missing_seconds": round(coverage.missing_seconds),
+            "excluded_seconds": round(coverage.excluded_seconds),
+        },
         "assumptions_note": (
             "All KPI formulas are provisional pending OPEN-16. The client's own "
             "definitions may differ by percentage points."
@@ -273,7 +410,7 @@ async def plant_sld(
     """The electrical tree. Power path only; Blocks never appear (Guardrail 11)."""
     rows = (await session.execute(text("""
         SELECT d.id, d.code, d.name, d.parent_device_id, d.rated_capacity_kw,
-               dt.code AS type_code, dt.in_power_path, dm.variant
+               d.collector_code, dt.code AS type_code, dt.in_power_path, dm.variant
           FROM devices d
           JOIN device_models dm ON dm.id = d.device_model_id
           JOIN device_types dt  ON dt.id = dm.device_type_id
@@ -284,7 +421,7 @@ async def plant_sld(
         SldDevice(
             device_id=r.id, code=r.code, name=r.name, device_type_code=r.type_code,
             in_power_path=r.in_power_path, parent_device_id=r.parent_device_id,
-            variant=r.variant,
+            variant=r.variant, collector_code=r.collector_code,
             rated_capacity_kw=float(r.rated_capacity_kw) if r.rated_capacity_kw else None,
         ) for r in rows
     ])
@@ -294,21 +431,265 @@ async def plant_sld(
             "device_id": node.device.device_id, "code": node.device.code,
             "name": node.device.name, "type": node.device.device_type_code,
             "variant": node.device.variant,
+            # The enclosure, not a node. The renderer draws a box *around* the
+            # Devices carrying the same value; nothing in the tree passes
+            # through it (migration 0022).
+            "collector_code": node.device.collector_code,
             "children": [serialise(child) for child in node.children],
         }
+
+    # LEFT-joined in spirit: a Collector needs no row here to exist, so an empty
+    # table is normal rather than a gap (migration 0024).
+    edges = {
+        row.code: row.parent_device_id
+        for row in (await session.execute(text("""
+            SELECT code, parent_device_id FROM plant_collectors
+             WHERE plant_id = :plant_id
+        """), {"plant_id": plant_id})).all()
+    }
 
     return {
         "plant_id": plant_id,
         "roots": [serialise(root) for root in tree.roots],
         "device_count": tree.device_count,
-        # Returned rather than dropped: these Devices are real and monitored, they
-        # simply carry no current, and the caller still has to show them somewhere.
+        # Returned rather than dropped: these Devices are real and monitored,
+        # they simply carry no current.
+        #
+        # ⚠ They remain **outside the electrical tree** — `build_sld` is
+        # unchanged and still contains power-path Devices only, because a
+        # Weather Station has no `parent_device_id` story to tell and inventing
+        # one would corrupt the diagram (MASTER §2.3). What changed on 19 Sep
+        # 2026 is only that the *renderer* draws them, unwired and visually
+        # distinct, instead of hiding them in a side panel — so a WMS sitting
+        # in the MCR is visible in the MCR. `collector_code` is carried for
+        # exactly that: it says which box to draw them in.
         "excluded_not_in_power_path": [
-            {"device_id": d.device_id, "code": d.code, "type": d.device_type_code}
+            {"device_id": d.device_id, "code": d.code, "name": d.name,
+             "type": d.device_type_code, "variant": d.variant,
+             "collector_code": d.collector_code}
             for d in tree.excluded_not_in_power_path
         ],
         "orphaned": [{"device_id": d.device_id, "code": d.code} for d in tree.orphaned],
+        # Every enclosure at this Plant with the Devices in it, power path and
+        # not — a Collector holding one Inverter and one Weather Station is one
+        # box in the room even though only the Inverter is in the diagram.
+        # Returned rather than derived in the browser so the side panel and the
+        # diagram agree on what a Collector contains.
+        "collectors": _collectors(rows, edges),
     }
+
+
+def _collectors(rows: Any, edges: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Group a Plant's Devices by the enclosure they sit in.
+
+    A Collector is a logical box named by the topic, never a Device (migration
+    0022), so this is a roll-up and not a table read. Devices in no Collector
+    are deliberately absent rather than gathered under an "Unassigned" heading:
+    the five-segment topic shape has no Collector segment at all, and inventing
+    one would draw a box around equipment the client never put in a room.
+    """
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        if row.collector_code:
+            grouped.setdefault(row.collector_code, []).append(row)
+    edges = edges or {}
+    return [
+        {
+            "code": code,
+            "device_ids": [r.id for r in members],
+            "device_count": len(members),
+            "in_power_path_count": sum(1 for r in members if r.in_power_path),
+            # What the enclosure feeds into — the box's own edge, drawn once
+            # from its border rather than once per occupant (migration 0024).
+            # None where nobody has recorded it yet, which is every Collector
+            # the moment it first appears on the broker.
+            "parent_device_id": edges.get(code),
+        }
+        for code, members in sorted(grouped.items())
+    ]
+
+
+@router.get("/{plant_id}/parse-topic")
+async def parse_device_topic(
+    plant_id: int, session: SessionDep,
+    topic: str = Query(..., description="The exact topic, case-sensitive"),
+    _: CurrentUser = Depends(require_permission("plant.manage")),
+) -> dict[str, Any]:
+    """Read a topic the way ingest will, before a Device is registered for it.
+
+    **The topic is written and published before we onboard**, so registering a
+    Device should mean pasting the one the engineers configured and having the
+    platform tell you what it means — not retyping its parts into four boxes and
+    hoping they match. Everything a Device needs is already in that string: the
+    Client, the Plant, the Collector and the Device code.
+
+    ⚠ Parsed against the live `topic_patterns` registry, never a parser written
+    here. A second definition of the contract would be free to drift from the
+    one ingest actually uses, and the failure would be a Device that looks
+    correctly registered and silently decodes nothing.
+
+    Requires `plant.manage`, not `system.admin`. It returns nothing but the
+    structure of a string the caller already typed — no payload, no traffic, no
+    other Client's data — so the isolation reasoning that keeps *discovery*
+    Super-Admin-only does not apply. This is the path that lets a Client Admin
+    register their own equipment, including equipment that has not started
+    publishing yet.
+    """
+    plant = (await session.execute(text("""
+        SELECT p.code AS plant_code, c.code AS client_code
+          FROM plants p LEFT JOIN clients c ON c.id = p.client_id
+         WHERE p.id = :id
+    """), {"id": plant_id})).first()
+    if plant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+
+    rows = (await session.execute(text(
+        "SELECT pattern, priority FROM topic_patterns WHERE enabled ORDER BY priority"
+    ))).all()
+    patterns: list[TopicPattern] = []
+    for row in rows:
+        with contextlib.suppress(ValueError):
+            patterns.append(TopicPattern(pattern=row.pattern, priority=row.priority))
+
+    cleaned = topic.strip()
+    captured = parse_topic(cleaned, patterns) if cleaned else None
+
+    problems: list[str] = []
+    if not cleaned:
+        problems.append("Paste the topic this Device publishes on.")
+    elif captured is None:
+        problems.append(
+            "This topic matches no registered shape, so ingest would quarantine "
+            "it rather than attribute it. Expected "
+            "scms/v1/{client}/{plant}/{collector}/{device} or "
+            "scms/v1/{client}/{plant}/{device} — note that topic levels are "
+            "case-sensitive.")
+    else:
+        if captured.get("plant_code") != plant.plant_code:
+            problems.append(
+                f"This topic is for plant {captured.get('plant_code')!r}, but "
+                f"you are editing {plant.plant_code!r}. Registering it here "
+                f"would file another Plant's equipment under this one.")
+        if plant.client_code and captured.get("client_code") != plant.client_code:
+            problems.append(
+                f"This topic is for client {captured.get('client_code')!r}, but "
+                f"this Plant belongs to {plant.client_code!r}.")
+        if not captured.get("device_code"):
+            problems.append("This shape carries no device code, so it cannot "
+                            "identify one Device.")
+
+    taken = None
+    if cleaned:
+        taken = (await session.execute(text(
+            "SELECT id, code FROM devices WHERE source_address = :t"
+        ), {"t": cleaned})).first()
+        if taken is not None:
+            problems.append(
+                f"{taken.code} is already registered on this exact topic. Two "
+                f"Devices cannot share one, because the topic is what decides "
+                f"which Device a message belongs to.")
+
+    return {
+        "topic": cleaned,
+        "matched": captured is not None,
+        "client_code": (captured or {}).get("client_code"),
+        "plant_code": (captured or {}).get("plant_code"),
+        # None is a real answer: the five-segment shape has no enclosure.
+        "collector_code": (captured or {}).get("collector_code"),
+        "device_code": (captured or {}).get("device_code"),
+        "already_registered_device_id": taken.id if taken else None,
+        "problems": problems,
+        "usable": not problems,
+    }
+
+
+@router.get("/{plant_id}/collectors")
+async def list_plant_collectors(
+    plant_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> list[dict[str, Any]]:
+    """Every enclosure at this Plant, with what it holds and what it feeds into.
+
+    Membership comes from `devices.collector_code` (the topic's authority) and
+    the outward edge from `plant_collectors` — so a Collector with no row here
+    still appears, with `parent_device_id` null. A Collector is never a Device
+    and never appears in a Device list (Guardrail 12).
+    """
+    rows = (await session.execute(text("""
+        SELECT d.collector_code AS code,
+               count(*) AS device_count,
+               count(*) FILTER (WHERE dt.in_power_path) AS in_power_path_count,
+               max(c.parent_device_id) AS parent_device_id,
+               max(c.note) AS note
+          FROM devices d
+          JOIN device_models dm ON dm.id = d.device_model_id
+          JOIN device_types dt  ON dt.id = dm.device_type_id
+          LEFT JOIN plant_collectors c
+                 ON c.plant_id = d.plant_id AND c.code = d.collector_code
+         WHERE d.plant_id = :plant_id AND d.collector_code IS NOT NULL
+           AND d.status <> 'decommissioned'
+         GROUP BY d.collector_code ORDER BY d.collector_code
+    """), {"plant_id": plant_id})).all()
+    return [dict(row._mapping) for row in rows]
+
+
+@router.put("/{plant_id}/collectors/{code}")
+async def set_collector_parent(
+    plant_id: int, code: str, body: CollectorEdge, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("plant.manage")),
+) -> dict[str, Any]:
+    """Say what an enclosure feeds into — the one edge the box owns.
+
+    Upsert rather than create-then-update: a Collector exists the moment a
+    Device carries its name, so there is no "create a Collector" step and this
+    must work the first time it is called for a name that has no row yet.
+
+    ⚠ The Device it feeds into must sit **outside** this Collector. A box that
+    fed into one of its own occupants would be a ring drawn through a wall.
+    """
+    plant = (await session.execute(
+        text("SELECT client_id FROM plants WHERE id = :id"), {"id": plant_id})).first()
+    if plant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+
+    members = (await session.execute(text("""
+        SELECT count(*) AS n FROM devices
+         WHERE plant_id = :plant_id AND collector_code = :code
+    """), {"plant_id": plant_id, "code": code})).scalar()
+    if not members:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"no Device at this Plant is in a collector named {code!r}. A "
+            f"collector exists because Devices carry its name, so it cannot be "
+            f"given a connection before anything is in it.")
+
+    if body.parent_device_id is not None:
+        target = (await session.execute(text("""
+            SELECT code, collector_code, plant_id FROM devices WHERE id = :id
+        """), {"id": body.parent_device_id})).first()
+        if target is None or target.plant_id != plant_id:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "that Device is not at this Plant")
+        if target.collector_code == code:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{target.code} is inside collector {code} itself, so {code} "
+                f"cannot feed into it. Choose a Device outside the collector.")
+
+    row = (await session.execute(text("""
+        INSERT INTO plant_collectors (client_id, plant_id, code, parent_device_id, note)
+        VALUES (:client_id, :plant_id, :code, :parent_device_id, :note)
+        ON CONFLICT (plant_id, code) DO UPDATE
+            SET parent_device_id = EXCLUDED.parent_device_id,
+                note = EXCLUDED.note
+        RETURNING id, code, parent_device_id, note
+    """), {"client_id": plant.client_id, "plant_id": plant_id, "code": code,
+           "parent_device_id": body.parent_device_id, "note": body.note})).first()
+    assert row is not None
+    await _audit(session, user, "collector.set_parent", "plant_collectors", row.id,
+                 client_id=plant.client_id,
+                 after={"code": code, "parent_device_id": body.parent_device_id})
+    return dict(row._mapping)
 
 
 @router.get("/{plant_id}/dashboard")
@@ -358,15 +739,45 @@ async def create_plant(
     body: PlantCreate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
 ) -> dict[str, Any]:
-    """Create a Plant in `draft`.
+    """Create a Plant in `draft`, under exactly one Client.
 
-    Held by a Client Admin per F-15 — and scoped to their own Client by
-    construction: `client_id` comes from the session context, never from the
-    request, so a Client Admin cannot create a Plant under another Client (I-9).
+    **Every Plant belongs to a Client, and the Client is chosen before the Plant
+    exists.** There is no such thing as an unfiled Plant here: `client_id` is NOT
+    NULL in the schema, and the two callers reach it by different routes for a
+    reason that is about isolation, not convenience.
+
+    * A **Client Admin** gets their own Client from the session and nothing else.
+      `body.client_id` is ignored outright — not validated, ignored — so a Client
+      Admin cannot create a Plant under another Client even by supplying its id
+      (I-9, F-15).
+    * A **Super Admin** has no Client context at all, so they must name one. It
+      used to be that they had to switch the whole session into a Client first,
+      which meant the Plant was filed under whichever Client the session
+      happened to be in — an easy way to give one Client another's Plant with no
+      error anywhere. Now the Client is part of the request and is checked to
+      exist before anything is written.
     """
-    if user.client_id is None:
+    if user.is_platform_admin and user.client_id is None:
+        if body.client_id is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "choose the Client this Plant belongs to. Every Plant belongs to "
+                "exactly one Client, and a platform administrator is a member of "
+                "none, so the Client cannot be inferred from the session.")
+        # `is_platform_admin` is set in this transaction, so RLS is not filtering
+        # `clients` — this genuinely checks existence rather than visibility.
+        owner = (await session.execute(
+            text("SELECT id, code FROM clients WHERE id = :id"),
+            {"id": body.client_id})).first()
+        if owner is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"no Client with id {body.client_id}")
+        client_id = owner.id
+    elif user.client_id is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "a Client context is required to create a Plant")
+    else:
+        client_id = user.client_id
 
     region_id = None
     if body.region_code:
@@ -379,7 +790,7 @@ async def create_plant(
 
     existing = (await session.execute(
         text("SELECT id FROM plants WHERE client_id = :c AND code = :code"),
-        {"c": user.client_id, "code": body.code})).first()
+        {"c": client_id, "code": body.code})).first()
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"plant code {body.code!r} already exists for this Client")
@@ -392,7 +803,7 @@ async def create_plant(
                 :tz, :commissioned_on)
         RETURNING id, code, name, status
     """), {
-        "client_id": user.client_id, "region_id": region_id, "code": body.code,
+        "client_id": client_id, "region_id": region_id, "code": body.code,
         "name": body.name, "ac": body.ac_capacity_kw, "dc": body.dc_capacity_kwp,
         "lat": body.latitude, "lon": body.longitude, "tz": body.timezone,
         "commissioned_on": body.commissioned_on,
@@ -401,11 +812,12 @@ async def create_plant(
     # Same transaction as the Plant: a Plant that exists with its design sheet
     # half-written is worse than one that failed to be created at all.
     counts = await _replace_device_counts(
-        session, user.client_id, row.id, body.device_counts or {})
+        session, client_id, row.id, body.device_counts or {})
     await _audit(session, user, "plant.create", "plants", row.id,
+                 client_id=client_id,
                  after={"code": body.code, "name": body.name,
-                        "device_counts": counts})
-    return {**dict(row._mapping), "device_counts": counts}
+                        "client_id": client_id, "device_counts": counts})
+    return {**dict(row._mapping), "client_id": client_id, "device_counts": counts}
 
 
 @router.patch("/{plant_id}")
@@ -419,6 +831,8 @@ async def update_plant(
     if before is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
 
+    # A Region sent as null clears the Plant's Region; one sent as a code must
+    # resolve, so an unknown code is refused rather than quietly ignored.
     region_id = None
     if body.region_code is not None:
         region_id = (await session.execute(
@@ -428,23 +842,29 @@ async def update_plant(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown region {body.region_code!r}")
 
-    row = (await session.execute(text("""
-        UPDATE plants
-           SET name = coalesce(:name, name),
-               status = coalesce(:status, status),
-               region_id = coalesce(:region_id, region_id),
-               ac_capacity_kw = coalesce(:ac, ac_capacity_kw),
-               dc_capacity_kwp = coalesce(:dc, dc_capacity_kwp),
-               latitude = coalesce(:lat, latitude),
-               longitude = coalesce(:lon, longitude),
-               commissioned_on = coalesce(CAST(:commissioned_on AS date),
-                                          commissioned_on)
-         WHERE id = :id
-        RETURNING id, code, name, status
-    """), {"id": plant_id, "name": body.name, "status": body.status,
-           "region_id": region_id, "ac": body.ac_capacity_kw,
-           "dc": body.dc_capacity_kwp, "lat": body.latitude, "lon": body.longitude,
-           "commissioned_on": body.commissioned_on})).first()
+    # ⚠ Built from the fields the request actually carried, not from which of
+    # them are non-null. `coalesce(:lat, latitude)` made a wrong coordinate
+    # impossible to erase: the field emptied on screen, the request was
+    # accepted, and the old value was still there on the next read.
+    sets, params = patch_assignments(
+        body,
+        {"name": "name", "status": "status", "region_code": "region_id",
+         "ac_capacity_kw": "ac_capacity_kw", "dc_capacity_kwp": "dc_capacity_kwp",
+         "latitude": "latitude", "longitude": "longitude",
+         "commissioned_on": "commissioned_on"},
+        casts={"commissioned_on": "date"},
+        values={"region_code": region_id},
+    )
+    if not sets:
+        # A PATCH carrying only `device_counts` changes no column of `plants`.
+        row = (await session.execute(
+            text("SELECT id, code, name, status FROM plants WHERE id = :id"),
+            {"id": plant_id})).first()
+    else:
+        row = (await session.execute(
+            text(f"UPDATE plants SET {', '.join(sets)} "
+                 f"WHERE id = :id RETURNING id, code, name, status"),
+            {"id": plant_id, **params})).first()
     assert row is not None
 
     # `is not None`, not truthiness: `{}` means "this Plant has no planned
@@ -487,7 +907,8 @@ async def commissioning_readiness(
     devices = (await session.execute(text("""
         SELECT d.id, d.code, d.name, d.source_address, d.string_count,
                d.rated_capacity_kw, dt.code AS type_code, dt.in_power_path,
-               dm.variant, d.parent_device_id,
+               dm.variant, d.parent_device_id, d.collector_code,
+               dt.sld_stage, d.sld_stage_override,
                COALESCE(h.comm_status, 'unknown') AS comm_status,
                (SELECT count(*) FROM device_tag_bindings b
                  WHERE b.device_id = d.id AND b.enabled) AS binding_count,
@@ -578,11 +999,94 @@ async def commissioning_readiness(
                  f"{'…' if len(keys) > 8 else ''}",
                  device_id=device.id, device_code=device.code, keys=keys)
 
-    roots = [d for d in devices if d.in_power_path and d.parent_device_id is None]
+    # ⚠ A Device covered by its enclosure's edge is wired, even though its own
+    # `parent_device_id` is NULL. Seventeen Inverters in an MCR do not each run
+    # a cable to the transformer — the room has one, and the server *refuses*
+    # the per-Device version of that edge. Counting only `parent_device_id`
+    # would report twenty unwired Devices on a Plant whose only remaining gap is
+    # three, and send the operator towards the edit that cannot be made.
+    collector_edges = {
+        row.code: row.parent_device_id
+        for row in (await session.execute(text("""
+            SELECT code, parent_device_id FROM plant_collectors
+             WHERE plant_id = :plant_id AND parent_device_id IS NOT NULL
+        """), {"plant_id": plant_id})).all()
+    }
+    roots = [
+        d for d in devices
+        if d.in_power_path and d.parent_device_id is None
+        and not (d.collector_code and collector_edges.get(d.collector_code))
+    ]
     if len(roots) > 1:
+        covered = sum(
+            1 for d in devices
+            if d.in_power_path and d.parent_device_id is None
+            and d.collector_code and collector_edges.get(d.collector_code)
+        )
+        via = (
+            f" ({covered} more are covered by their collector's own edge.)"
+            if covered else ""
+        )
         flag("warning", "multiple_sld_roots",
-             f"{len(roots)} Devices in the power path have no parent, so the "
-             f"Single Line Diagram will render as {len(roots)} separate trees.")
+             f"{len(roots)} Devices in the power path are not wired to anything, "
+             f"so the Single Line Diagram will render as {len(roots)} separate "
+             f"trees.{via}")
+
+    # ── Where the wiring and the four-stage fold disagree ────────────────────
+    # Two different kinds of statement about the same Plant: `sld_stage` says
+    # which box a Device belongs in (per Type, global), `parent_device_id` says
+    # what feeds what (per Plant). They part company on unusual topologies — an
+    # LT feeder meter is Type MFM, so it folds into Grid while the wiring puts
+    # it third from the left, and the two diagrams then show one meter twice.
+    #
+    # ⚠ Reported, never auto-resolved. The wiring is the more specific claim,
+    # but it is hand-entered and verified against nothing, so the disagreement
+    # is also the only cross-check there is — silently letting one overrule the
+    # other would propagate a single mistyped parent into both diagrams.
+    wired = [
+        WiredDevice(
+            device_id=d.id, code=d.code, device_type_code=d.type_code,
+            parent_device_id=d.parent_device_id, in_power_path=d.in_power_path,
+            type_stage=d.sld_stage, stage_override=d.sld_stage_override,
+        )
+        for d in devices
+    ]
+    for conflict in detect_stage_conflicts(wired):
+        if conflict.resolvable_by_restaging:
+            options = list(conflict.candidate_stages)
+            choices = (
+                options[0] if len(options) == 1
+                else f"{', '.join(options[:-1])} or {options[-1]}"
+            )
+            detail = (
+                f"{conflict.code} is wired upstream of {conflict.feeds_into_code}, "
+                f"but its Device Type puts it in the {conflict.stage} stage, which "
+                f"is downstream of {conflict.feeds_into_stage}. Either the wiring "
+                f"is wrong, or {conflict.code} belongs in {choices} on this Plant."
+            )
+        else:
+            detail = (
+                f"{conflict.code} is wired between Devices whose stages no "
+                f"assignment can satisfy, so the wiring itself needs correcting."
+            )
+        flag("warning", "sld_stage_conflict", detail,
+             device_id=conflict.device_id, device_code=conflict.code,
+             current_stage=conflict.stage,
+             feeds_into_device_id=conflict.feeds_into_device_id,
+             feeds_into_code=conflict.feeds_into_code,
+             candidate_stages=list(conflict.candidate_stages),
+             suggested_stage=conflict.suggested_stage)
+
+    # An override the wiring has since made unnecessary is a second source of
+    # truth quietly rotting, so it is reported rather than left to outlive its
+    # reason — the same discipline that keeps slot overrides expected-empty.
+    for stale in stale_overrides(wired):
+        flag("info", "sld_stage_override_stale",
+             f"{stale.code} is pinned to the {stale.override_stage} stage, but "
+             f"its wiring no longer contradicts its Device Type "
+             f"({stale.type_stage}). The override can be removed.",
+             device_id=stale.device_id, device_code=stale.code,
+             override_stage=stale.override_stage, type_stage=stale.type_stage)
 
     blocking = [i for i in issues if i["severity"] == "blocking"]
     return {

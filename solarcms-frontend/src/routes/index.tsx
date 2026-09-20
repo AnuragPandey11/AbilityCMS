@@ -27,6 +27,8 @@ import { ReportsDashboard } from "@/dashboards/ReportsDashboard";
 
 import { OnboardingWizard } from "@/admin/OnboardingWizard";
 import { PlantHierarchyEditor } from "@/admin/PlantHierarchyEditor";
+import { ClientsAdmin } from "@/admin/ClientsAdmin";
+import { PlantEditor } from "@/admin/PlantEditor";
 import { DeviceBindingsAdmin } from "@/admin/DeviceBindingsAdmin";
 import { AlarmRulesAdmin } from "@/admin/AlarmRulesAdmin";
 import { UsersAdmin } from "@/admin/UsersAdmin";
@@ -116,6 +118,22 @@ export function AppRoutes(): JSX.Element {
           element={
             <RequirePermission permission="plant.manage">
               <OnboardingWizard />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="/admin/clients"
+          element={
+            <RequirePermission permission="system.admin">
+              <ClientsAdmin />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="/admin/plant-setup"
+          element={
+            <RequirePermission permission="plant.manage">
+              <PlantEditor />
             </RequirePermission>
           }
         />

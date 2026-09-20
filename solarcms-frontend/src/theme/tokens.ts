@@ -16,6 +16,7 @@ export type TokenName =
   | "surface-sunken"
   | "line"
   | "line-soft"
+  | "line-strong"
   | "ink"
   | "ink-muted"
   | "ink-faint"
@@ -50,6 +51,7 @@ const FALLBACK: Record<string, string> = {
   "--c-surface-sunken": "244 247 245",
   "--c-line": "229 234 231",
   "--c-line-soft": "238 242 240",
+  "--c-line-strong": "202 212 205",
   "--c-ink": "16 26 21",
   "--c-ink-muted": "88 103 97",
   "--c-ink-faint": "141 152 143",

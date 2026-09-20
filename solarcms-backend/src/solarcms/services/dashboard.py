@@ -156,6 +156,7 @@ async def gather(
 
     device_rows = (await session.execute(text("""
         SELECT d.id, d.code, dt.code AS device_type_code, dt.in_power_path,
+               d.sld_stage_override,
                COALESCE(h.comm_status, 'unknown') AS comm_status
           FROM devices d
           JOIN device_models dm ON dm.id = d.device_model_id
@@ -211,6 +212,7 @@ async def gather(
                 values=values,
                 online=row.comm_status == "online",
                 in_power_path=row.in_power_path,
+                sld_stage_override=row.sld_stage_override,
             )
         )
 

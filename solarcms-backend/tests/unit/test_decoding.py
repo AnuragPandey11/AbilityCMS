@@ -103,6 +103,19 @@ class TestCoerceValue:
         # Every value on the client's broker arrives as a JSON string.
         assert coerce_value(raw) == expected
 
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("TRUE", 1.0), ("FALSE", 0.0), ("true", 1.0), ("false", 0.0),
+         (" TRUE ", 1.0)],
+    )
+    def test_digital_inputs_arrive_as_quoted_booleans(
+        self, raw: object, expected: float
+    ) -> None:
+        # This broker sends a contact as the string "TRUE"/"FALSE", not a JSON
+        # boolean. All twelve VCB signals are contacts, so without this the
+        # Device decodes nothing while looking perfectly healthy.
+        assert coerce_value(raw) == expected
+
     @pytest.mark.parametrize("raw", ["", "abc", None, [], {}, "12,5"])
     def test_rejects_unreadable_values(self, raw: object) -> None:
         assert coerce_value(raw) is None

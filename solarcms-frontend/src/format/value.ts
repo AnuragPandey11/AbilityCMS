@@ -131,6 +131,60 @@ export function formatCompact(value: number | null | undefined): string {
 }
 
 /**
+ * Above this magnitude a headline figure is rendered compactly.
+ *
+ * A million, not a hundred thousand, and the reason is the suffix rather than
+ * the width: compacting at 100,000 produces `100k`, and a lowercase `k` sitting
+ * next to `kWh` is one character away from the unit it is not. Starting at a
+ * million means the only suffixes ever produced are M, B and T — none of which
+ * collides with an SI prefix the client's schedule uses.
+ *
+ * `999,999` still renders in full at seven characters, which fits every tile in
+ * the app at full type size. Below the threshold nothing changes at all, so the
+ * common case — a power reading, a percentage, a Device count — is untouched.
+ */
+export const COMPACT_ABOVE = 1_000_000;
+
+/**
+ * A headline figure for a tile.
+ *
+ * ⚠ **This is a change of numeral, never a change of unit.** `1,241,466 kWh`
+ * becomes `1.24M kWh` — still kWh, with the unit string the API supplied passed
+ * through untouched. It must never become `1,241.47 MWh`: rescaling a value
+ * against a unit the backend did not state is the factor-of-1000 error §4.1 and
+ * Guardrail 2 exist to prevent, and the client's own schedule already mixes kWh
+ * and MWh inside a single Device (OPEN-15).
+ *
+ * The exact value travels alongside so the caller can put it on the tooltip. A
+ * compacted figure is a *rounded* one, and an operator quoting a number in a
+ * support conversation needs the digits.
+ */
+export function formatHeadline(
+  value: number | null | undefined,
+): { text: string; exact: string; compacted: boolean } {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return { text: UNDEFINED_DISPLAY, exact: UNDEFINED_DISPLAY, compacted: false };
+  }
+  const exact = formatNumber(value);
+  if (Math.abs(value) < COMPACT_ABOVE) {
+    return { text: exact, exact, compacted: false };
+  }
+  // Two fraction digits, so a fleet total keeps three significant figures
+  // (`1.24M`) rather than collapsing to `1.2M` and losing 40,000 kWh of
+  // resolution on a screen somebody reads as a daily total.
+  //
+  // ⚠ Uppercased, because `en-GB` compact notation emits a lowercase `m` and
+  // `1.24m kWh` reads as *milli*-something to exactly the audience this is for.
+  const text = Intl.NumberFormat("en-GB", {
+    notation: "compact",
+    maximumFractionDigits: 2,
+  })
+    .format(value)
+    .toUpperCase();
+  return { text, exact, compacted: true };
+}
+
+/**
  * A one-line note naming the provisional formula behind a figure.
  *
  * Every KPI is provisional until the client supplies theirs and figures will be

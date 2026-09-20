@@ -1,6 +1,6 @@
 # SolarCMS Backend — Build Specification
 
-**Version:** 1.5 · **Date:** 17 September 2026
+**Version:** 1.9 · **Date:** 19 September 2026
 **Audience:** an engineering agent implementing the backend from scratch.
 
 ---
@@ -247,6 +247,9 @@ Migration order:
 | `0007` | Reporting, audit |
 | `0008` | RLS policies and helper functions (last — needs all tables present) |
 | `0021` | `dashboard_slots` + `dashboard_slot_candidates` (platform catalogue), `plant_dashboard_slot_overrides` (Client-owned, RLS), `device_table_columns`, and `device_types.sld_stage` |
+| `0024` | `plant_collectors` — the one outward edge an enclosure owns (plant, code, `parent_device_id`, note). NOT a Device: no Model, no Tags, no topic. Membership stays `devices.collector_code`; a Collector needs no row here to exist, so the table is sparse and joins are LEFT |
+| `0023` | Real-time aggregation on all four tiers (`materialized_only = false`). ⚠ Behaviour, not shape: the helper's `real_time=True` had been silently ineffective since TimescaleDB 2.13 flipped the default, leaving `agg_1h` ~2.5 h stale through the hierarchical cascade |
+| `0022` | `devices.collector_code` — the Collector as a *name* on the Device, because it is an enclosure and not a Device (MASTER §3.4). Partial index on `(plant_id, collector_code)`; a CHECK forbidding a blank name |
 
 **`regions` and `blocks` are fully in scope.** The hierarchy is confirmed (MASTER §2.1) and Block semantics are defined (MASTER §2.1.1). Build them with working business logic.
 
@@ -353,7 +356,12 @@ USING (
 
 ```
 scms/v1/{client_code}/{plant_code}/{collector_code}/{device_code}
+scms/v1/{client_code}/{plant_code}/{device_code}
 ```
+
+Both shapes are registered rows in `topic_patterns`, matched by segment count. **The Collector is optional** (CONFIRMED, 19 Sep 2026): it names the enclosure a set of Devices sits in — an MCR, an ICR, a panel — and plenty of equipment sits in none. A Device matched on the five-segment shape is recorded with `collector_code` NULL, which is a real answer and not a gap.
+
+A Collector is **never a Device**. It publishes nothing, so it has no topic of its own; it carries no current, so it has no place in the electrical tree. `devices.collector_code` holds the segment as a name, and the diagram draws it as an outline around the Devices that share it. Registering it as a Device — which commissioning did until migration 0022 — puts a room in the Single Line Diagram between the Inverters and the meter.
 
 The ingest worker subscribes to `scms/v1/#` with QoS 1 and a persistent session (`clean_session=false`, fixed `client_id`) so a restart replays anything missed.
 
@@ -477,11 +485,11 @@ async def acknowledge(
 | GET/POST/PATCH | `/clients` `/clients/{id}` | `system.admin` | Super Admin only. `POST` takes a **JSON body**, not query parameters (a GSTIN or contact email in a query string lands in every access log and proxy cache). Body carries the ⚠ PROPOSED commercial fields — `client_number`, `gst_number`, `contact_email`, `contract_start_date`, `contract_valid_days` — all optional (migration 0019, MASTER OPEN-20). The route resolves `contract_valid_days` to a stored `contract_valid_till` **date**; `PATCH` takes that date directly, since renewal is "it now runs to this date". A re-used `client_number` is a 409, not a 500. BUILT |
 | GET | `/regions` | any authenticated | Catalogue — every Client reads it. BUILT |
 | POST/PATCH | `/regions` `/regions/{id}` | `system.admin` | Codes ISO 3166-2 (`IN-UP`). Migration 0018 grants the API INSERT/UPDATE; 0008 gave SELECT only, so no Region could be created through the API. BUILT |
-| GET | `/plants` | `dashboard.view` | RLS-filtered. Paginated, sortable, filterable |
-| POST/PATCH | `/plants` `/plants/{id}` | `plant.manage` | `client_id` comes from the token, never the body (I-9). Both accept `device_counts` as a **map of Device Type code → planned count**, validated against the seeded `device_types` (an unknown code is a 422), never a field per Type. On `PATCH` the map **replaces** the set: `{}` clears it, omitting the key leaves it alone. BUILT |
+| GET | `/plants` | `dashboard.view` | RLS-filtered. Paginated, sortable, filterable. Each row carries `client_id`/`client_code`/`client_name`, and an optional `?client_id=` narrows the list. ⚠ A filter, never a grant: it ANDs with the policy, so a Client Admin passing another Client's id gets an empty page. `client_code`/`client_name` may be null where the Client row itself is unreadable (a Guest on a non-demonstration Client), which is why the join is LEFT — an inner join would turn a label into an access control. BUILT |
+| POST/PATCH | `/plants` `/plants/{id}` | `plant.manage` | **A Plant is filed under a Client before it exists.** For a Client Admin, `client_id` comes from the token and any value in the body is *ignored* — not validated, ignored — so they cannot file a Plant under another Client (I-9). A Super Admin belongs to no Client, so `client_id` in the body is **required** and checked to exist; without it the request is a 422 naming what is missing. (It used to be omitted entirely, which meant a Super Admin had to switch the session into a Client first and the Plant landed under whichever Client that happened to be.) Both accept `device_counts` as a **map of Device Type code → planned count**, validated against the seeded `device_types` (an unknown code is a 422), never a field per Type. On `PATCH` the map **replaces** the set: `{}` clears it, omitting the key leaves it alone. BUILT |
 | GET | `/plants/{id}` | `dashboard.view` | Detail + current KPIs. Also returns `device_counts`: per Device Type, the ⚠ PROPOSED `planned_count` beside the live `registered_count`, so commissioning progress is the gap between them (migration 0019, MASTER OPEN-21). BUILT |
-| GET | `/plants/{id}/kpis` | `dashboard.view` | `?period=today\|month\|year\|lifetime` |
-| GET | `/plants/{id}/sld` | `dashboard.view` | Power-path tree only (`in_power_path = true`) |
+| GET | `/plants/{id}/kpis` | `dashboard.view` | `?period=today\|month\|year\|lifetime`. The aggregate tier is chosen by `domain/tiering.select_tier`, never hardcoded — a day range resolves to `agg_1m`, so the figure an operator watches is served from one bucket above raw rather than from the slowest tier in the cascade. Returned as `source_tier` for provenance. BUILT |
+| GET | `/plants/{id}/sld` | `dashboard.view` | Power-path tree only (`in_power_path = true`). Each node carries `collector_code`; `collectors` rolls the Plant's enclosures up with their members, power-path and not, so the caller can label the outlines without walking the tree. A Collector is never a node. BUILT |
 | GET | `/plants/{id}/dashboard` | `dashboard.view` | The fixed dashboard, resolved. Same panels and positions on every Plant; only the Device that answered each slot differs, and that provenance travels with the value. `undefined_reason` distinguishes `no_source` (a commissioning gap) from `no_value` (an instrument gone quiet) — never 0.0 for either. BUILT |
 | GET | `/plants/{id}/sld-stages` | `dashboard.view` | The four-stage schematic: **PV Array → Inverters → Transformer → Grid**, always those four in that order. A stage with no Devices renders `instrumented: false`. `unstaged` lists power-path Devices whose Type has no `sld_stage` — a catalogue gap, reported rather than silently dropped. BUILT |
 | GET | `/catalog/device-table-columns` | `dashboard.view` | The curated columns of a per-Device summary table, by Device Type — not everything a Device publishes. BUILT |
@@ -489,7 +497,11 @@ async def acknowledge(
 | GET | `/plants/{id}/blocks` | `dashboard.view` | Blocks with their own KPIs. Empty array when the Plant has none |
 | POST/PATCH/DELETE | `/plants/{id}/blocks` `/blocks/{id}` | `plant.manage` | Client Admin permitted |
 | GET | `/blocks/{id}/kpis` | `dashboard.view` | Same periods as Plant KPIs, scaled to `blocks.capacity_kwp` |
-| GET | `/plants/{id}/devices` | `dashboard.view` | `?block_id=` filters to one Block |
+| GET | `/discovery/clients` | `system.admin` | Client codes seen on the broker, with plant codes and whether each is registered. Reads `mqtt_raw_v`, never MQTT — Guardrail 3. BUILT |
+| GET | `/discovery/plants` | `system.admin` | `?client_code=` — Plants under that code with their Collectors, Devices and registration state. BUILT |
+| GET | `/discovery/topic` | `system.admin` | `?topic=&device_type_code=` — the latest payload, the flat form ingest would decode, the observed keys with suggested Tags, the **measured** publish interval, and whether a Device is registered for it now. BUILT |
+| DELETE | `/devices/{id}` | `plant.manage` | Refuses a Device with stored Readings unless `?force=true`, because `readings` has no foreign key and deleting would strand them under an unresolvable id. Decommissioning is the alternative that keeps history. BUILT |
+| GET | `/plants/{id}/devices` | `dashboard.view` | `?block_id=` filters to one Block. Returns enough per row to answer “what is this thing” without a second request — the three groupings plus `collector_code`, the Model, the serial, the capacity, the string count, the health figures and the binding count — because the diagram opens a Device's full record on click and a round trip per click makes it feel broken. BUILT |
 | GET | `/devices/{id}` | `dashboard.view` | Includes Device Health |
 | POST | `/devices` `/devices/bulk-import` | `plant.manage` | CSV import |
 | GET/PUT | `/devices/{id}/bindings` | `config.modify` | |
@@ -846,3 +858,22 @@ Violating any of these breaks something recorded as confirmed in MASTER_SPECIFIC
 12. **Never** write a threshold rule against a Device Type that publishes only Digital
     Inputs. `TRANSFORMER` and `VCB` have no analogue value to compare.
 13. **Never** put a Block in the Single Line Diagram, and never nest Blocks. A Block says *where*; `parent_device_id` says *what it is wired into*. These are different questions.
+14. **Never** register a Collector as a Device, and never draw one as a node. A
+    Collector is an enclosure — an MCR, an ICR, a panel. It publishes nothing and
+    carries no current, so a node for it claims the plant is wired through a room.
+    It is a name on the Devices inside it (`devices.collector_code`), drawn as an
+    outline around them, and **an outline may never enclose a Device that is not in
+    it** — split the group into several outlines rather than swallow a stranger.
+15. **Never** wire a Device inside a Collector to one outside it, or to one in a
+    different Collector. The enclosure's outward connection belongs to the
+    enclosure (`plant_collectors.parent_device_id`, migration 0024). Hierarchy
+    *within* a Collector is fine and expected.
+16. **Never** let anything but the topic decide which Collector a Device is in.
+    A six-segment topic names the enclosure; a five-segment one states there is
+    none. A Device outside a Collector cannot be put inside it, and one inside
+    cannot be moved out or across (`domain/decoding.collector_in_topic`). The
+    only editable case is a Device with no topic yet; a `PLANT_KPI` panel is
+    excluded even then, being synthetic.
+17. **Never** draw a wire from a Collector to the Devices inside it. Containment
+    is what the box says; a wire per occupant would claim one cable each where
+    the whole point is that the room has one.

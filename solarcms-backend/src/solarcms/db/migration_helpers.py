@@ -66,14 +66,34 @@ def enable_compression(table: str, segment_by: str, compress_after: str) -> None
 
 
 def create_continuous_aggregate(name: str, select_sql: str, *, real_time: bool = True) -> None:
-    """Create a continuous aggregate, or a plain materialised view without Timescale."""
+    """Create a continuous aggregate, or a plain materialised view without Timescale.
+
+    `real_time=True` unions the materialised buckets with a live aggregation
+    over whatever the refresh policy has not covered yet, so the view is current
+    to the second while the policy keeps its conservative `end_offset`.
+
+    ⚠ **The flag is written in both directions, deliberately.** It used to be
+    written only for `real_time=False`, leaving the `True` case to TimescaleDB's
+    default — and that default flipped: through 2.12 an aggregate was created
+    `materialized_only = false`, from 2.13 it is created `true`. Every tier in
+    0005 asked for real-time, got materialised-only on 2.13+, and — because the
+    cascade is hierarchical — compounded into a ~2.5 h lag on the hourly tier
+    that reached the dashboard as stale KPIs. Migration 0023 corrected the
+    existing views; this stops a fresh deployment reintroducing it.
+
+    The lesson generalises: a helper must never express intent by *omitting* a
+    setting, because an omission cannot be distinguished from a default that
+    later changes underneath it.
+    """
     if timescale_available():
         op.execute(
             f"CREATE MATERIALIZED VIEW {name} WITH (timescaledb.continuous) AS "
             f"{select_sql} WITH NO DATA"
         )
-        if not real_time:
-            op.execute(f"ALTER MATERIALIZED VIEW {name} SET (timescaledb.materialized_only = true)")
+        op.execute(
+            f"ALTER MATERIALIZED VIEW {name} SET "
+            f"(timescaledb.materialized_only = {'false' if real_time else 'true'})"
+        )
     else:
         op.execute(f"CREATE MATERIALIZED VIEW {name} AS {select_sql} WITH NO DATA")
 

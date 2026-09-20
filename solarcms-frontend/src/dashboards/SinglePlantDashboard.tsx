@@ -53,6 +53,7 @@ import { timezoneLabel } from "@/format/datetime";
 import { useSelection } from "@/state/selection";
 import { usePlantScope } from "@/state/usePlantScope";
 import { useLiveSocket } from "@/live/LiveSocket";
+import { useLiveRefresh } from "@/live/useLiveRefresh";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
 import type { DeviceListItem } from "@/api/schemas";
 
@@ -61,6 +62,12 @@ export function SinglePlantDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
 
   const plantQuery = usePlant(plantId);
+  // The slots and KPI tiles refetch when this Plant's readings actually arrive,
+  // rather than on a timer that fires whether or not anything happened. The
+  // server still computes every figure, with its provenance — the socket only
+  // says "there is something new to ask for".
+  useLiveRefresh(plantId);
+
   const kpisQuery = usePlantKpis(plantId, period);
   const dashboardQuery = usePlantDashboard(plantId);
   const columnsQuery = useDeviceTableColumns();

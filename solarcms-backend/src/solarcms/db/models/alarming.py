@@ -89,6 +89,11 @@ class Alarm(Base):
     # NULL for an Alarm raised about a topic that resolved to no Device at all.
     device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
     plant_id: Mapped[int | None] = mapped_column(BigInteger)
+    # What this Alarm is about when it is not about a Device: a Collector name,
+    # a topic, or a Plant. Deduplicated by a second partial unique index on
+    # (rule_id, plant_id, subject) WHERE device_id IS NULL — without it every
+    # sweep would re-open the same Collector failure and re-notify (0025).
+    subject: Mapped[str | None] = mapped_column(String(255))
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     severity: Mapped[str] = mapped_column(String(16), nullable=False)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -100,6 +105,74 @@ class Alarm(Base):
     # 'communication' vs 'equipment' — kept separate per tender §18.
     classification: Mapped[str | None] = mapped_column(String(32))
     escalation_level: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class MaintenanceWindow(Base):
+    """Planned work, so that it does not read as failure.
+
+    Two consequences, and the second is the one that costs money: while a window
+    is open no absence Alarm is raised for what it covers, and the period is
+    excluded from availability. Without it, routine maintenance degrades the
+    figure a performance guarantee is paid against — the Plant is penalised for
+    being serviced.
+
+    `ends_at` NULL is work that has begun and has not been closed off. It
+    suppresses indefinitely, which is why an open window is shown prominently
+    rather than left to be forgotten.
+    """
+
+    __tablename__ = "maintenance_windows"
+    __table_args__ = (
+        CheckConstraint("ends_at IS NULL OR ends_at > starts_at",
+                        name="maintenance_window_ends_after_start"),
+        CheckConstraint("length(btrim(reason)) > 0",
+                        name="maintenance_window_reason_not_blank"),
+        Index("ix_maintenance_windows_plant", "plant_id", "starts_at"),
+    )
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    plant_id: Mapped[int] = mapped_column(
+        ForeignKey("plants.id", ondelete="CASCADE"), nullable=False
+    )
+    # NULL means the whole Plant — a grid outage or a shutdown, not one machine.
+    device_id: Mapped[int | None] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE")
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Required: an unexplained exclusion is what an auditor challenges.
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = created_at()
+
+
+class DiscoveryIgnoredTopic(Base):
+    """A topic dismissed from discovery, so a retired shape stops being offered.
+
+    Raw history is kept 90 days and discovery looks back 7, so a topic the client
+    migrated away from keeps presenting itself as equipment awaiting registration
+    for a week after it died. Registering one produces a Device that never
+    reports — indistinguishable, on every screen, from broken equipment.
+    """
+
+    __tablename__ = "discovery_ignored_topics"
+    __table_args__ = (UniqueConstraint("topic", name="uq_discovery_ignored_topics_topic"),)
+
+    id: Mapped[int] = pk()
+    # NULL where the topic is under a Client that is not registered — which is
+    # exactly when discovery matters most, so it must be dismissable too.
+    client_id: Mapped[int | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE")
+    )
+    # Exact and case-sensitive: the topic is the identity, and two topics
+    # differing only in case are two origins (Guardrail 5).
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = created_at()
 
 
 class EscalationPolicy(Base):

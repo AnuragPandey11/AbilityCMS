@@ -16,7 +16,7 @@
  */
 
 import type { ResolvedSlot, SlotSource } from "@/api/schemas";
-import { UNDEFINED_DISPLAY, formatNumber } from "@/format/value";
+import { UNDEFINED_DISPLAY, formatHeadline, formatNumber } from "@/format/value";
 import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 
@@ -94,6 +94,12 @@ function Provenance({ slot }: { slot: ResolvedSlot }): JSX.Element | null {
 export function SlotTile({ slot }: { slot: ResolvedSlot }): JSX.Element {
   const isUndefined = slot.value === null;
   const explanation = undefinedExplanation(slot);
+  // A ratio is three decimals and always short; a quantity can be a lifetime
+  // energy counter, which is compacted rather than scaled down to fit. The unit
+  // the backend supplied is passed through untouched either way (§4.1).
+  const headline =
+    slot.unit === "ratio" ? null : formatHeadline(slot.value);
+  const text = headline ? headline.text : slotText(slot);
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
       <div className="flex items-center text-xs uppercase tracking-wide text-ink-muted">
@@ -104,7 +110,7 @@ export function SlotTile({ slot }: { slot: ResolvedSlot }): JSX.Element {
       </div>
       <div className="mt-1">
         <FittedFigure
-          value={slotText(slot)}
+          value={text}
           unit={isUndefined ? null : slot.unit}
           className={`font-mono text-2xl ${isUndefined ? "text-ink-faint" : "text-ink"}`}
           title={isUndefined ? explanation : String(slot.value)}

@@ -49,6 +49,11 @@ export const MePlantSchema = z.object({
 export const MeSchema = z.object({
   user_id: z.number(),
   client_id: z.number().nullable(),
+  // The Client's own name, so a screen can say whose data it shows without
+  // calling `GET /clients`, which is Super Admin only. Null for a platform
+  // administrator, who is a member of no Client.
+  client_code: z.string().nullable().catch(null),
+  client_name: z.string().nullable().catch(null),
   role: z.string().nullable(),
   platform_admin: z.boolean(),
   // A-4. Gate on these, never on `role` (Guardrail 5).
@@ -162,6 +167,16 @@ export const PlantListItemSchema = z.object({
   dc_capacity_kwp: nullableNumeric(),
   region_code: z.string().nullable(),
   device_count: z.number(),
+  // Every Plant belongs to exactly one Client. Carried on the row rather than
+  // fetched per Plant, because a Super Admin sees several Clients' Plants in
+  // one list and "whose is this" is the first question they ask of it.
+  //
+  // `client_code` and `client_name` can be null where the Client row itself is
+  // not readable — a Guest on a non-demonstration Client can see the Plant and
+  // not the Client. The id is always present; the label is not.
+  client_id: z.number(),
+  client_code: z.string().nullable().catch(null),
+  client_name: z.string().nullable().catch(null),
 });
 export type PlantListItem = z.infer<typeof PlantListItemSchema>;
 
@@ -188,6 +203,11 @@ export const PlantDetailSchema = z
     region_code: z.string().nullable(),
     grid_factor: nullableNumeric(),
     commissioned_on: z.string().nullable(),
+    client_id: z.number().nullable().catch(null),
+    // Needed by broker discovery, which is keyed on what the topic says rather
+    // than on our ids. Nullable where the Client row itself is unreadable.
+    client_code: z.string().nullable().catch(null),
+    client_name: z.string().nullable().catch(null),
   })
   .passthrough();
 export type PlantDetail = z.infer<typeof PlantDetailSchema>;
@@ -256,15 +276,49 @@ export const DeviceListItemSchema = z.object({
   block_id: z.number().nullable(), // where it is — geographic
   parent_device_id: z.number().nullable(), // what it feeds — electrical (the SLD)
   reports_via_device_id: z.number().nullable(), // what transmits it — communication
+  /**
+   * The enclosure this Device sits in — an MCR, an ICR, a panel. Named by the
+   * `{collector_code}` segment of the topic.
+   *
+   * ⚠ A Collector is **not a Device** and must never be drawn as one. It is a
+   * box drawn *around* the Devices that share this value; nothing in the
+   * electrical chain passes through it. `null` is a real answer, not a gap:
+   * the five-segment topic shape has no Collector, and that equipment sits in
+   * no enclosure at all.
+   */
+  collector_code: z.string().nullable().catch(null),
   source_address: z.string().nullable(),
   // Health thresholds multiply this, so it is shown wherever health is shown.
   expected_interval_s: z.number(),
   type_code: z.string(),
   in_power_path: z.boolean(),
+  /**
+   * Which of the four SLD stages this Device's Type folds into, and the
+   * accepted per-Device correction where one exists.
+   *
+   * The schematic uses them to break ties by electrical position. Ordering ties
+   * alphabetically by type code — which is what it used to do — put a
+   * settlement meter upstream of the transformer on an unwired Plant, because
+   * `MFM` sorts before `TRANSFORMER`.
+   */
+  sld_stage: z.string().nullable().optional().catch(null),
+  sld_stage_override: z.string().nullable().optional().catch(null),
   variant: z.string().nullable(),
   comm_status: CommStatusSchema.nullable(),
   last_seen_at: z.string().nullable(),
   frozen_tag_count: z.number().nullable(),
+  // Enough to answer "what is this thing" from the list alone. The diagram
+  // shows a Device's detail on click, and a second request per click would
+  // make a panel that is meant to feel instant take a network round trip.
+  type_name: z.string().nullable().optional().catch(null),
+  model_code: z.string().nullable().optional().catch(null),
+  manufacturer: z.string().nullable().optional().catch(null),
+  serial_number: z.string().nullable().optional().catch(null),
+  installed_on: z.string().nullable().optional().catch(null),
+  rated_capacity_kw: nullableNumeric().optional(),
+  string_count: z.number().nullable().optional().catch(null),
+  completeness_24h: nullableNumeric().optional(),
+  binding_count: z.number().nullable().optional().catch(null),
 });
 export type DeviceListItem = z.infer<typeof DeviceListItemSchema>;
 
@@ -353,6 +407,8 @@ export interface SldNodeData {
   name: string;
   type: string;
   variant: string | null;
+  /** The enclosure this Device sits in. A box around the node, never a node. */
+  collector_code: string | null;
   children: SldNodeData[];
 }
 
@@ -363,6 +419,13 @@ export const SldNodeSchema: z.ZodType<SldNodeData> = z.lazy(() =>
     name: z.string(),
     type: z.string(),
     variant: z.string().nullable(),
+    // The enclosure, drawn as a box around this node — never as a node.
+    //
+    // No `.catch()` here, unlike everywhere else: this schema is recursive and
+    // annotated `z.ZodType<SldNodeData>`, and a catch widens the *input* type
+    // to `unknown`, which no longer matches the interface. The server always
+    // sends the field, so leniency would buy nothing.
+    collector_code: z.string().nullable(),
     children: z.array(SldNodeSchema),
   }),
 );
@@ -373,12 +436,47 @@ export const SldSchema = z.object({
   device_count: z.number(),
   // Not an error: a Weather Station and a PPC are real, monitored Devices that
   // carry no current. They belong in a side panel, not the tree (§6.4).
+  // ⚠ Still absent from the electrical *tree* — a Weather Station has no
+  // `parent_device_id` story and inventing one would corrupt the diagram
+  // (MASTER §2.3). What changed is that the renderer now *draws* them, unwired
+  // and visually distinct, rather than hiding them in a side panel. They are
+  // placed inside their collector's box when they have one, which is how a WMS
+  // in the MCR becomes visible as being in the MCR.
   excluded_not_in_power_path: z.array(
-    z.object({ device_id: z.number(), code: z.string(), type: z.string() }),
+    z.object({
+      device_id: z.number(),
+      code: z.string(),
+      name: z.string().nullable().optional().catch(null),
+      type: z.string(),
+      variant: z.string().nullable().optional().catch(null),
+      collector_code: z.string().nullable().optional().catch(null),
+    }),
   ),
   // A data problem worth surfacing — dropping these makes the diagram claim the
   // Plant has less equipment than it does.
   orphaned: z.array(z.object({ device_id: z.number(), code: z.string() })),
+  // Every enclosure at this Plant and what is in it — including Devices that
+  // carry no current, because a Collector holding one Inverter and one Weather
+  // Station is still one box in the room.
+  collectors: z
+    .array(
+      z.object({
+        code: z.string(),
+        device_ids: z.array(z.number()),
+        device_count: z.number(),
+        in_power_path_count: z.number(),
+        /**
+         * What the enclosure feeds into — the single edge the box owns.
+         *
+         * A Collector is not a Device, so this is the only connection it can
+         * have, and it is drawn once from the box's border rather than once
+         * per occupant. `null` means nobody has recorded it yet, which is
+         * every Collector the moment it first appears on the broker.
+         */
+        parent_device_id: z.number().nullable().catch(null),
+      }),
+    )
+    .catch([]),
 });
 export type Sld = z.infer<typeof SldSchema>;
 

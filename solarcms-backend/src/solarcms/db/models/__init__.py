@@ -4,9 +4,11 @@ from solarcms.db.base import Base
 from solarcms.db.models.alarming import (
     Alarm,
     AlarmRule,
+    DiscoveryIgnoredTopic,
     EscalationPolicy,
     EscalationStep,
     IncidentSnapshot,
+    MaintenanceWindow,
     NotificationLog,
     NotificationSubscription,
 )
@@ -39,8 +41,10 @@ from solarcms.db.models.telemetry import MqttRaw, Reading
 __all__ = [
     "Alarm", "AlarmRule", "AuditLog", "Base", "Block", "BrokerCredential", "Client",
     "Dashboard", "Device", "DeviceHealth", "DeviceHealthEvent", "DeviceModel",
-    "DeviceModelTag", "DeviceTagBinding", "DeviceType", "EscalationPolicy",
-    "EscalationStep", "IncidentSnapshot", "Membership", "MqttRaw", "NotificationLog",
+    "DeviceModelTag", "DeviceTagBinding", "DeviceType", "DiscoveryIgnoredTopic",
+    "EscalationPolicy",
+    "EscalationStep", "IncidentSnapshot", "MaintenanceWindow", "Membership", "MqttRaw",
+    "NotificationLog",
     "NotificationSubscription", "Permission", "Plant", "Reading", "Region",
     "ReportDefinition", "ReportRun", "ReportSchedule", "Role", "RolePermission", "Tag",
     "TopicPatternRow", "User", "UserDashboardAccess", "UserPlantAccess",

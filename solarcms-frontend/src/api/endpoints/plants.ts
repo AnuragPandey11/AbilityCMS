@@ -25,6 +25,13 @@ export interface ListPlantsParams {
   limit?: number;
   cursor?: string | null;
   status?: string | null;
+  /**
+   * Narrow to one Client. A filter, never a grant: it ANDs with the row-level
+   * policy, so passing another Client's id returns an empty page rather than
+   * their Plants. It exists because a Super Admin sees every Client's Plants in
+   * one list and needs to separate them.
+   */
+  clientId?: number | null;
 }
 
 /** Cursor-paginated. Follow `next_cursor`; never construct an offset (§6.2). */
@@ -36,18 +43,21 @@ export async function listPlants(
       limit: params.limit ?? 50,
       cursor: params.cursor ?? undefined,
       status: params.status ?? undefined,
+      client_id: params.clientId ?? undefined,
     },
   });
   return parse(PlantPageSchema, body, "GET /plants");
 }
 
 /** Walk every page. Portfolio is computed from these, never stored (§6.1). */
-export async function listAllPlants(): Promise<PlantPage["items"]> {
+export async function listAllPlants(
+  params: Omit<ListPlantsParams, "limit" | "cursor"> = {},
+): Promise<PlantPage["items"]> {
   const out: PlantPage["items"] = [];
   let cursor: string | null = null;
   // Bounded: at the F-2 ceiling this terminates long before the guard bites.
   for (let page = 0; page < 100; page += 1) {
-    const result: PlantPage = await listPlants({ limit: 200, cursor });
+    const result: PlantPage = await listPlants({ ...params, limit: 200, cursor });
     out.push(...result.items);
     if (!result.next_cursor) break;
     cursor = result.next_cursor;
@@ -115,9 +125,54 @@ export async function plantSld(plantId: number): Promise<Sld> {
  */
 export type DeviceCounts = Record<string, number>;
 
+/**
+ * Read a topic the way ingest will, before any Device is registered for it.
+ *
+ * The topic is written and published *before* we onboard, so registering a
+ * Device should mean pasting the one the engineers configured and being told
+ * what it means — not retyping its parts into four boxes and hoping they match.
+ *
+ * Requires `plant.manage`, not `system.admin`: it returns only the structure of
+ * a string the caller typed, so it carries none of the isolation concerns that
+ * keep broker *discovery* Super-Admin-only. This is the path that lets a Client
+ * Admin register their own equipment — including equipment that has not started
+ * publishing yet.
+ */
+export interface ParsedTopic {
+  topic: string;
+  matched: boolean;
+  client_code: string | null;
+  plant_code: string | null;
+  /** `null` is a real answer — the five-segment shape has no enclosure. */
+  collector_code: string | null;
+  device_code: string | null;
+  already_registered_device_id: number | null;
+  /** Human-readable reasons this topic cannot be used, in order of severity. */
+  problems: string[];
+  usable: boolean;
+}
+
+export async function parseTopic(
+  plantId: number,
+  topic: string,
+): Promise<ParsedTopic> {
+  return (await request(`/plants/${plantId}/parse-topic`, {
+    params: { topic },
+  })) as ParsedTopic;
+}
+
 export interface PlantCreate {
   code: string;
   name: string;
+  /**
+   * Which Client this Plant belongs to.
+   *
+   * Required for a Super Admin, who belongs to no Client and so cannot have one
+   * inferred — the API refuses the request with a 422 rather than guessing.
+   * **Ignored** for a Client Admin, whose Client comes from their session and
+   * nothing else, so they cannot file a Plant under someone else (I-9).
+   */
+  client_id?: number | null;
   region_code?: string | null;
   ac_capacity_kw?: number | null;
   dc_capacity_kwp?: number | null;
@@ -228,4 +283,82 @@ export async function changePlantStatus(
 export async function plantDashboard(plantId: number): Promise<PlantDashboard> {
   const body = await request(`/plants/${plantId}/dashboard`);
   return parse(PlantDashboardSchema, body, `GET /plants/${plantId}/dashboard`);
+}
+
+/**
+ * Every enclosure at this Plant, with what it holds and what it feeds into.
+ *
+ * ⚠ A Collector is **not a Device** (Guardrail 12). It has no Model, no Tags,
+ * no topic and no Readings, it never appears in a Device list, and it is drawn
+ * as a box *around* its occupants rather than as a node in the chain. The one
+ * thing that can be said about it beyond its name is the single outward edge it
+ * owns — which is what these two calls are for.
+ */
+export const PlantCollectorSchema = z.object({
+  code: z.string(),
+  device_count: z.number(),
+  in_power_path_count: z.number(),
+  /**
+   * What the room feeds into. `null` is a real answer, not missing data — it is
+   * the state of every Collector the moment it first appears on the broker.
+   */
+  parent_device_id: z.number().nullable().catch(null),
+  note: z.string().nullable().catch(null),
+});
+export type PlantCollector = z.infer<typeof PlantCollectorSchema>;
+
+/**
+ * What the write returns: the stored row, not the roll-up.
+ *
+ * Narrower than the listing on purpose — membership is derived from
+ * `devices.collector_code` and is not part of what was just written, so the PUT
+ * has no counts to report.
+ */
+export const CollectorEdgeSchema = z.object({
+  id: z.number(),
+  code: z.string(),
+  parent_device_id: z.number().nullable().catch(null),
+  note: z.string().nullable().catch(null),
+});
+export type CollectorEdge = z.infer<typeof CollectorEdgeSchema>;
+
+export async function listPlantCollectors(
+  plantId: number,
+): Promise<PlantCollector[]> {
+  const body = await request(`/plants/${plantId}/collectors`);
+  return parse(
+    z.array(PlantCollectorSchema),
+    body,
+    `GET /plants/${plantId}/collectors`,
+  );
+}
+
+/**
+ * Say what an enclosure feeds into — said once, on the box.
+ *
+ * Seventeen Inverters in an MCR do not each run a cable to the transformer; the
+ * room has one outgoing connection. Recorded per-Device that would be seventeen
+ * identical parents the reader has to notice are identical, and the server
+ * refuses it anyway: a Device inside a Collector may not point at one outside
+ * it, because that edge belongs to the room.
+ *
+ * `parentDeviceId = null` clears it. The Device chosen must sit outside this
+ * Collector — a box that fed one of its own occupants would be a ring drawn
+ * through a wall — and the server enforces that.
+ */
+export async function setCollectorParent(
+  plantId: number,
+  code: string,
+  parentDeviceId: number | null,
+  note?: string | null,
+): Promise<CollectorEdge> {
+  const body = await request(
+    `/plants/${plantId}/collectors/${encodeURIComponent(code)}`,
+    { method: "PUT", body: { parent_device_id: parentDeviceId, note: note ?? null } },
+  );
+  return parse(
+    CollectorEdgeSchema,
+    body,
+    `PUT /plants/${plantId}/collectors/${code}`,
+  );
 }

@@ -50,7 +50,10 @@ function byPosition(slots: ResolvedSlot[]): ResolvedSlot[] {
 export function KpiSlotRow({ slots }: { slots: ResolvedSlot[] }): JSX.Element | null {
   if (slots.length === 0) return null;
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+    // Stops at five across. Seven left roughly 100px of content per tile, so
+    // every headline figure ran permanently shrunk and the labels wrapped to two
+    // lines — a row that fits more tiles by making each one unreadable.
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
       {byPosition(slots).map((slot) => (
         <SlotTile key={slot.slot_code} slot={slot} />
       ))}

@@ -5,9 +5,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  COMPACT_ABOVE,
   UNDEFINED_DISPLAY,
   formatCapacity,
   formatDigital,
+  formatHeadline,
   formatKpi,
   formatRatioAsPercent,
   formatValue,
@@ -124,5 +126,55 @@ describe("quality codes (§4.2, Guardrail 4)", () => {
   it("summarises only the non-good codes present", () => {
     expect(summariseQuality([0, 0, 0]).length).toBe(0);
     expect(summariseQuality([0, 1, 1, 3]).map((d) => d.code)).toEqual([1, 3]);
+  });
+});
+
+describe("headline figures compact rather than shrink", () => {
+  it("leaves an ordinary figure exactly as it was", () => {
+    // The common case must be untouched: a power reading, a count, a
+    // percentage. Only a figure too long for a tile is rewritten.
+    const small = formatHeadline(6320.5);
+    expect(small.compacted).toBe(false);
+    expect(small.text).toBe(small.exact);
+    // 999,999 renders in full — seven characters fits every tile, and this is
+    // what keeps a lowercase `k` from ever appearing beside `kWh`.
+    expect(formatHeadline(COMPACT_ABOVE - 1).compacted).toBe(false);
+    expect(formatHeadline(999_999).text).toBe("999,999");
+  });
+
+  it("compacts a large figure and keeps the exact digits alongside", () => {
+    const big = formatHeadline(1_241_466);
+    expect(big.compacted).toBe(true);
+    expect(big.text).toBe("1.24M");
+    // Uppercase: a lowercase `m` beside `kWh` reads as milli.
+    expect(big.text).not.toContain("m");
+    // A compacted figure is a rounded one, so the exact value must survive for
+    // the tooltip — an operator quoting a total needs the digits.
+    expect(big.exact).toBe("1,241,466");
+  });
+
+  it("never rescales the value against a different unit (§4.1, Guardrail 2)", () => {
+    // 1,241,466 kWh may be shown as "1.24M kWh". It must never become
+    // "1,241.47 MWh": the unit the backend stated is the only one there is,
+    // and rescaling against another is the factor-of-1000 error OPEN-15 warns
+    // about. `formatHeadline` is therefore unit-blind — it takes no unit at all.
+    expect(formatHeadline.length).toBe(1);
+    const big = formatHeadline(1_241_466);
+    expect(big.text).not.toMatch(/M?Wh|k/i);
+  });
+
+  it("keeps an undefined figure a dash, never a compacted zero", () => {
+    for (const absent of [null, undefined, Number.NaN]) {
+      const result = formatHeadline(absent);
+      expect(result.text).toBe(UNDEFINED_DISPLAY);
+      expect(result.compacted).toBe(false);
+    }
+  });
+
+  it("compacts a large negative figure without losing its sign", () => {
+    // Import is a real negative on a settlement meter.
+    const negative = formatHeadline(-2_500_000);
+    expect(negative.compacted).toBe(true);
+    expect(negative.text.startsWith("-")).toBe(true);
   });
 });

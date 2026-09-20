@@ -6,12 +6,13 @@ tenant. `clients` is the unit of data isolation.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -42,6 +43,27 @@ class Client(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="onboarding")
     # I-6: a Guest may only be granted access to a Client flagged for demonstration.
     is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # ── Commercial identity ─────────────────────────────────────────────────
+    # ⚠ PROPOSED, not client-confirmed (migration 0019). Every column is
+    # nullable and nothing reads them in a formula, so if the real onboarding
+    # sheet names different fields this stays additive.
+    #
+    # These were added by 0019 and never mirrored here, which made
+    # `alembic revision --autogenerate` propose **dropping all five** — a
+    # migration that would have silently deleted every Client's GSTIN and
+    # contract dates. A column that exists in the database and not in the
+    # metadata is a column autogenerate believes has been deleted.
+    client_number: Mapped[str | None] = mapped_column(String(64))
+    gst_number: Mapped[str | None] = mapped_column(String(15))
+    # The organisation's commercial contact — NOT a login. A User signs in
+    # through `users.email`; this address has no account attached.
+    contact_email: Mapped[str | None] = mapped_column(String(320))
+    contract_start_date: Mapped[date | None] = mapped_column(Date)
+    # Stored as a date, though the form asks for a duration: a day count is
+    # stale the day after it is written, so the route resolves it once.
+    contract_valid_till: Mapped[date | None] = mapped_column(Date)
+
     created_at: Mapped[datetime] = created_at()
 
 

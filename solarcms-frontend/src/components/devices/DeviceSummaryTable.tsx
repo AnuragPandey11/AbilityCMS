@@ -18,6 +18,14 @@
  *
  * A Device reporting nothing shows "—", never 0 — zero is a claim about the
  * equipment and silence is the absence of one.
+ *
+ * The column count is configuration and therefore unbounded, so the table is
+ * given a minimum width and allowed to scroll inside its wrapper rather than
+ * compressing to fit. `w-full` alone could never overflow, which meant the
+ * `overflow-x-auto` around it had nothing to do and a Transformer table with
+ * ten configured columns crushed every one of them. The Device column stays put
+ * while the rest scrolls — a row of figures whose Device code has scrolled out
+ * of view identifies nothing.
  */
 
 import type { DeviceListItem, DeviceTableColumn } from "@/api/schemas";
@@ -53,10 +61,16 @@ export function DeviceSummaryTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table
+        className="w-full text-sm"
+        // Device + Status + one per configured column.
+        style={{ minWidth: 220 + columns.length * 104 }}
+      >
         <thead>
           <tr className="border-b border-line text-left text-xs text-ink-muted">
-            <th className="py-2 pr-3 font-medium">Device</th>
+            <th className="sticky left-0 z-10 bg-surface-raised py-2 pr-3 font-medium">
+              Device
+            </th>
             <th className="py-2 pr-3 font-medium">Status</th>
             {columns.map((column) => (
               <th
@@ -82,7 +96,7 @@ export function DeviceSummaryTable({
             const frame = liveValues[device.id];
             return (
               <tr key={device.id}>
-                <td className="py-1.5 pr-3">
+                <td className="sticky left-0 z-10 bg-surface-raised py-1.5 pr-3">
                   <span className="font-medium text-ink">{device.code}</span>
                   <span className="ml-2 text-ink-muted">{device.name}</span>
                 </td>

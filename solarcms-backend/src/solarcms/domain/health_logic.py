@@ -82,18 +82,38 @@ def assess(
     return HealthAssessment(device.device_id, status, frozen, completeness, silent_for)
 
 
+#: What a Device shares with the others that fail alongside it. Either the id
+#: of the Device that transmits it (`reports_via_device_id` — a real datalogger,
+#: registered as a Device) or the name of the enclosure it sits in
+#: (`collector_code` — an MCR, an ICR; not a Device at all, migration 0022).
+#:
+#: One type, because the grouping logic is identical and the *question* is
+#: identical: did these go quiet together for one reason. Only the label
+#: differs, and it travels with the correlation so the Alarm can say which.
+CollectorKey = int | str
+
+
 @dataclass(frozen=True, slots=True)
 class CollectorCorrelation:
     """One Collector's simultaneous silence, to be raised as a single Alarm."""
 
-    collector_device_id: int
+    collector: CollectorKey
     silent_device_ids: list[int]
     classification: str = "communication"
+
+    @property
+    def is_enclosure(self) -> bool:
+        """True when the shared cause is a named enclosure, not a Device.
+
+        Worth distinguishing in the Alarm text: "the MCR has gone quiet" and
+        "DATALOGGER-03 has gone quiet" send an engineer to different places.
+        """
+        return isinstance(self.collector, str)
 
 
 def correlate_collector_failures(
     assessments: list[HealthAssessment],
-    reports_via: dict[int, int | None],
+    collector_of: dict[int, CollectorKey | None],
     *, minimum_devices: int = 2,
 ) -> tuple[list[CollectorCorrelation], set[int]]:
     """Group simultaneous silences by Collector.
@@ -101,18 +121,26 @@ def correlate_collector_failures(
     Returns the correlations and the set of Device ids they absorb, so the caller
     raises **one** Collector Alarm instead of one per Device.
 
-    This is the reason `reports_via_device_id` exists (MASTER §3.4). Without it,
-    a failed Collector produces an Alarm per silent Device with no indication they
-    share a cause, and — worse — records a communication failure as generation
-    downtime, corrupting the availability figures that performance guarantees are
-    calculated from. Tender §18 lists Communication Loss and Equipment Downtime as
-    separate categories; the distinction is unbuildable otherwise.
+    This is the reason the communication grouping exists at all (MASTER §3.4).
+    Without it, a failed Collector produces an Alarm per silent Device with no
+    indication they share a cause, and — worse — records a communication failure
+    as generation downtime, corrupting the availability figures that performance
+    guarantees are calculated from. Tender §18 lists Communication Loss and
+    Equipment Downtime as separate categories; the distinction is unbuildable
+    otherwise.
+
+    `collector_of` accepts either form of the grouping. Since migration 0022 a
+    Collector is usually a *name* rather than a Device — an MCR is a room, and
+    the twenty Inverters in it go silent together when its link drops exactly as
+    they did when the room was (wrongly) registered as a Device. The caller
+    supplies whichever it has; a Device with both is grouped by the transmitting
+    Device, which is the more specific claim.
     """
-    silent_by_collector: dict[int, list[int]] = {}
+    silent_by_collector: dict[CollectorKey, list[int]] = {}
     for assessment in assessments:
         if assessment.comm_status not in ("offline", "degraded"):
             continue
-        collector = reports_via.get(assessment.device_id)
+        collector = collector_of.get(assessment.device_id)
         # A Device that is its own Collector publishes directly; its silence is
         # its own fault and must not be grouped.
         if collector is None or collector == assessment.device_id:
@@ -121,7 +149,11 @@ def correlate_collector_failures(
 
     correlations: list[CollectorCorrelation] = []
     absorbed: set[int] = set()
-    for collector, devices in sorted(silent_by_collector.items()):
+    # Sorted by the key's text, not the key: `sorted()` over a mix of ints and
+    # strs raises, and a fleet where some Devices report via a datalogger and
+    # others sit in a named room produces exactly that mix.
+    for collector in sorted(silent_by_collector, key=str):
+        devices = silent_by_collector[collector]
         if len(devices) >= minimum_devices:
             correlations.append(CollectorCorrelation(collector, sorted(devices)))
             absorbed.update(devices)

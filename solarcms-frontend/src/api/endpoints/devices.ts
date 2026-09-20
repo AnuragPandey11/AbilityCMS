@@ -86,6 +86,13 @@ export interface DeviceCreate {
   block_id?: number | null;
   parent_device_id?: number | null;
   reports_via_device_id?: number | null;
+  /**
+   * The enclosure this Device sits in — an MCR, an ICR, a panel. A *name*, not
+   * an id, because a Collector is not a Device: it publishes nothing, carries
+   * no current, and is drawn as a box around its Devices rather than as one of
+   * them. Omit it for equipment that sits in no enclosure.
+   */
+  collector_code?: string | null;
   source_address?: string | null;
   /**
    * ⚠ Must come from observation, not the default. Health thresholds multiply
@@ -117,6 +124,30 @@ export async function createDevice(
     params: { plant_id: plantId },
     body,
   })) as { id: number; code: string; bindings?: { bound: number } };
+}
+
+/**
+ * Remove a Device from a Plant.
+ *
+ * ⚠ Readings have **no foreign key** to devices — a hypertable cannot check one
+ * per inserted row and keep up with ingestion. So deleting a Device does not
+ * remove its history: the rows stay, attributed to an id that resolves to
+ * nothing, invisible everywhere and counted forever.
+ *
+ * The API therefore refuses a Device that has stored Readings unless `force` is
+ * set, and says how many. For equipment that genuinely existed, decommissioning
+ * (`updateDevice(id, { status: "decommissioned" })`) is the better answer: it
+ * stops ingestion and hides the Device from the diagram while its generation
+ * history stays attributable.
+ */
+export async function deleteDevice(
+  deviceId: number,
+  force = false,
+): Promise<{ deleted: number; code: string; readings_deleted: number }> {
+  return (await request(`/devices/${deviceId}`, {
+    method: "DELETE",
+    params: { force },
+  })) as { deleted: number; code: string; readings_deleted: number };
 }
 
 export type DeviceUpdate = Partial<Omit<DeviceCreate, "device_model_id">> & {

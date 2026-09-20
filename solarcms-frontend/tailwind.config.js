@@ -21,7 +21,11 @@ export default {
           raised: token("surface-raised"),
           sunken: token("surface-sunken"),
         },
-        line: { DEFAULT: token("line"), soft: token("line-soft") },
+        line: {
+          DEFAULT: token("line"),
+          soft: token("line-soft"),
+          strong: token("line-strong"),
+        },
         ink: {
           DEFAULT: token("ink"),
           muted: token("ink-muted"),

@@ -242,9 +242,21 @@ async def me(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
              ORDER BY d.sort_order
         """), {"user_id": user.user_id, "client_id": user.client_id})).all()
 
+    # The Client's own name, so every screen can say whose data is on it
+    # without a call to `GET /clients` — which is Super Admin only, and would
+    # therefore leave a Client Admin reading "Client #2" about their own
+    # company. RLS already restricts this to the Client they are signed into.
+    client = None
+    if user.client_id is not None:
+        client = (await session.execute(
+            text("SELECT code, name FROM clients WHERE id = :id"),
+            {"id": user.client_id})).first()
+
     return {
         "user_id": user.user_id,
         "client_id": user.client_id,
+        "client_code": client.code if client else None,
+        "client_name": client.name if client else None,
         "role": user.role_code,
         "platform_admin": user.is_platform_admin,
         "permissions": sorted(user.permissions),

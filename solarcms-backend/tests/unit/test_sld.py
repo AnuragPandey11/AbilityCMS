@@ -9,7 +9,12 @@ somehow exists anyway.
 
 from __future__ import annotations
 
-from solarcms.domain.sld import SldDevice, build_sld, would_create_cycle
+from solarcms.domain.sld import (
+    SldDevice,
+    build_sld,
+    crosses_collector_boundary,
+    would_create_cycle,
+)
 
 
 def device(
@@ -118,3 +123,112 @@ def test_a_ring_already_in_the_data_does_not_hang_the_check() -> None:
     parents = {1: 2, 2: 3, 3: 1, 4: None}
     assert not would_create_cycle(parents, 4, None)
     assert would_create_cycle(parents, 1, 3)
+
+
+# ── Collectors ──────────────────────────────────────────────────────────────
+#
+# A Collector is an enclosure, not a Device (migration 0022). These assert the
+# two halves of that: it never becomes a node, and it never changes what the
+# tree says — it only decides which siblings stand next to each other, so the
+# renderer can draw one unbroken outline per room.
+
+def in_collector(
+    device_id: int, code: str, collector: str | None, parent: int | None = None
+) -> SldDevice:
+    return SldDevice(
+        device_id=device_id, code=code, name=f"{code} name",
+        device_type_code="INVERTER", in_power_path=True, parent_device_id=parent,
+        collector_code=collector,
+    )
+
+
+def test_a_collector_never_becomes_a_node() -> None:
+    # Twenty Devices in the MCR are twenty nodes. The room is not a twenty-first,
+    # and nothing is wired through it.
+    tree = build_sld([
+        in_collector(1, "MFM-01", "MCR"),
+        in_collector(2, "INV-01", "MCR", parent=1),
+        in_collector(3, "INV-02", "MCR", parent=1),
+    ])
+    assert tree.device_count == 3
+    assert [d.code for d in tree.roots[0].walk()] == ["MFM-01", "INV-01", "INV-02"]
+
+
+def test_siblings_sharing_a_collector_are_kept_adjacent() -> None:
+    # Ordered by code alone this reads INV-A, INV-B, INV-C, INV-D and the two
+    # MCR machines are separated by the two ICR ones. The renderer would then
+    # have to draw the MCR as two outlines with strangers between them.
+    tree = build_sld([
+        in_collector(1, "MFM-01", None),
+        in_collector(2, "INV-A", "MCR", parent=1),
+        in_collector(3, "INV-B", "ICR", parent=1),
+        in_collector(4, "INV-C", "MCR", parent=1),
+        in_collector(5, "INV-D", "ICR", parent=1),
+    ])
+    children = [child.device.code for child in tree.roots[0].children]
+    assert children == ["INV-B", "INV-D", "INV-A", "INV-C"]
+
+
+def test_devices_in_no_collector_sort_ahead_of_every_named_one() -> None:
+    # Otherwise unenclosed equipment ends up wedged between two outlines, which
+    # reads as being inside one of them.
+    tree = build_sld([
+        in_collector(1, "MFM-01", None),
+        in_collector(2, "INV-A", "MCR", parent=1),
+        in_collector(3, "INV-Z", None, parent=1),
+    ])
+    assert [c.device.code for c in tree.roots[0].children] == ["INV-Z", "INV-A"]
+
+
+def test_the_collector_does_not_change_what_feeds_into_what() -> None:
+    # The whole point of keeping it beside `parent_device_id` rather than in it:
+    # an Inverter in the MCR can feed a transformer outside the MCR, and the
+    # diagram has to keep saying so.
+    tree = build_sld([
+        in_collector(1, "TXF-01", None),
+        in_collector(2, "INV-01", "MCR", parent=1),
+    ])
+    assert tree.roots[0].device.code == "TXF-01"
+    assert tree.roots[0].children[0].device.code == "INV-01"
+    assert tree.roots[0].children[0].device.collector_code == "MCR"
+
+
+# ── The collector boundary ──────────────────────────────────────────────────
+#
+# A Collector's outward connection belongs to the box (migration 0024), so an
+# edge between two Devices is legal only when both sit on the same side of the
+# wall. Enforced in the API rather than by a constraint, for the reason
+# `would_create_cycle` is: a CHECK cannot see the parent row, and a composite
+# foreign key is satisfied vacuously whenever either collector_code is NULL.
+
+def test_two_devices_in_the_same_collector_may_be_wired() -> None:
+    # Hierarchy *within* a room is exactly what the rule is meant to allow.
+    assert not crosses_collector_boundary("MCR", "MCR")
+
+
+def test_two_devices_in_no_collector_may_be_wired() -> None:
+    # The ordinary case for a plant that publishes on the five-segment shape.
+    assert not crosses_collector_boundary(None, None)
+
+
+def test_a_device_inside_may_not_feed_one_outside() -> None:
+    # The MCR's connection to the meter belongs to the MCR, not to each of the
+    # seventeen Inverters in it.
+    assert crosses_collector_boundary("MCR", None)
+
+
+def test_a_device_outside_may_not_feed_one_inside() -> None:
+    # The same wall, approached from the other side.
+    assert crosses_collector_boundary(None, "MCR")
+
+
+def test_two_different_collectors_may_not_be_wired_directly() -> None:
+    # Neither box owns this edge, so neither can be the one that states it.
+    assert crosses_collector_boundary("MCR", "ICR")
+
+
+def test_the_comparison_is_never_case_folded() -> None:
+    # `MCR` and `mcr` are two enclosures for the same reason they are two
+    # origins: the topic is case-sensitive and Guardrail 5 makes it the
+    # authority. Folding here would silently merge two rooms.
+    assert crosses_collector_boundary("MCR", "mcr")

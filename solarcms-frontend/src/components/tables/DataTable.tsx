@@ -7,6 +7,17 @@
  *
  * Export is gated by the caller, not here: `data.export` is a separate
  * permission from viewing (MASTER §4.3).
+ *
+ * ── The table scrolls sideways rather than compressing ──────────────────────
+ * It was `w-full` inside an `overflow-auto` wrapper, which cannot scroll: a
+ * `w-full` table never exceeds its container, so a six-column Device list on a
+ * narrow screen squeezed every column instead — `INVERTER_07` wrapped down four
+ * lines and the figures lost their alignment. A minimum width derived from the
+ * column count restores the scroll the wrapper was always there to provide.
+ *
+ * The first column then sticks. Scrolling a Device table sideways is useless if
+ * the Device code is the thing that scrolls away first — the row loses the only
+ * cell that says which machine it is about.
  */
 
 import { useMemo, useRef, useState, type ReactNode } from "react";
@@ -39,6 +50,8 @@ export function DataTable<T>({
   exportFilename,
   toolbar,
   maxHeight = 520,
+  minColumnWidth = 132,
+  stickyFirstColumn = true,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -50,6 +63,10 @@ export function DataTable<T>({
   exportFilename?: string;
   toolbar?: ReactNode;
   maxHeight?: number;
+  /** Width each column is guaranteed before the table starts scrolling. */
+  minColumnWidth?: number;
+  /** Keeps the identifying column in view while the rest scrolls. */
+  stickyFirstColumn?: boolean;
 }): JSX.Element {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -164,17 +181,26 @@ export function DataTable<T>({
         className="overflow-auto rounded-card border border-line"
         style={{ maxHeight: viewportHeight }}
       >
-        <table className="w-full border-collapse text-sm">
+        <table
+          className="w-full border-collapse text-sm"
+          style={{ minWidth: columns.length * minColumnWidth }}
+        >
           <thead className="sticky top-0 z-10 bg-surface-sunken">
             <tr>
-              {columns.map((column) => (
+              {columns.map((column, index) => (
                 <th
                   key={column.key}
                   style={{ width: column.width }}
                   onClick={() => (column.sortValue ? toggleSort(column.key) : undefined)}
                   className={`border-b border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted ${
                     column.align === "right" ? "text-right" : "text-left"
-                  } ${column.sortValue ? "cursor-pointer select-none hover:text-ink" : ""}`}
+                  } ${column.sortValue ? "cursor-pointer select-none hover:text-ink" : ""} ${
+                    stickyFirstColumn && index === 0
+                      ? // Above the other headers as well as the body: this cell
+                        // is sticky on both axes at once.
+                        "sticky left-0 z-20 bg-surface-sunken"
+                      : ""
+                  }`}
                 >
                   {column.header}
                   {sortKey === column.key ? (
@@ -208,11 +234,16 @@ export function DataTable<T>({
                       onRowClick ? "cursor-pointer hover:bg-surface-raised" : ""
                     }`}
                   >
-                    {columns.map((column) => (
+                    {columns.map((column, index) => (
                       <td
                         key={column.key}
                         className={`px-3 py-1.5 text-ink ${
                           column.align === "right" ? "text-right font-mono" : ""
+                        } ${
+                          stickyFirstColumn && index === 0
+                            ? // Opaque, or the scrolling columns show through it.
+                              "sticky left-0 z-10 bg-surface-raised"
+                            : ""
                         }`}
                       >
                         {column.render(row)}

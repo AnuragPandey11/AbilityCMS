@@ -110,6 +110,35 @@ def parse_topic(topic: str, patterns: list[TopicPattern]) -> dict[str, str] | No
     return None
 
 
+def collector_in_topic(
+    topic: str | None, patterns: list[TopicPattern]
+) -> tuple[bool, str | None]:
+    """What the topic says about which enclosure a Device sits in.
+
+    Returns `(known, collector_code)`:
+
+        ("scms/v1/c/p/MCR/INV-1", …) → (True,  "MCR")   six segments
+        ("scms/v1/c/p/MFM",       …) → (True,  None)    five: in no enclosure
+        (an unmatched topic,      …) → (False, None)    says nothing
+        (None,                    …) → (False, None)    no topic yet
+
+    ⚠ `(True, None)` and `(False, None)` are different answers and must not be
+    collapsed. The first is the topic *stating* that this Device sits in no
+    enclosure — which is a fact, and one that a hand-typed collector name may
+    not override. The second is the absence of any statement, which is the only
+    case where a human gets to say.
+
+    This is Guardrail 5 applied to membership: the topic is the sole authority
+    for origin, and which room a Device publishes from is part of its origin.
+    """
+    if not topic:
+        return (False, None)
+    captured = parse_topic(topic, patterns)
+    if captured is None:
+        return (False, None)
+    return (True, captured.get("collector_code"))
+
+
 @dataclass(frozen=True, slots=True)
 class TagBinding:
     """What a specific Device was actually wired as.
@@ -244,14 +273,26 @@ def coerce_value(raw: object) -> float | None:
     The client's systems transmit numbers as strings — `"336"`, not `336`
     (MASTER §9.5) — so string input is the normal case, not an error. Booleans
     are accepted because status Tags legitimately arrive as JSON true/false.
+
+    ⚠ A Digital Input arrives as the *string* `"TRUE"` / `"FALSE"` from this
+    broker, not as a JSON boolean — observed on KULAR_GREEN's VCB and
+    TRANSFORMER, 20 Sep 2026. Without this the VCB decodes nothing at all: all
+    twelve of its signals are contacts, every one would coerce to None and be
+    stored flagged unparseable, and the Device would look registered and alive
+    while carrying no readable value.
     """
     if isinstance(raw, bool):
         return 1.0 if raw else 0.0
     if isinstance(raw, int | float):
         value = float(raw)
     elif isinstance(raw, str):
+        text = raw.strip()
+        if text.upper() == "TRUE":
+            return 1.0
+        if text.upper() == "FALSE":
+            return 0.0
         try:
-            value = float(raw.strip())
+            value = float(text)
         except ValueError:
             return None
     else:

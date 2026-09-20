@@ -176,6 +176,24 @@ TOPIC_PATTERNS: Final[tuple[tuple[str, int, str], ...]] = (
         "case (B-1).",
     ),
     (
+        "scms/v1/{client_code}/{plant_code}/{device_code}", 12,
+        "The canonical contract without a Collector. A Collector is a logical "
+        "enclosure — an MCR, an ICR, a panel — and plenty of equipment sits in "
+        "none: a rooftop Plant's meter publishes straight under the Plant. "
+        "Confirmed by the client 19 Sep 2026. Five segments, so it can never "
+        "collide with the six-segment rows above — `TopicPattern.match` "
+        "compares segment counts first — and a Device matched here is recorded "
+        "with collector_code NULL, which is a real answer and not a gap.",
+    ),
+    (
+        "SCMS/V1/{client_code}/{plant_code}/{device_code}", 13,
+        "The five-segment shape, uppercased, for the same reason the six-segment "
+        "row above is duplicated: MQTT topic levels are case-sensitive and "
+        "case-folding a topic would make two Clients whose codes differ only by "
+        "case the same origin (Guardrail 5). Retire with its sibling once the "
+        "publisher settles on one case (B-1).",
+    ),
+    (
         "{plant_code}/{category}", 90,
         "Legacy shape observed on the client's test broker: two segments, no "
         "collector and no device. Each category is one physical instrument "

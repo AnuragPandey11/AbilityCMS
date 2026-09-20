@@ -35,6 +35,7 @@ import {
 } from "@/components/domain";
 import {
   UNDEFINED_DISPLAY,
+  formatHeadline,
   formatNumber,
   formatRatioAsPercent,
   variantNote,
@@ -126,6 +127,8 @@ function PlantCard({
 }): JSX.Element {
   const { plant, kpis, alarms, worstSeverity, liveDeviceCount } = entry;
   const pr = kpis?.performance_ratio;
+  const capacity = formatHeadline(plant.dc_capacity_kwp);
+  const energy = formatHeadline(kpis?.energy_kwh);
 
   return (
     <button
@@ -147,15 +150,21 @@ function PlantCard({
       <div className="grid grid-cols-3 gap-3">
         <CardFigure
           label="DC capacity"
-          value={formatNumber(plant.dc_capacity_kwp)}
+          value={capacity.text}
           unit={plant.dc_capacity_kwp === null ? null : "kWp"}
+          title={capacity.compacted ? `${capacity.exact} kWp` : undefined}
           muted={plant.dc_capacity_kwp === null}
         />
         <CardFigure
           label={`Energy (${period})`}
           // The API returns kWh for this figure; the unit is stated, not inferred.
-          value={kpis ? formatNumber(kpis.energy_kwh) : "…"}
+          //
+          // Compacted, not shrunk: three figures share the width of one card, so
+          // a lifetime total rendered in full used to scale down to roughly 8px
+          // — present, and unreadable. `1.24M kWh` is still kWh (§4.1).
+          value={kpis ? energy.text : "…"}
           unit={kpis ? "kWh" : null}
+          title={energy.compacted ? `${energy.exact} kWh` : undefined}
           muted={!kpis}
         />
         <CardFigure

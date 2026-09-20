@@ -40,15 +40,37 @@ export interface ClientCommercials {
  * the API adds it to the start date once and stores a real expiry date, so no
  * caller ever has to recompute it.
  */
+export interface FirstUser {
+  email: string;
+  password: string;
+  full_name?: string | null;
+  /**
+   * `admin` is the right default for a Client's first User: `app_can_see_plant`
+   * grants an admin every Plant of their own Client, so Plants created later
+   * are visible with no extra step. Any other role starts with zero Plants —
+   * deliberately, because an empty assignment means none, never all.
+   */
+  role_code?: "admin" | "employee" | "guest";
+}
+
 export async function createClient(
   input: {
     code: string;
     name: string;
     is_demo?: boolean;
     contract_valid_days?: number | null;
+    /**
+     * Created in the **same transaction** as the Client. A Client nobody can
+     * sign into looks finished on every screen, and only the person who made it
+     * knows a second step is outstanding — so if this fails, the Client is
+     * rolled back with it.
+     */
+    first_user?: FirstUser | null;
   } & ClientCommercials,
 ): Promise<CreatedClient> {
   return parse(
+    // The response also carries `first_user`, which the schema ignores: the
+    // password is never echoed back and the caller already knows the email.
     CreatedClientSchema,
     await request("/clients", { method: "POST", body: input }),
     "POST /clients",

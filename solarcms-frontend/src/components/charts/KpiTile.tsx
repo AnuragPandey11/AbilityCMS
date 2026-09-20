@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
 import type { KpiFigure } from "@/api/schemas";
 import {
   UNDEFINED_DISPLAY,
-  formatNumber,
+  formatHeadline,
   formatRatioAsPercent,
   variantNote,
 } from "@/format/value";
@@ -40,12 +40,22 @@ export function KpiTile({
   const isUndefined = value === null;
   // Figure and unit are separate so the figure can shrink to fit while the
   // unit keeps its size; a percentage carries its sign as part of the figure.
+  //
+  // A quantity is compacted rather than shrunk: `1.24M kWh` at full type size
+  // reads, where `1,241,466` scaled to fit a narrow tile does not. The unit is
+  // passed through untouched — this changes the numeral, never the unit (§4.1).
+  const headline = kind === "quantity" ? formatHeadline(value) : null;
   const rendered = isUndefined
     ? UNDEFINED_DISPLAY
     : kind === "ratio"
       ? formatRatioAsPercent(value)
-      : formatNumber(value);
+      : (headline?.text ?? UNDEFINED_DISPLAY);
   const unitLabel = !isUndefined && kind === "quantity" ? unit : null;
+  // A compacted figure is a rounded one, so the exact digits stay reachable.
+  const exactTitle =
+    headline?.compacted && !isUndefined
+      ? `${headline.exact}${unit ? ` ${unit}` : ""}`
+      : undefined;
 
   // The reason is the useful half: "no irradiation in period" tells an operator
   // it is night, where a bare dash tells them nothing.
@@ -63,7 +73,7 @@ export function KpiTile({
           value={rendered}
           unit={unitLabel}
           className={`font-mono text-2xl ${isUndefined ? "text-ink-faint" : "text-ink"}`}
-          title={isUndefined ? undefinedReason : undefined}
+          title={isUndefined ? undefinedReason : exactTitle}
         />
       </div>
       {isUndefined ? (
@@ -80,16 +90,31 @@ export function KpiTile({
   );
 }
 
-/** A plain figure that is not a KPI object — a count, a capacity, a total. */
+/**
+ * A plain figure that is not a KPI object — a count, a capacity, a total.
+ *
+ * Two ways in, deliberately. `numeric` + `unit` is the one to reach for: the
+ * tile then compacts a large figure itself and keeps the exact digits on the
+ * tooltip, which a caller passing a pre-joined `"1,241,466 kWh"` string cannot
+ * do because by then the number and its unit are one opaque blob. `value`
+ * remains for the tiles whose content is not a number at all — the device
+ * health strip is a row of badges, not a figure.
+ */
 export function StatTile({
   label,
   value,
+  numeric,
+  unit,
   hint,
   tone = "default",
   footnote,
 }: {
   label: string;
-  value: ReactNode;
+  value?: ReactNode;
+  /** A raw figure. Compacted above `COMPACT_ABOVE`, exact value on the tooltip. */
+  numeric?: number | null;
+  /** Rendered beside the figure at its own size. Never scaled or converted. */
+  unit?: string;
   hint?: string;
   tone?: "default" | "ok" | "warn" | "bad";
   footnote?: ReactNode;
@@ -100,6 +125,10 @@ export function StatTile({
     warn: "text-warn",
     bad: "text-bad",
   };
+  const headline = numeric === undefined ? null : formatHeadline(numeric);
+  const isNumeric = headline !== null;
+  const undefinedNumeric = isNumeric && headline.text === UNDEFINED_DISPLAY;
+
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
       <div className="flex items-center text-xs text-ink-muted">
@@ -108,8 +137,16 @@ export function StatTile({
       </div>
       <div className="mt-1">
         <FittedFigure
-          value={value ?? UNDEFINED_DISPLAY}
-          className={`font-mono text-2xl ${tones[tone]}`}
+          value={isNumeric ? headline.text : (value ?? UNDEFINED_DISPLAY)}
+          unit={isNumeric && !undefinedNumeric ? unit : null}
+          className={`font-mono text-2xl ${
+            undefinedNumeric ? "text-ink-faint" : tones[tone]
+          }`}
+          title={
+            headline?.compacted
+              ? `${headline.exact}${unit ? ` ${unit}` : ""}`
+              : undefined
+          }
         />
       </div>
       {footnote ? (

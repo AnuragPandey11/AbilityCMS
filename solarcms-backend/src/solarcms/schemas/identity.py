@@ -21,6 +21,27 @@ GSTIN_PATTERN = r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$"
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
+class FirstUser(BaseModel):
+    """The Client's own administrator, created with the Client itself.
+
+    ⚠ Created in the **same transaction** as the Client, not afterwards. A
+    Client that exists with nobody able to sign into it is a half-finished
+    object that looks finished on every screen, and the operator who created it
+    is the only person who knows a second step is outstanding.
+
+    `role_code` defaults to `admin` because that is what a Client's first User
+    must be — `app_can_see_plant` grants an admin every Plant of their own
+    Client automatically, so Plants added later are visible without anyone
+    remembering to grant access. An `employee` created first would see nothing
+    and Guardrail 7 forbids reading an empty assignment as "everything".
+    """
+
+    email: str = Field(max_length=320, pattern=EMAIL_PATTERN)
+    password: str = Field(min_length=8, max_length=200)
+    full_name: str | None = None
+    role_code: str = Field(default="admin", pattern="^(admin|employee|guest)$")
+
+
 class ClientCreate(BaseModel):
     """⚠ PROPOSED, not client-confirmed (migration 0019).
 
@@ -47,6 +68,12 @@ class ClientCreate(BaseModel):
     # date. A stored day count is stale the day after it is written.
     contract_start_date: date | None = None
     contract_valid_days: int | None = Field(default=None, ge=1, le=36525)
+
+    # ── The Client's first User, created in the same transaction ────────────
+    # Optional only so a script or an import can omit it. The UI always sends
+    # it, because "create the Client now, the login later" is precisely the
+    # split this was added to remove.
+    first_user: FirstUser | None = None
 
 
 class ClientUpdate(BaseModel):

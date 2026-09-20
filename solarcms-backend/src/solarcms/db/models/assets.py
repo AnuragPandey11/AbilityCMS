@@ -124,6 +124,8 @@ class Device(Base):
         CheckConstraint(f"status IN {DEVICE_STATUSES}", name="device_status"),
         CheckConstraint("parent_device_id IS NULL OR parent_device_id <> id",
                         name="device_not_own_parent"),
+        CheckConstraint("collector_code IS NULL OR length(btrim(collector_code)) > 0",
+                        name="collector_code_not_blank"),
     )
 
     id: Mapped[int] = pk()
@@ -142,6 +144,17 @@ class Device(Base):
     block_id: Mapped[int | None] = mapped_column(ForeignKey("blocks.id"))
     parent_device_id: Mapped[int | None] = mapped_column(nullable=True)
     reports_via_device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id"))
+    # The communications enclosure this Device sits in — the `{collector_code}`
+    # segment of the topic. A Collector is **not a Device** (migration 0022): it
+    # publishes nothing, carries no current, and appears in the diagram as a box
+    # drawn *around* its Devices, never as a node in the chain. NULL is a real
+    # answer, not missing data — the five-segment topic shape has no Collector,
+    # and a Device on it genuinely sits in none.
+    #
+    # Beside `reports_via_device_id`, not instead of it: "transmitted by that
+    # datalogger" and "in the same room as that Inverter" are different claims,
+    # and only the first is a Device-to-Device relationship.
+    collector_code: Mapped[str | None] = mapped_column(String(64))
 
     # The MQTT topic this Device publishes on. MASTER §3.7: this column already
     # *is* the data-source mapping, which is why `data_source_connections` was
@@ -154,6 +167,15 @@ class Device(Base):
     # How many inputs of a repeating group this unit actually has — the number of
     # PV strings on an Inverter. NULL where the Model has no repeating group.
     string_count: Mapped[int | None] = mapped_column(Integer)
+    # Which of the four stages this Device folds into, overriding its Type's
+    # default for this Device alone (migration 0027). NULL is the normal case.
+    #
+    # Exists because `device_types.sld_stage` is global: an LT feeder meter wired
+    # upstream of the transformer is Type MFM and folds into Grid, and correcting
+    # that by editing the Type would move every MFM on every Plant of every
+    # Client. Set only by a human accepting a reported contradiction between the
+    # wiring and the Type default — never by inference.
+    sld_stage_override: Mapped[str | None] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     installed_on: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = created_at()
@@ -233,6 +255,93 @@ class BrokerCredential(Base):
     topic_scope: Mapped[str] = mapped_column(Text, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at()
+
+
+class PlantCollector(Base):
+    """What one enclosure feeds into. Created by migration 0024.
+
+    ⚠ **Not a Device and never to become one** (Guardrail 12). No Device Model,
+    no Device Type, no Tags, no topic, no Readings — and `devices` carries no
+    foreign key to this table. It holds the single fact a Collector owns beyond
+    its name: the Device its outgoing connection lands on.
+
+    Membership stays on `devices.collector_code`, which comes from the topic and
+    is the sole authority for it (Guardrail 5). A Collector needs **no row here
+    to exist** — sixteen Devices can share `collector_code = 'MCR'` with nothing
+    in this table and the box still draws. A row appears only once somebody has
+    said something *about* the enclosure, so the table is expected to be sparse
+    in the manner of `plant_dashboard_slot_overrides`, and every join to it is
+    LEFT.
+
+    ⚠ This class exists so `alembic revision --autogenerate` does not propose
+    dropping the table. Nothing reads through the ORM — the routers use explicit
+    SQL — but a table absent from the metadata is a table autogenerate believes
+    has been deleted, and the generated migration would take the Plant's
+    collector wiring with it.
+    """
+
+    __tablename__ = "plant_collectors"
+    __table_args__ = (
+        UniqueConstraint("plant_id", "code", name="uq_plant_collectors_plant_code"),
+        # I-3 applied to the box: a Collector cannot feed into a Device at
+        # another Plant. Structural, exactly as `fk_parent_same_plant` is for a
+        # Device, so no code path can bypass it.
+        ForeignKeyConstraint(
+            ["parent_device_id", "plant_id"], ["devices.id", "devices.plant_id"],
+            name="fk_collector_parent_same_plant",
+        ),
+        CheckConstraint("length(btrim(code)) > 0", name="collector_code_not_blank"),
+    )
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    plant_id: Mapped[int] = mapped_column(
+        ForeignKey("plants.id", ondelete="CASCADE"), nullable=False
+    )
+    # Case-sensitive, exactly as the topic spells it: folding would merge two
+    # enclosures for the same reason it would merge two origins.
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    # NULL is a real answer — an enclosure whose outward connection nobody has
+    # recorded yet, which is every Collector the moment it first appears.
+    parent_device_id: Mapped[int | None] = mapped_column(nullable=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = created_at()
+
+
+class PlantDeviceCount(Base):
+    """The planned Device count per Device Type. Created by migration 0019.
+
+    ⚠ **No longer collected.** The onboarding input was removed on 19 Sep 2026:
+    a figure typed from a contract before a single Device existed began drifting
+    from reality the moment one was registered, and nothing depended on it
+    closely enough to catch it being wrong. The count that matters is derived —
+    `count(*)` over registered Devices, grouped by Type — and cannot drift.
+
+    The table is kept rather than dropped so no history is destroyed, and
+    modelled here for the same reason `PlantCollector` is: a table missing from
+    the metadata is one autogenerate believes has been deleted.
+    """
+
+    __tablename__ = "plant_device_counts"
+    __table_args__ = (
+        UniqueConstraint("plant_id", "device_type_id",
+                         name="uq_plant_device_counts_plant_type"),
+        CheckConstraint("planned_count >= 0", name="positive"),
+    )
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    plant_id: Mapped[int] = mapped_column(
+        ForeignKey("plants.id", ondelete="CASCADE"), nullable=False
+    )
+    device_type_id: Mapped[int] = mapped_column(
+        ForeignKey("device_types.id"), nullable=False
+    )
+    planned_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class PlantDashboardSlotOverride(Base):

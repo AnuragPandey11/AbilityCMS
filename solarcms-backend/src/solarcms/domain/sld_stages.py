@@ -138,6 +138,27 @@ def stage_for(
     return stage if stage in SLD_STAGES else None
 
 
+def effective_stage_for(
+    device: DeviceFacts, stage_by_type: Mapping[str, str] | None = None
+) -> str | None:
+    """The stage this Device folds into, override first.
+
+    The Type default describes equipment of that kind in general; the override
+    describes *this* Device on *this* Plant, and the more specific claim wins —
+    the same precedence alarm rules resolve by. It is set only by a human
+    accepting a contradiction that `domain/sld_conflicts.py` reported between
+    the wiring and the default, never inferred.
+
+    An override naming a stage that no longer exists falls back to the default
+    rather than dropping the Device off the diagram, which is the failure mode
+    that matters here.
+    """
+    override = device.sld_stage_override
+    if override in SLD_STAGES:
+        return override
+    return stage_for(device.device_type_code, stage_by_type)
+
+
 def build_stages(
     facts: PlantFacts,
     stage_slots: Mapping[str, Sequence[SlotSpec]] | None = None,
@@ -156,7 +177,7 @@ def build_stages(
 
     buckets: dict[str, list[DeviceFacts]] = {code: [] for code in SLD_STAGES}
     for device in sorted(facts.devices, key=lambda d: d.code):
-        code = stage_for(device.device_type_code, stage_by_type)
+        code = effective_stage_for(device, stage_by_type)
         if code is None:
             # A Weather Station or a Plant KPI panel is *deliberately* absent
             # from an electrical diagram (MASTER §2.3) and is not worth

@@ -9,6 +9,11 @@ alone. Two things are deliberately excluded:
 * **Devices outside the power path never appear** (MASTER §2.3). A Weather Station
   and a Power Plant Controller are real, monitored Devices, but electricity does
   not flow through them, and placing them in the electrical tree would corrupt it.
+* **A Collector is never a node** (migration 0022). An MCR or an ICR is an
+  enclosure that *holds* Devices; no current flows through the room. It travels
+  with each Device as `collector_code` so the caller can draw a box around the
+  Devices inside it, which is a different shape from a box in the chain — a node
+  would claim the diagram passes through it, and it does not.
 """
 
 from __future__ import annotations
@@ -28,6 +33,12 @@ class SldDevice:
     parent_device_id: int | None
     variant: str | None = None
     rated_capacity_kw: float | None = None
+    # The enclosure this Device sits in, or None when it sits in none. Carried
+    # through untouched: `build_sld` never groups, sorts or nests by it, because
+    # the electrical tree is `parent_device_id` and nothing else. Two Devices in
+    # one MCR may sit at opposite ends of the chain, and the diagram must keep
+    # saying so.
+    collector_code: str | None = None
 
 
 @dataclass(slots=True)
@@ -88,6 +99,34 @@ def would_create_cycle(
     return False
 
 
+def crosses_collector_boundary(
+    child_collector: str | None, parent_collector: str | None
+) -> bool:
+    """Would this edge cross the wall of an enclosure?
+
+    A Collector's outward connection belongs to the *box*
+    (`plant_collectors.parent_device_id`), not to each occupant. Seventeen
+    Inverters in the MCR do not each run a cable to the transformer; the room
+    has one outgoing connection. So an edge is legal only between two Devices
+    on the same side of the wall:
+
+        both inside the same Collector  → legal (hierarchy within a room)
+        both outside every Collector    → legal
+        one inside, one outside         → crosses; the box's edge says this
+        inside different Collectors     → crosses; neither box owns it
+
+    ⚠ Compared exactly, never case-folded. `MCR` and `mcr` are two enclosures
+    for the same reason they are two origins (Guardrail 5).
+
+    Enforced in the API rather than by a constraint: a CHECK cannot see the
+    parent row, and a composite foreign key on `(parent_device_id,
+    collector_code)` is satisfied vacuously whenever either side is NULL
+    (MATCH SIMPLE) — which is precisely the case it would most need to catch.
+    Same reasoning as `would_create_cycle`.
+    """
+    return child_collector != parent_collector
+
+
 def build_sld(devices: list[SldDevice]) -> SldTree:
     """Assemble the electrical tree.
 
@@ -134,12 +173,23 @@ def build_sld(devices: list[SldDevice]) -> SldTree:
             node.children = [c for c in node.children if c.device.device_id not in cyclic]
 
     # Stable output: a diagram that reorders between requests is unreadable.
+    #
+    # Siblings sharing a Collector are kept adjacent, and only then ordered by
+    # code. This changes no relationship — the tree is still `parent_device_id`
+    # alone — but it is what lets the renderer draw one unbroken box per
+    # enclosure instead of a box with somebody else's Inverter sitting inside
+    # it. Devices in no Collector sort first, ahead of every named one, so the
+    # unenclosed equipment does not end up wedged between two boxes.
+    def order(device: SldDevice) -> tuple[int, str, str]:
+        return (0 if device.collector_code is None else 1,
+                device.collector_code or "", device.code)
+
     def sort_node(node: SldNode) -> None:
-        node.children.sort(key=lambda c: c.device.code)
+        node.children.sort(key=lambda c: order(c.device))
         for child in node.children:
             sort_node(child)
 
-    tree.roots.sort(key=lambda n: n.device.code)
+    tree.roots.sort(key=lambda n: order(n.device))
     for root in tree.roots:
         sort_node(root)
     return tree

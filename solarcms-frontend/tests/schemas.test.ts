@@ -136,6 +136,7 @@ describe("the SLD payload", () => {
           name: "Main Meter",
           type: "MFM",
           variant: null,
+          collector_code: null,
           children: [
             {
               device_id: 4,
@@ -143,6 +144,9 @@ describe("the SLD payload", () => {
               name: "Inverter 1",
               type: "INVERTER",
               variant: "central",
+              // The enclosure this Device sits in. A box drawn around the
+              // node, never a node — nothing is wired through a room.
+              collector_code: "MCR",
               children: [],
             },
           ],
@@ -150,8 +154,15 @@ describe("the SLD payload", () => {
       ],
       excluded_not_in_power_path: [{ device_id: 5, code: "WMS-01", type: "WMS" }],
       orphaned: [],
+      collectors: [
+        { code: "MCR", device_ids: [4], device_count: 1, in_power_path_count: 1 },
+      ],
     });
     expect(parsed.roots[0].children[0].variant).toBe("central");
+    expect(parsed.roots[0].children[0].collector_code).toBe("MCR");
+    // The Collector is never a node in the tree — it is a roll-up beside it.
+    expect(parsed.roots).toHaveLength(1);
+    expect(parsed.collectors[0].code).toBe("MCR");
     // Not an error: these are real, monitored Devices carrying no current.
     expect(parsed.excluded_not_in_power_path).toHaveLength(1);
   });

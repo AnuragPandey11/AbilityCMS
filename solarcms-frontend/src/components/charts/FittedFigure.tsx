@@ -12,11 +12,19 @@
  * Measured, not guessed: a fixed size that fits eight digits is one digit
  * away from the same bug. The measurement is imperative on purpose — React
  * state here would mean a paint at the wrong size before the corrected one.
+ *
+ * ⚠ The floor is an **absolute size in pixels**, not a ratio of the original.
+ * A ratio floor is the right shape for a 24px tile and quietly wrong
+ * everywhere else: the same 0.55 applied to the 14px figures on a Plant card
+ * yields 7.7px, which is not a small number but an unreadable one. Shrinking
+ * is a last resort in any case — a caller with a figure too long for its box
+ * should compact the numeral (`formatHeadline`) rather than rely on this.
  */
 
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 
-const MIN_SCALE = 0.55;
+/** Never render a figure smaller than this, whatever the box does. */
+const MIN_FONT_PX = 11;
 
 export function FittedFigure({
   value,
@@ -50,10 +58,19 @@ export function FittedFigure({
       const gap = unitEl.current ? unitEl.current.offsetWidth + 4 : 0;
       const natural = text.scrollWidth;
       if (natural + gap <= available) return;
+
+      // The size the figure would render at untouched, which is what the
+      // pixel floor has to be expressed against.
+      const basePx = parseFloat(getComputedStyle(text).fontSize) || 16;
+      const minScale = Math.min(1, MIN_FONT_PX / basePx);
+
       // Keep the unit on the line if the figure can shrink enough; otherwise
       // let it wrap below and give the figure the whole width.
       const withUnit = (available - gap) / natural;
-      const scale = Math.max(MIN_SCALE, withUnit >= MIN_SCALE ? withUnit : available / natural);
+      const scale = Math.max(
+        minScale,
+        withUnit >= minScale ? withUnit : available / natural,
+      );
       text.style.fontSize = `${(scale * 100).toFixed(1)}%`;
     };
 

@@ -11,11 +11,13 @@
  * polluting the numbers.
  */
 
-import { useQueries } from "@tanstack/react-query";
-import { useAllPlants, useAlarms, useDeviceHealth } from "@/api/hooks";
-import { qk } from "@/api/queryKeys";
-import * as plantsApi from "@/api/endpoints/plants";
-import type { KpiFigure, PlantKpis, PlantListItem } from "@/api/schemas";
+import {
+  useAllPlants,
+  useAlarms,
+  useDeviceHealth,
+  usePlantKpiFanout,
+} from "@/api/hooks";
+import type { KpiFigure, PlantListItem } from "@/api/schemas";
 import { KpiTile, StatTile } from "@/components/charts/KpiTile";
 import { Panel, SectionHeading, Badge } from "@/components/ui";
 import {EmptyState, ErrorState, SkeletonChart, SkeletonKpiRow, SkeletonTable} from "@/components/state";
@@ -81,13 +83,14 @@ export function PortfolioDashboard(): JSX.Element {
   const onboarding = all.filter((plant) => isOnboarding(plant.status));
 
   // One KPI request per counted Plant. There is no fleet endpoint, by design.
-  const kpiQueries = useQueries({
-    queries: counted.map((plant) => ({
-      queryKey: qk.plantKpis(plant.id, period),
-      queryFn: () => plantsApi.plantKpis(plant.id, period),
-      staleTime: 30_000,
-    })),
-  });
+  //
+  // ⚠ This used to be its own `useQueries` block with `staleTime: 30_000` and
+  // no `refetchInterval`, which is not a slow refresh — it is *no* refresh.
+  // `staleTime` only says when a value may be re-asked for; something still
+  // has to ask, and with the global `refetchOnWindowFocus: false` nothing did.
+  // Every figure on this screen was therefore fixed at page load: on a wall
+  // display it never moved again, which reads as a plant that has stopped.
+  const { kpis, isLoading: kpisLoading } = usePlantKpiFanout(counted, period);
 
   if (plantsQuery.isLoading) {
     return (
@@ -116,9 +119,6 @@ export function PortfolioDashboard(): JSX.Element {
       />
     );
   }
-
-  const kpis = kpiQueries.map((query) => query.data as PlantKpis | undefined);
-  const kpisLoading = kpiQueries.some((query) => query.isLoading);
 
   const totalDcCapacity = counted.reduce(
     (sum, plant) => sum + (plant.dc_capacity_kwp ?? 0),
@@ -204,16 +204,17 @@ export function PortfolioDashboard(): JSX.Element {
         <PeriodPicker value={period} onChange={setPeriod} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
         <StatTile
           label="Total DC capacity"
-          value={formatCapacity(totalDcCapacity, "kWp")}
+          numeric={totalDcCapacity}
+          unit="kWp"
           footnote={`AC ${formatCapacity(totalAcCapacity, "kW")}`}
           hint="Sums active Plants only. Draft and commissioning Plants are excluded."
         />
         <StatTile
           label={`Energy (${period})`}
-          value={kpisLoading ? "…" : `${formatNumber(totalEnergy)} kWh`}
+          {...(kpisLoading ? { value: "…" } : { numeric: totalEnergy, unit: "kWh" })}
           hint="Summed from each Plant's export counter endpoints, read from hourly aggregates rather than raw Readings."
         />
         <KpiTile
@@ -236,12 +237,12 @@ export function PortfolioDashboard(): JSX.Element {
         />
         <StatTile
           label="CO₂ avoided"
-          value={kpisLoading ? "…" : `${formatNumber(totalCo2)} kg`}
+          {...(kpisLoading ? { value: "…" } : { numeric: totalCo2, unit: "kg" })}
           hint="Uses each region's grid emission factor. Provisional pending OPEN-16."
         />
         <StatTile
           label="Active alarms"
-          value={formatNumber(alarms.length, { digits: 0 })}
+          numeric={alarms.length}
           tone={alarms.length > 0 ? "warn" : "default"}
           footnote={
             <span className="flex flex-wrap gap-1">
