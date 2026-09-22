@@ -133,6 +133,20 @@ export function useSlotTrend(
   plantId: number | null,
   slotCode: string,
   range: TrendRange,
+  /**
+   * Force a tier instead of the one the range implies.
+   *
+   * The one caller that needs this is the daily-energy view. `ENERGY_TODAY` is
+   * a **cumulative counter that resets at midnight**, so at a sub-daily tier it
+   * draws a rising staircase — correct, and not what "energy per day" means. At
+   * `agg_1d` the tier's `last` roll-up returns each day's final value, which is
+   * that day's total, and summing across the Inverters gives the Plant's.
+   *
+   * ⚠ This is a *resolution* override and nothing more. It never changes which
+   * Device or Tag answers — that stays the slot's own resolution, so the bars
+   * remain the same claim as the tile above them.
+   */
+  tierOverride?: Tier,
 ): SlotTrend {
   const dashboardQuery = usePlantDashboard(plantId);
   const devicesQuery = usePlantDevices(plantId);
@@ -171,7 +185,7 @@ export function useSlotTrend(
   const now = Math.floor(Date.now() / 60_000) * 60_000;
   const to = new Date(now).toISOString();
   const from = new Date(now - HOURS_FOR[range] * 3_600_000).toISOString();
-  const tier = TIER_FOR[range];
+  const tier = tierOverride ?? TIER_FOR[range];
 
   const query: readingsApi.ReadingsQuery = {
     deviceIds,

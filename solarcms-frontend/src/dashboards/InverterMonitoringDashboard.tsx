@@ -38,7 +38,7 @@
 
 import { useMemo, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { useDeviceTableColumns, usePlantDevices, useTagsById } from "@/api/hooks";
+import { useDeviceTableColumns, usePlant, usePlantDevices, useTagsById } from "@/api/hooks";
 import { useLatestValues } from "@/api/useLatestValues";
 import { qk } from "@/api/queryKeys";
 import * as devicesApi from "@/api/endpoints/devices";
@@ -49,10 +49,13 @@ import { CommStatusBadge, LastSeen, PlantPicker } from "@/components/domain";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { Carousel, CarouselItem } from "@/components/ui/Carousel";
 import { DeviceCard } from "@/components/devices/DeviceCard";
+import { DeviceInspector } from "@/components/devices/DeviceInspector";
+import { Drawer } from "@/components/ui";
 import { ComparisonBars, type ComparisonRow } from "@/components/charts/ComparisonBars";
 import { StatTile } from "@/components/charts/KpiTile";
 import { UNDEFINED_DISPLAY, formatNumber, formatValue } from "@/format/value";
 import { usePlantScope } from "@/state/usePlantScope";
+import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
 
@@ -95,6 +98,9 @@ export function InverterMonitoringDashboard(): JSX.Element {
   const tagsById = useTagsById();
   const { devices: liveDevices } = useLiveSocket();
   const columnsQuery = useDeviceTableColumns();
+  // Timestamps render in the Plant's zone, never the browser's (Guardrail 11).
+  const plantQuery = usePlant(plantId);
+  const timezone = plantQuery.data?.timezone ?? DEFAULT_TIMEZONE;
 
   /**
    * Which measure the bars compare, as a Tag id.
@@ -107,9 +113,17 @@ export function InverterMonitoringDashboard(): JSX.Element {
    * column happened to be first on the render the catalogue arrived.
    */
   const [metricTagId, setMetricTagId] = useState<number | null>(null);
+  /** The Device whose full detail is open. A card is a glance; this is the rest. */
+  const [inspecting, setInspecting] = useState<DeviceListItem | null>(null);
   const inverterColumns = columnsQuery.data?.[INVERTER_TYPE_CODE] ?? [];
   const metric =
     inverterColumns.find((column) => column.tag_id === metricTagId) ?? inverterColumns[0];
+
+  /** id → Device, so the inspector names a parent rather than printing `#38`. */
+  const deviceById = useMemo(
+    () => new Map((devicesQuery.data ?? []).map((device) => [device.id, device])),
+    [devicesQuery.data],
+  );
 
   const inverters = useMemo(
     () =>
@@ -473,6 +487,8 @@ export function InverterMonitoringDashboard(): JSX.Element {
                           columns={inverterColumns}
                           values={valuesFor(row.device.id)}
                           maxFigures={6}
+                          onSelect={setInspecting}
+                          selected={inspecting?.id === row.device.id}
                         />
                       </CarouselItem>
                     ))}
@@ -494,6 +510,7 @@ export function InverterMonitoringDashboard(): JSX.Element {
                     columns={columns(variant)}
                     rowKey={(row) => row.device.id}
                     filterPlaceholder="Filter Inverters…"
+                    onRowClick={(row) => setInspecting(row.device)}
                   />
                 </div>
               </details>
@@ -501,6 +518,21 @@ export function InverterMonitoringDashboard(): JSX.Element {
           ))}
         </>
       )}
+
+      <Drawer
+        open={inspecting !== null}
+        onClose={() => setInspecting(null)}
+        title={inspecting ? `${inspecting.code} — ${inspecting.name}` : ""}
+      >
+        {inspecting ? (
+          <DeviceInspector
+            device={inspecting}
+            values={valuesFor(inspecting.id)}
+            timezone={timezone}
+            deviceLookup={deviceById}
+          />
+        ) : null}
+      </Drawer>
     </div>
   );
 }

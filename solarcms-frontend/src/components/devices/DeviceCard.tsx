@@ -22,7 +22,7 @@
 
 import type { CommStatus, DeviceListItem, DeviceTableColumn } from "@/api/schemas";
 import { DeviceArt } from "./DeviceArt";
-import { UNDEFINED_DISPLAY, formatNumber } from "@/format/value";
+import { UNDEFINED_DISPLAY, formatDigital, formatNumber } from "@/format/value";
 import { formatAge, ageSeconds } from "@/format/datetime";
 
 /**
@@ -38,19 +38,19 @@ const STATUS: Record<
 > = {
   online: {
     frame: "border-ok/30",
-    dot: "bg-ok",
+    dot: "bg-ok lamp-ok",
     label: "online",
     note: "Reporting within its expected interval.",
   },
   degraded: {
     frame: "border-warn/45",
-    dot: "bg-warn",
+    dot: "bg-warn lamp-warn",
     label: "degraded",
     note: "Late — past its expected interval but not yet silent.",
   },
   offline: {
     frame: "border-bad/45",
-    dot: "bg-bad",
+    dot: "bg-bad lamp-bad",
     label: "offline",
     note:
       "Not reporting. This is a communication fact, not an equipment one — " +
@@ -105,6 +105,16 @@ export function DeviceCard({
       <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1">
         {shown.map((column) => {
           const value = values?.[String(column.tag_id)];
+          /*
+            A Digital Input is a contact, not a quantity (§4.5). Rendered
+            through the numeric path it came out as "0.00 bool" — which is
+            three ways wrong at once: it invites arithmetic on a state, it
+            implies a precision a contact cannot have, and `bool` is a type
+            name leaking onto an operator's screen as though it were a unit.
+            Roughly a third of Tags are Digital Inputs and the whole of VCB and
+            TRANSFORMER is, so this is most of what those cards show.
+          */
+          const digital = column.category === "status";
           return (
             <div key={column.tag_id} className="min-w-0">
               <dt
@@ -114,26 +124,57 @@ export function DeviceCard({
                 {column.tag_code.replace(/_/g, " ")}
               </dt>
               <dd
-                className={`truncate font-mono text-[11px] tabular-nums ${
-                  value === undefined ? "text-ink-faint" : "text-ink"
-                }`}
+                className={`flex items-center gap-1 truncate text-[11px] ${
+                  digital ? "" : "font-mono tabular-nums"
+                } ${value === undefined ? "text-ink-faint" : "text-ink"}`}
                 title={
                   value === undefined
                     ? "No live value for this Tag. Silence is not zero."
-                    : `${column.name}${column.unit ? ` (${column.unit})` : ""}`
+                    : `${column.name}${!digital && column.unit ? ` (${column.unit})` : ""}`
                 }
               >
-                {value === undefined ? UNDEFINED_DISPLAY : formatNumber(value)}
-                {value !== undefined && column.unit ? (
-                  <span className="ml-0.5 text-[9px] text-ink-muted">{column.unit}</span>
-                ) : null}
+                {digital ? (
+                  <>
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        value === undefined
+                          ? "bg-ink-faint"
+                          : value !== 0
+                            ? "bg-ok"
+                            : "bg-ink-faint"
+                      }`}
+                    />
+                    {value === undefined ? UNDEFINED_DISPLAY : formatDigital(value)}
+                  </>
+                ) : (
+                  <>
+                    {value === undefined ? UNDEFINED_DISPLAY : formatNumber(value)}
+                    {value !== undefined && column.unit ? (
+                      <span className="text-[9px] text-ink-muted">{column.unit}</span>
+                    ) : null}
+                  </>
+                )}
               </dd>
             </div>
           );
         })}
         {shown.length === 0 ? (
-          <p className="col-span-2 text-[10px] text-ink-faint">
-            No summary figures are configured for {device.type_code}.
+          /*
+            Two different silences, and telling them apart is the whole value
+            of the message.
+            
+            A Device with no bindings decodes every message it sends into
+            nothing — it looks registered, healthy and online while carrying no
+            readable value at all, and the fix is in Tag Mapping. A Device with
+            bindings but no configured columns is fine; nobody has curated a
+            summary for its Type, and the fix is nowhere because the inspector
+            already shows everything. Saying "no summary figures are
+            configured" for the first case sends somebody to the wrong screen.
+          */
+          <p className="col-span-2 text-[10px] leading-snug text-ink-faint">
+            {device.binding_count === 0
+              ? "No Tags are bound, so every message this Device sends decodes into nothing. Map its payload keys in Tag Mapping."
+              : `No summary figures are configured for ${device.type_code}. Open the card for everything it reports.`}
           </p>
         ) : null}
       </dl>
@@ -150,9 +191,9 @@ export function DeviceCard({
   );
 
   const className =
-    `w-[176px] rounded-card border bg-surface-raised p-2.5 text-left transition ` +
+    `surface-tile w-[176px] rounded-card border p-2.5 text-left ` +
     `${status.frame} ${selected ? "ring-2 ring-accent/40" : ""} ` +
-    `${onSelect ? "cursor-pointer hover:border-accent/50" : ""}`;
+    `${onSelect ? "surface-interactive cursor-pointer hover:border-accent/55" : ""}`;
 
   if (!onSelect) return <div className={className}>{body}</div>;
   return (

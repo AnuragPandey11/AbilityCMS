@@ -49,6 +49,23 @@ export function CoverageBadge({
     );
   }
 
+  // Nothing was expected, so there is no ratio to take — a Plant with no
+  // Devices, or a period before it was commissioned. Saying "0% coverage"
+  // would report a Plant that was never due to send anything as one that has
+  // gone dark.
+  if (coverage.ratio === null || coverage.expected_samples === 0) {
+    return (
+      <span className={className}>
+        <Badge
+          tone="neutral"
+          title="No readings were expected in this period — this Plant has no Devices bound, or was not yet commissioned. Nothing is missing; there was nothing due."
+        >
+          nothing expected
+        </Badge>
+      </span>
+    );
+  }
+
   const percent = Math.max(0, Math.min(1, coverage.ratio)) * 100;
   const tone = coverage.complete || percent >= 98 ? "ok" : percent >= 80 ? "warn" : "bad";
 
@@ -80,6 +97,14 @@ export function CoverageBar({ coverage }: { coverage: KpiCoverage | null | undef
       <p className="text-[11px] leading-snug text-ink-faint">
         No coverage was reported for this period, so how much of it these figures saw is
         unknown.
+      </p>
+    );
+  }
+  if (coverage.ratio === null || coverage.expected_samples === 0) {
+    return (
+      <p className="text-[11px] leading-snug text-ink-faint">
+        No readings were expected in this period — this Plant has no Devices bound, or was
+        not yet commissioned. Nothing is missing; there was nothing due.
       </p>
     );
   }

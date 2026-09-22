@@ -37,8 +37,8 @@ import { useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import type { Tier } from "@/api/schemas";
 import type { TrendPoint } from "@/api/useSlotTrend";
-import { formatAxisLabel, formatDateTime, DEFAULT_TIMEZONE } from "@/format/datetime";
-import { formatValue, formatNumber } from "@/format/value";
+import { formatAxisLabel, formatBucket, DEFAULT_TIMEZONE } from "@/format/datetime";
+import { formatCompact, formatNumber, formatValue } from "@/format/value";
 import { chartTheme, useEcharts } from "./useEcharts";
 import { seriesPalette, token, tokenAlpha, withAlpha } from "@/theme/tokens";
 import { useTheme } from "@/theme/ThemeProvider";
@@ -71,6 +71,47 @@ export interface TrendChartProps {
 }
 
 /**
+ * A y-axis tick label that fits its gutter, and the gutter it needs.
+ *
+ * ⚠ ECharts does not measure axis labels against the grid — it draws them and
+ * lets them overflow. A lifetime energy counter ticks at 1,500,000, which is
+ * nine characters, and against the fixed 52px gutter the leading digit was
+ * simply **cut off**: the axis read `,500,000`. Silently losing the most
+ * significant digit of a scale is about the worst thing an axis can do.
+ *
+ * Two halves to the fix. Compact the label once it is long enough to be a
+ * problem — `1.5M` rather than `1,500,000`, which is also easier to read at
+ * tick size — and then size the gutter from the longest label that will
+ * actually be drawn rather than from a guess.
+ *
+ * Compaction starts at 10,000 rather than at `COMPACT_ABOVE`: a tile has room
+ * for `999,999` and an axis tick does not, so the two thresholds are
+ * deliberately different.
+ */
+const AXIS_COMPACT_ABOVE = 10_000;
+
+function axisTickLabel(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  if (Math.abs(value) >= AXIS_COMPACT_ABOVE) return formatCompact(value);
+  if (Number.isInteger(value)) return formatNumber(value, { digits: 0 });
+  // A tick is not a reading: trailing zeros that pad it to the app's usual
+  // precision are noise on an axis. `0.200 0.400 0.600` becomes `0.2 0.4 0.6`,
+  // which is the same scale with a third of the ink.
+  return String(Number(value.toFixed(3)));
+}
+
+/** Left gutter wide enough for the widest tick this series will produce. */
+function axisGutter(points: TrendPoint[]): number {
+  let widest = 0;
+  for (const point of points) {
+    if (point.value === null) continue;
+    widest = Math.max(widest, axisTickLabel(point.value).length);
+  }
+  // ~6.2px per character at the 10px tick size, plus the tick and a margin.
+  return Math.min(78, Math.max(44, Math.round(widest * 6.2) + 16));
+}
+
+/**
  * The series colour, resolved at render so it follows the theme.
  *
  * Slot 1 of the categorical palette, never a hue picked here. The slot order is
@@ -98,23 +139,44 @@ export function TrendChart({
   const { version: themeVersion } = useTheme();
   const theme = chartTheme();
 
-  const peak = useMemo(() => {
+  const { peak, peakPosition } = useMemo(() => {
     let best: TrendPoint | null = null;
-    for (const point of points) {
-      if (point.value === null) continue;
-      if (best === null || point.value > (best.value ?? -Infinity)) best = point;
-    }
-    return best;
+    let bestIndex = -1;
+    points.forEach((point, index) => {
+      if (point.value === null) return;
+      if (best === null || point.value > (best.value ?? -Infinity)) {
+        best = point;
+        bestIndex = index;
+      }
+    });
+    return {
+      peak: best as TrendPoint | null,
+      // Where along the window the peak fell, 0..1 — used only to keep its
+      // label inside the plot.
+      peakPosition: points.length > 1 ? bestIndex / (points.length - 1) : 0.5,
+    };
   }, [points]);
 
   const color = seriesColor(colorToken);
   const data = points.map((point) => [point.at, point.value] as [string, number | null]);
 
+  /**
+   * How many points can actually be drawn.
+   *
+   * ⚠ **A single point on a line with `showSymbol: false` renders nothing at
+   * all** — a line needs two vertices, so one reading produces a blank plot
+   * with axes, which reads as "no data" when the truth is "one reading". It is
+   * the worst of the edge cases because it is silent and plausible. Below three
+   * points the symbols come back on, so one reading is a visible dot.
+   */
+  const plottable = points.filter((point) => point.value !== null).length;
+  const sparse = plottable > 0 && plottable < 3;
+
   const option: EChartsOption = {
     backgroundColor: "transparent",
     textStyle: theme.textStyle,
     animationDuration: 320,
-    grid: { left: 52, right: 18, top: markPeak ? 26 : 14, bottom: 34 },
+    grid: { left: axisGutter(points), right: 26, top: markPeak ? 28 : 20, bottom: 34 },
     tooltip: {
       trigger: "axis",
       backgroundColor: theme.tooltipBackground,
@@ -134,7 +196,7 @@ export function TrendChart({
         const first = rows[0] as { axisValue?: string; dataIndex?: number } | undefined;
         const point = points[first?.dataIndex ?? -1];
         if (!point || point.value === null) {
-          return `${formatDateTime(first?.axisValue, timezone)}<br/><span style="opacity:.7">no data in this interval</span>`;
+          return `${formatBucket(first?.axisValue, tier, timezone)}<br/><span style="opacity:.7">no data in this interval</span>`;
         }
         // The contributor count is on the tooltip rather than the axis: on a
         // summed series a bucket where four of seventeen Inverters reported is
@@ -145,7 +207,7 @@ export function TrendChart({
             ? `<br/><span style="opacity:.65">${point.contributors} Device(s) in this bucket</span>`
             : "";
         return (
-          `${formatDateTime(point.at, timezone)}<br/>` +
+          `${formatBucket(point.at, tier, timezone)}<br/>` +
           `<span style="color:${color}">●</span> ${label}: ` +
           `<strong>${formatValue(point.value, unit ?? undefined)}</strong>${partial}`
         );
@@ -156,6 +218,13 @@ export function TrendChart({
       axisLine: { lineStyle: { color: token("chart-grid") } },
       axisTick: { show: false },
       splitLine: { show: false },
+      /*
+        On the daily tier the ticks must land on whole days. Without this
+        ECharts chose a sub-day interval and, since the label renders as
+        `DD-MM`, the same date appeared two or three times in a row — an axis
+        that looks like duplicated data rather than a tick spacing choice.
+      */
+      minInterval: tier === "agg_1d" ? 24 * 3600 * 1000 : undefined,
       axisLabel: {
         fontSize: 10,
         hideOverlap: true,
@@ -172,7 +241,11 @@ export function TrendChart({
       axisLine: { show: false },
       axisTick: { show: false },
       splitLine: theme.splitLine,
-      axisLabel: { fontSize: 10, color: token("ink-faint") },
+      axisLabel: {
+        fontSize: 10,
+        color: token("ink-faint"),
+        formatter: (value: number) => axisTickLabel(value),
+      },
       scale: false,
     },
     dataZoom: [
@@ -203,7 +276,9 @@ export function TrendChart({
             name: label,
             type: "line",
             data,
-            showSymbol: false,
+            // See `sparse`: one point with no symbol draws nothing.
+            showSymbol: sparse,
+            symbolSize: 7,
             // ⚠ Never `connectNulls`. A gap means the Plant did not report,
             // which is not the same as reporting zero, and a line drawn across
             // the hole claims a value nobody measured.
@@ -241,7 +316,19 @@ export function TrendChart({
                   itemStyle: { color, borderColor: token("surface-raised"), borderWidth: 2 },
                   label: {
                     show: true,
-                    position: "top",
+                    /*
+                      Flipped when the peak sits near an edge.
+                      
+                      ECharts anchors a markPoint label to the point and does
+                      not reflow it, so a peak in the last minutes of the
+                      window — which on a generation curve is where a *rising*
+                      day peaks — pushed "peak 235 kW" off the right of the
+                      plot and rendered it as "peak 235 k". Nudging the label
+                      inboard costs nothing and the one case it fixes is the
+                      common one.
+                    */
+                    position:
+                      peakPosition > 0.86 ? "left" : peakPosition < 0.1 ? "right" : "top",
                     distance: 8,
                     fontSize: 10,
                     color: token("ink"),
@@ -316,7 +403,25 @@ export function TrendChart({
         </button>
       </div>
 
-      {tableView ? (
+      {plottable === 0 && !tableView ? (
+        /*
+          An empty plot with axes and no marks reads as a broken chart. The
+          three reasons a series is empty are different problems — nothing was
+          ever recorded, everything in the window was flagged, or the Plant went
+          quiet — and the first two are named here rather than left to be
+          guessed from a blank rectangle.
+        */
+        <div
+          style={{ height }}
+          className="flex items-center justify-center rounded-control border border-dashed border-line px-4 text-center"
+        >
+          <p className="text-[11px] leading-snug text-ink-faint">
+            {flaggedCount > 0
+              ? `No value could be plotted: all ${flaggedCount} reading${flaggedCount === 1 ? "" : "s"} in this window were flagged out of range, stale or unparseable.`
+              : "No readings in this window. That is not a reading of zero — nothing arrived to draw."}
+          </p>
+        </div>
+      ) : tableView ? (
         <div style={{ height }} className="overflow-auto rounded-control border border-line">
           <table className="w-full text-[11px]">
             <thead className="sticky top-0 bg-surface-sunken text-ink-muted">
@@ -339,7 +444,7 @@ export function TrendChart({
                 rows.map((point) => (
                   <tr key={point.at} className="border-t border-line-soft">
                     <td className="px-2 py-1 text-ink-muted">
-                      {formatDateTime(point.at, timezone)}
+                      {formatBucket(point.at, tier, timezone)}
                     </td>
                     <td className="px-2 py-1 text-right font-mono tabular-nums text-ink">
                       {formatNumber(point.value)}
@@ -453,7 +558,7 @@ export function SmallMultiples({
           })
           .filter(Boolean)
           .join("<br/>");
-        return `${formatDateTime(first?.axisValue, timezone)}<br/>${body || '<span style="opacity:.7">no data</span>'}`;
+        return `${formatBucket(first?.axisValue, series[0]?.tier, timezone)}<br/>${body || '<span style="opacity:.7">no data</span>'}`;
       },
     },
     xAxis: series.map((entry, index) => ({

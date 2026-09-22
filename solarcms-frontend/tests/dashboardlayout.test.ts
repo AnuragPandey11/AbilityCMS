@@ -121,3 +121,39 @@ describe("navigation grouping", () => {
     expect(groupDashboards([])).toEqual([]);
   });
 });
+
+describe("navigation never offers a dashboard that refuses", () => {
+  const ALL = [
+    "portfolio", "plant_overview", "plant_list", "single_plant",
+    "sld", "inverter_monitoring", "alarms", "reports",
+  ];
+
+  it("hides Reports from a session without report.generate", () => {
+    // A Guest is granted the `reports` dashboard by the database, and the
+    // Reports screen then requires `report.generate`. The menu entry led
+    // straight to "this requires the report.generate permission" — a dead
+    // flow, and the kind that makes somebody doubt the rest of the menu.
+    const guest = groupDashboards(ALL, (p) => p === "dashboard.view");
+    expect(guest.flatMap((g) => g.codes)).not.toContain("reports");
+  });
+
+  it("keeps Reports for a session that holds the permission", () => {
+    const admin = groupDashboards(ALL, () => true);
+    expect(admin.flatMap((g) => g.codes)).toContain("reports");
+  });
+
+  it("hides nothing else — a missing action must not remove a whole screen", () => {
+    // Only a dashboard whose screen cannot function at all belongs in
+    // DASHBOARD_REQUIRES. Hiding a screen because one button is unavailable
+    // takes away the reading a Guest is entitled to.
+    const guest = groupDashboards(ALL, (p) => p === "dashboard.view").flatMap((g) => g.codes);
+    for (const code of ALL.filter((c) => c !== "reports")) {
+      expect(guest, `${code} was hidden from a viewer`).toContain(code);
+    }
+  });
+
+  it("shows everything granted when no permission check is supplied", () => {
+    // The default keeps the previous behaviour for callers that only group.
+    expect(groupDashboards(ALL).flatMap((g) => g.codes)).toHaveLength(ALL.length);
+  });
+});

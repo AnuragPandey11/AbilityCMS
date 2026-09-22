@@ -20,14 +20,15 @@
  */
 
 import { useState } from "react";
-import { usePlantDevices, usePlantSld, useTagsById } from "@/api/hooks";
+import { usePlant, usePlantDevices, usePlantSld, useTagsById } from "@/api/hooks";
 import { SldTree, type SldOverlay } from "@/components/sld/SldTree";
 import { PlantFlow } from "@/components/sld/PlantFlow";
 import { Panel, Badge } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonPanel } from "@/components/state";
 import { CommStatusBadge, PlantPicker } from "@/components/domain";
-import { DeviceDetailCard } from "@/components/devices/DeviceDetailCard";
+import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { usePlantScope } from "@/state/usePlantScope";
+import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
 import { formatValue } from "@/format/value";
@@ -35,6 +36,10 @@ import type { CommStatus } from "@/api/schemas";
 
 export function SldDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
+  // Every timestamp in the inspector renders in the Plant's zone, never the
+  // browser's (Guardrail 11).
+  const plantQuery = usePlant(plantId);
+  const timezone = plantQuery.data?.timezone ?? DEFAULT_TIMEZONE;
   const sldQuery = usePlantSld(plantId);
   const devicesQuery = usePlantDevices(plantId);
   const tagsById = useTagsById();
@@ -189,13 +194,33 @@ export function SldDashboard(): JSX.Element {
 
         <div className="space-y-4">
           {selectedDevice ? (
-            <DeviceDetailCard
-              device={selectedDevice}
-              devicesById={devicesById}
-              live={liveDevices[selectedDevice.id] ?? null}
-              tagsById={tagsById}
-              onClose={() => setSelected(null)}
-            />
+            /*
+              The same inspector the Plant screen opens, not a second, smaller
+              summary of the same Device. Clicking a box in the diagram and
+              clicking a card on the dashboard asked the identical question and
+              used to get two different answers — this one listed the wiring and
+              a few live values, the other listed every Tag. One component means
+              a Device cannot look different depending on which screen found it.
+            */
+            <Panel
+              title={`${selectedDevice.code} — ${selectedDevice.name}`}
+              actions={
+                <button
+                  type="button"
+                  onClick={() => setSelected(null)}
+                  className="rounded-control border border-line px-2 py-1 text-[11px] text-ink-muted transition hover:text-ink"
+                >
+                  Clear
+                </button>
+              }
+            >
+              <DeviceInspector
+                device={selectedDevice}
+                values={liveDevices[selectedDevice.id]?.values}
+                timezone={timezone}
+                deviceLookup={devicesById}
+              />
+            </Panel>
           ) : (
             <Panel title="Device detail">
               <p className="text-xs text-ink-faint">

@@ -15,8 +15,13 @@ import {
   formatValue,
   variantNote,
   digitsForUnit,
+  formatCompact,
 } from "@/format/value";
-import { formatAge, formatDate, formatDateTime, formatTime } from "@/format/datetime";
+import { formatAge, formatDate, formatDateTime, formatTime,
+  formatBucket,
+  formatAxisLabel,
+  ageSeconds,
+} from "@/format/datetime";
 import { isGoodQuality, quality, summariseQuality } from "@/format/quality";
 
 describe("undefined is not zero (§4.3, Guardrail 3)", () => {
@@ -205,5 +210,75 @@ describe("digitsForUnit", () => {
 
   it("still lets a caller override", () => {
     expect(formatValue(17, "count", { digits: 2 })).toBe("17.00 count");
+  });
+});
+
+describe("formatBucket", () => {
+  it("renders a daily bucket as a date, with no time", () => {
+    // A daily bucket shown as "17-09-2026 05:30:00" claims a reading taken at
+    // half past five. It is the whole of the 17th; the 05:30 is only UTC
+    // midnight expressed in the Plant's zone, and an operator reading it as a
+    // time is misled by the formatter rather than by the data.
+    expect(formatBucket("2026-09-17T00:00:00Z", "agg_1d", "Asia/Kolkata")).toBe("17-09-2026");
+  });
+
+  it("keeps the time on every finer tier", () => {
+    for (const tier of ["readings", "agg_1m", "agg_15m", "agg_1h"]) {
+      expect(formatBucket("2026-09-17T00:00:00Z", tier, "Asia/Kolkata")).toBe(
+        "17-09-2026 05:30:00",
+      );
+    }
+  });
+
+  it("falls back to a full timestamp when the tier is unknown", () => {
+    expect(formatBucket("2026-09-17T00:00:00Z", null, "Asia/Kolkata")).toBe(
+      "17-09-2026 05:30:00",
+    );
+  });
+});
+
+describe("timestamps from a chart axis", () => {
+  const EPOCH = Date.parse("2026-09-17T00:00:00Z");
+
+  it("formats epoch milliseconds, which is what ECharts passes a tooltip", () => {
+    // On a `type: "time"` axis ECharts hands the formatter `axisValue` as a
+    // number. The signature said `Date | string`, so every tooltip that
+    // formatted the axis value instead of the datum threw
+    // `date.getTime is not a function` — inside a render, which unmounts the
+    // chart. TypeScript could not catch it: the value arrives as `unknown`.
+    expect(formatDateTime(EPOCH, "Asia/Kolkata")).toBe("17-09-2026 05:30:00");
+    expect(formatDate(EPOCH, "Asia/Kolkata")).toBe("17-09-2026");
+    expect(formatBucket(EPOCH, "agg_1d", "Asia/Kolkata")).toBe("17-09-2026");
+    expect(formatAxisLabel(EPOCH, "agg_1d", "Asia/Kolkata")).toBe("17-09");
+  });
+
+  it("agrees across all three input shapes", () => {
+    const iso = "2026-09-17T00:00:00Z";
+    const expected = formatDateTime(iso, "Asia/Kolkata");
+    expect(formatDateTime(EPOCH, "Asia/Kolkata")).toBe(expected);
+    expect(formatDateTime(new Date(EPOCH), "Asia/Kolkata")).toBe(expected);
+  });
+
+  it("still returns a dash for rubbish rather than throwing", () => {
+    expect(formatDateTime(Number.NaN, "Asia/Kolkata")).toBe("—");
+    expect(formatDateTime("not a date", "Asia/Kolkata")).toBe("—");
+    expect(ageSeconds(Number.NaN)).toBeNull();
+    expect(ageSeconds(null)).toBeNull();
+  });
+});
+
+describe("formatCompact", () => {
+  it("uppercases the suffix, because `1.5m kWh` reads as milli", () => {
+    // The same trap `formatHeadline` documents. This one feeds chart axis
+    // ticks, where the suffix sits directly beside the unit name — the worst
+    // possible place for a lowercase `m` next to `kWh`.
+    expect(formatCompact(1_500_000)).toBe("1.5M");
+    expect(formatCompact(25_000)).toBe("25K");
+    expect(formatCompact(-1_368_004)).toBe("-1.4M");
+  });
+
+  it("returns a dash rather than NaN for nothing", () => {
+    expect(formatCompact(null)).toBe("—");
+    expect(formatCompact(Number.NaN)).toBe("—");
   });
 });

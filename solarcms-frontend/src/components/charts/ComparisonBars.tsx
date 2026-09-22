@@ -47,11 +47,19 @@ export function ComparisonBars({
   unit,
   metricLabel,
   height = 240,
+  noun = "Device",
 }: {
   rows: ComparisonRow[];
   unit: string | null;
   metricLabel: string;
   height?: number;
+  /**
+   * What the rows are, singular. The same chart ranks Inverters within a Plant
+   * and Plants within a fleet, and a note that says "2 Devices reported no
+   * value" under a chart of Plants is the kind of small wrongness that makes a
+   * reader distrust the rest of the screen.
+   */
+  noun?: string;
 }): JSX.Element {
   const { version: themeVersion } = useTheme();
   const theme = chartTheme();
@@ -172,9 +180,10 @@ export function ComparisonBars({
       <div ref={ref} style={{ height }} />
       {silent > 0 ? (
         <p className="mt-1 text-[10px] leading-snug text-ink-faint">
-          {silent} Device{silent === 1 ? "" : "s"} reported no value for {metricLabel} in this
-          window and {silent === 1 ? "is" : "are"} shown with an empty bar. That is not a
-          reading of zero — nobody knows what {silent === 1 ? "it" : "they"} produced.
+          {silent} {noun}
+          {silent === 1 ? "" : "s"} reported no value for {metricLabel} in this window and{" "}
+          {silent === 1 ? "is" : "are"} shown with an empty bar. That is not a reading of
+          zero — nobody knows what {silent === 1 ? "it" : "they"} produced.
         </p>
       ) : null}
     </div>

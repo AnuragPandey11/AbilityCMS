@@ -35,6 +35,7 @@ import { UsersAdmin } from "@/admin/UsersAdmin";
 import { SystemAdmin } from "@/admin/SystemAdmin";
 import { usePermission, type Permission } from "@/auth/usePermission";
 import { ArtPreview } from "@/dev/ArtPreview";
+import { ChartPreview } from "@/dev/ChartPreview";
 import { ForbiddenState } from "@/components/state";
 
 /** One component per dashboard code. Codes come from the database. */
@@ -115,6 +116,8 @@ export function AppRoutes(): JSX.Element {
         <Route path="/d/:code" element={<DashboardRoute />} />
         {/* Development contact sheet for the equipment artwork. Not navigable. */}
         <Route path="/dev/art" element={<ArtPreview />} />
+        {/* Chart edge-case contact sheet. Not navigable. */}
+        <Route path="/dev/charts" element={<ChartPreview />} />
 
         <Route
           path="/admin/onboarding"

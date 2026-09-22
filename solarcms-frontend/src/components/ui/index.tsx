@@ -32,7 +32,7 @@ export function Panel({
 }): JSX.Element {
   return (
     <section
-      className={`rounded-card border border-line bg-surface-raised shadow-soft ${
+      className={`surface-card rounded-card border border-line ${
         fill ? "flex flex-col" : ""
       } ${className}`}
     >

@@ -40,6 +40,28 @@ import {
 
 export type IconComponent = ComponentType<IconProps>;
 
+/**
+ * A permission a dashboard's screen *requires to be usable at all*.
+ *
+ * ⚠ This is not a second authorization layer — the screen and the server both
+ * enforce their own rules, and nothing here grants anything. It exists so the
+ * navigation cannot offer a destination that immediately refuses.
+ *
+ * A Guest is granted the `reports` dashboard by `dashboards`, and the Reports
+ * screen then requires `report.generate`, which a Guest does not have. The
+ * result was a menu entry that led straight to "this requires the
+ * report.generate permission" — a dead flow, and the specific kind that makes
+ * somebody doubt the rest of the menu.
+ *
+ * Only list a dashboard whose screen genuinely cannot function without the
+ * permission. A screen that merely *hides a button* belongs nowhere near this
+ * map: hiding the whole dashboard because one action is unavailable would take
+ * away the reading a Guest is entitled to.
+ */
+export const DASHBOARD_REQUIRES: Record<string, Permission> = {
+  reports: "report.generate",
+};
+
 export const DASHBOARD_ICONS: Record<string, IconComponent> = {
   portfolio: IconPortfolio,
   plant_overview: IconOverview,
@@ -81,16 +103,30 @@ export const NAV_GROUPS: NavGroup[] = [
  * Takes the granted list rather than reading it, so this stays a pure function
  * and the ordering rule is testable without a session.
  */
-export function groupDashboards(granted: string[]): NavGroup[] {
+export function groupDashboards(
+  granted: string[],
+  /**
+   * Whether the session holds a permission. Omitted in tests that only care
+   * about grouping; omitting it shows every granted dashboard, which is the
+   * previous behaviour.
+   */
+  has: (permission: Permission) => boolean = () => true,
+): NavGroup[] {
+  // A dashboard the screen will refuse is not offered. See DASHBOARD_REQUIRES.
+  const usable = granted.filter((code) => {
+    const required = DASHBOARD_REQUIRES[code];
+    return required === undefined || has(required);
+  });
+
   const claimed = new Set(NAV_GROUPS.flatMap((group) => group.codes));
   const groups = NAV_GROUPS.map((group) => ({
     label: group.label,
-    codes: group.codes.filter((code) => granted.includes(code)),
+    codes: group.codes.filter((code) => usable.includes(code)),
   })).filter((group) => group.codes.length > 0);
 
   // Anything the server granted that no group claims. Kept in the server's own
   // order, which is `dashboards.sort_order`.
-  const rest = granted.filter((code) => !claimed.has(code));
+  const rest = usable.filter((code) => !claimed.has(code));
   if (rest.length > 0) groups.push({ label: "More", codes: rest });
   return groups;
 }

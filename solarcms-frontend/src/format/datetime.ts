@@ -12,11 +12,27 @@
 
 export const DEFAULT_TIMEZONE = "Asia/Kolkata";
 
+/**
+ * A timestamp in any of the three shapes this app actually receives.
+ *
+ * ⚠ **The number is not optional.** ECharts hands a tooltip formatter the axis
+ * value as **epoch milliseconds** on a `type: "time"` axis, so every chart
+ * tooltip that showed a timestamp was passing a `number` into a signature that
+ * said `Date | string`. TypeScript could not catch it — the value arrives from
+ * ECharts typed `unknown` and is narrowed by hand — and the result was
+ * `TypeError: date.getTime is not a function` thrown *inside a render*, which
+ * unmounts the chart. It only fired on the one branch that formatted the axis
+ * value rather than the datum, which is why it hid behind a hover on a chart
+ * with a gap in it.
+ */
+export type Timestamp = Date | string | number;
+
 function parts(
-  value: Date | string,
+  value: Timestamp,
   timeZone: string,
 ): Record<string, string> | null {
-  const date = typeof value === "string" ? new Date(value) : value;
+  const date =
+    value instanceof Date ? value : new Date(typeof value === "number" ? value : String(value));
   if (Number.isNaN(date.getTime())) return null;
   let formatter: Intl.DateTimeFormat;
   try {
@@ -51,7 +67,7 @@ function parts(
 
 /** `DD-MM-YYYY HH:MM:SS` in the given zone. */
 export function formatDateTime(
-  value: Date | string | null | undefined,
+  value: Timestamp | null | undefined,
   timeZone: string = DEFAULT_TIMEZONE,
 ): string {
   if (value === null || value === undefined) return "—";
@@ -62,7 +78,7 @@ export function formatDateTime(
 
 /** `DD-MM-YYYY`. */
 export function formatDate(
-  value: Date | string | null | undefined,
+  value: Timestamp | null | undefined,
   timeZone: string = DEFAULT_TIMEZONE,
 ): string {
   if (value === null || value === undefined) return "—";
@@ -73,7 +89,7 @@ export function formatDate(
 
 /** `HH:MM:SS` — for chart axes, where the date is already in the title. */
 export function formatTime(
-  value: Date | string | null | undefined,
+  value: Timestamp | null | undefined,
   timeZone: string = DEFAULT_TIMEZONE,
 ): string {
   if (value === null || value === undefined) return "—";
@@ -87,7 +103,7 @@ export function formatTime(
  * seconds implies a precision the data does not have.
  */
 export function formatAxisLabel(
-  value: Date | string,
+  value: Timestamp,
   tier: string,
   timeZone: string = DEFAULT_TIMEZONE,
 ): string {
@@ -97,6 +113,25 @@ export function formatAxisLabel(
   if (tier === "agg_1h") return `${p.day}-${p.month} ${p.hour}:00`;
   if (tier === "readings") return `${p.hour}:${p.minute}:${p.second}`;
   return `${p.hour}:${p.minute}`;
+}
+
+/**
+ * A bucket's timestamp, at a resolution matching its tier.
+ *
+ * The same reasoning as `formatAxisLabel`, for the places that show a full
+ * timestamp: a tooltip and a table view. A daily bucket rendered as
+ * `17-09-2026 05:30:00` claims a reading taken at half past five — it is in
+ * fact the whole of the 17th, and the 05:30 is only UTC midnight expressed in
+ * the Plant's zone. An operator reading it as a time is being misled by the
+ * formatter, not by the data.
+ */
+export function formatBucket(
+  value: Timestamp | null | undefined,
+  tier: string | null | undefined,
+  timeZone: string = DEFAULT_TIMEZONE,
+): string {
+  if (tier === "agg_1d") return formatDate(value, timeZone);
+  return formatDateTime(value, timeZone);
 }
 
 /** "4s ago", "12m ago". Used for staleness, where the number is the point. */
@@ -109,9 +144,10 @@ export function formatAge(seconds: number | null | undefined): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export function ageSeconds(value: Date | string | null | undefined): number | null {
-  if (!value) return null;
-  const date = typeof value === "string" ? new Date(value) : value;
+export function ageSeconds(value: Timestamp | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const date =
+    value instanceof Date ? value : new Date(typeof value === "number" ? value : String(value));
   if (Number.isNaN(date.getTime())) return null;
   return (Date.now() - date.getTime()) / 1000;
 }

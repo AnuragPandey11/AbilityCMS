@@ -53,19 +53,19 @@ const HEALTH: Record<
 > = {
   ok: {
     frame: "border-ok/35 bg-ok/[0.05]",
-    dot: "bg-ok",
+    dot: "bg-ok lamp-ok",
     rail: "text-ok",
     note: "Every Device in this stage is reporting.",
   },
   degraded: {
     frame: "border-warn/50 bg-warn/[0.06]",
-    dot: "bg-warn",
+    dot: "bg-warn lamp-warn",
     rail: "text-warn",
     note: "Some Devices in this stage are not reporting.",
   },
   down: {
     frame: "border-bad/50 bg-bad/[0.06]",
-    dot: "bg-bad",
+    dot: "bg-bad lamp-bad",
     rail: "text-bad",
     note: "No Device in this stage is reporting.",
   },

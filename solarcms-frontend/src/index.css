@@ -22,13 +22,13 @@
 @layer base {
   :root {
     /* ── Grounds ─────────────────────────────────────────────────────────── */
-    --c-surface: 234 238 236; /* page */
+    --c-surface: 233 238 235; /* page */
     --c-surface-raised: 255 255 255; /* cards, panels */
-    --c-surface-sunken: 244 247 245; /* sidebar, table headers */
+    --c-surface-sunken: 243 247 244; /* sidebar, table headers */
 
     /* ── Lines ───────────────────────────────────────────────────────────── */
-    --c-line: 229 234 231;
-    --c-line-soft: 238 242 240;
+    --c-line: 223 230 226;
+    --c-line-soft: 236 241 238;
     /* A line that must read as a deliberate edge rather than a divider: the
        dashed Collector outlines and the SLD connectors. One step darker than
        `line`, never `ink` — an enclosure is context, not content. */
@@ -85,6 +85,33 @@
     --c-series-8: 227 73 72; /* red */
 
 
+    /* ── Depth and ambience ──────────────────────────────────────────────── */
+    /*
+     * The screen was flat, and flat is not the same as restrained. Every
+     * surface sat at the same apparent height, every card was a rectangle of
+     * one colour behind a hairline, and nothing on the page suggested it had a
+     * light source — which is what made a technically correct interface feel
+     * dead.
+     *
+     * Three things fix it, and none of them adds a colour that *means*
+     * anything. That restraint is the point: status already owns green, amber
+     * and red, series colour owns identity, and a decorative hue that drifts
+     * near either would start reading as information.
+     *
+     * `--c-edge-top`  a 1px inner highlight along the top edge of a raised
+     *                 surface. This is the whole trick — it puts a light source
+     *                 above the page, and a card with a lit top edge reads as
+     *                 an object rather than a region.
+     * `--ambient-*`   two very large, very faint radial washes behind the whole
+     *                 app, in the brand hue and its cool complement. At these
+     *                 alphas they are felt rather than seen: the page stops
+     *                 being one value and gains a direction.
+     */
+    --c-edge-top: 255 255 255;
+    --edge-top-alpha: 0.9;
+    --ambient-accent: 0.1;
+    --ambient-info: 0.07;
+
     /* ── Equipment artwork ───────────────────────────────────────────────── */
     /* The two parts of a device drawing that must know what is behind it.
        Everything else in `components/devices/art/` is a fixed material colour,
@@ -96,8 +123,9 @@
     --art-shadow: 15 30 25;
     --art-shadow-alpha: 0.16;
 
-    --shadow-card: 0 1px 2px rgb(16 32 24 / 0.04), 0 8px 22px -12px rgb(16 32 24 / 0.14);
-    --shadow-soft: 0 1px 2px rgb(16 32 24 / 0.05);
+    --shadow-card: 0 1px 2px rgb(16 32 24 / 0.05), 0 2px 5px -2px rgb(16 32 24 / 0.06),
+      0 12px 28px -14px rgb(16 32 24 / 0.16);
+    --shadow-soft: 0 1px 2px rgb(16 32 24 / 0.06);
 
     color-scheme: light;
   }
@@ -105,17 +133,17 @@
   /* System preference, only when the user has not chosen explicitly. */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --c-surface: 15 20 25;
-      --c-surface-raised: 22 29 38;
-      --c-surface-sunken: 10 14 18;
+      --c-surface: 10 14 20;
+      --c-surface-raised: 23 30 40;
+      --c-surface-sunken: 14 19 26;
 
-      --c-line: 36 48 64;
-      --c-line-soft: 30 40 54;
-      --c-line-strong: 62 80 103;
+      --c-line: 40 51 66;
+      --c-line-soft: 31 40 53;
+      --c-line-strong: 69 87 110;
 
-      --c-ink: 230 237 243;
-      --c-ink-muted: 139 152 169;
-      --c-ink-faint: 90 104 120;
+      --c-ink: 233 240 247;
+      --c-ink-muted: 148 162 180;
+      --c-ink-faint: 101 115 134;
 
       --c-accent: 63 191 122;
       --c-accent-strong: 94 207 138;
@@ -144,13 +172,20 @@
       --c-series-8: 230 103 103; /* red */
 
   
+    /* On a dark ground the top highlight is the *only* thing separating a
+       card's edge from the page — a shadow on near-black is invisible. */
+    --c-edge-top: 168 200 235;
+    --edge-top-alpha: 0.1;
+    --ambient-accent: 0.07;
+    --ambient-info: 0.06;
+
     --art-rim: 226 240 255;
     --art-rim-alpha: 0.24;
     --art-shadow: 0 0 0;
     --art-shadow-alpha: 0.45;
 
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -12px rgb(0 0 0 / 0.6);
-      --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.35);
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5), 0 16px 32px -16px rgb(0 0 0 / 0.75);
+      --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.42);
 
       color-scheme: dark;
     }
@@ -159,17 +194,17 @@
   /* Explicit choice. Repeated rather than shared with the media query above so
      the toggle wins in both directions — light on a dark OS, dark on a light OS. */
   :root[data-theme="dark"] {
-    --c-surface: 15 20 25;
-    --c-surface-raised: 22 29 38;
-    --c-surface-sunken: 10 14 18;
+    --c-surface: 10 14 20;
+    --c-surface-raised: 23 30 40;
+    --c-surface-sunken: 14 19 26;
 
-    --c-line: 36 48 64;
-    --c-line-soft: 30 40 54;
-    --c-line-strong: 62 80 103;
+    --c-line: 40 51 66;
+    --c-line-soft: 31 40 53;
+    --c-line-strong: 69 87 110;
 
-    --c-ink: 230 237 243;
-    --c-ink-muted: 139 152 169;
-    --c-ink-faint: 90 104 120;
+    --c-ink: 233 240 247;
+    --c-ink-muted: 148 162 180;
+    --c-ink-faint: 101 115 134;
 
     --c-accent: 63 191 122;
     --c-accent-strong: 94 207 138;
@@ -198,13 +233,20 @@
     --c-series-8: 230 103 103; /* red */
 
 
+    /* On a dark ground the top highlight is the *only* thing separating a
+       card's edge from the page — a shadow on near-black is invisible. */
+    --c-edge-top: 168 200 235;
+    --edge-top-alpha: 0.1;
+    --ambient-accent: 0.07;
+    --ambient-info: 0.06;
+
     --art-rim: 226 240 255;
     --art-rim-alpha: 0.24;
     --art-shadow: 0 0 0;
     --art-shadow-alpha: 0.45;
 
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -12px rgb(0 0 0 / 0.6);
-    --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.35);
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5), 0 16px 32px -16px rgb(0 0 0 / 0.75);
+    --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.42);
 
     color-scheme: dark;
   }
@@ -229,5 +271,119 @@
   }
   ::-webkit-scrollbar-track {
     background: transparent;
+  }
+}
+
+/**
+ * Surfaces.
+ *
+ * These are `@layer components` rather than Tailwind utilities because each is
+ * several properties that only make sense together — a highlight without its
+ * shadow reads as a rendering artefact, and a shadow without its highlight
+ * disappears entirely on a dark ground. Naming the combination keeps the two
+ * halves from drifting apart across forty call sites.
+ */
+@layer components {
+  /**
+   * The page behind the whole application.
+   *
+   * Two very large, very faint radial washes over the flat ground: the brand
+   * hue from the top left and its cool complement from the top right. At these
+   * alphas they are felt rather than seen — the page stops being one value and
+   * gains a direction, which is most of what separated this interface from
+   * feeling lifeless.
+   *
+   * ⚠ Decoration only, and deliberately nowhere near a status hue's
+   * saturation. Status owns green, amber and red on this platform, and a
+   * decorative wash that read as one of them would be information nobody
+   * asserted. `fixed` attachment keeps it still while the page scrolls, so it
+   * behaves like light in a room rather than like content.
+   */
+  .app-ground {
+    background-color: rgb(var(--c-surface));
+    background-image:
+      radial-gradient(
+        1100px 540px at 8% -10%,
+        rgb(var(--c-accent) / var(--ambient-accent)),
+        transparent 62%
+      ),
+      radial-gradient(
+        920px 480px at 96% -6%,
+        rgb(var(--c-info) / var(--ambient-info)),
+        transparent 58%
+      );
+    background-attachment: fixed;
+  }
+
+  /**
+   * A raised surface: a card, a panel, a tile.
+   *
+   * The 1px inner highlight along the top edge is doing the real work. It puts
+   * a light source above the page, and a rectangle with a lit top edge reads as
+   * an *object* where the same rectangle behind a hairline reads as a region.
+   */
+  .surface-card {
+    background-color: rgb(var(--c-surface-raised));
+    box-shadow:
+      inset 0 1px 0 0 rgb(var(--c-edge-top) / var(--edge-top-alpha)),
+      var(--shadow-card);
+  }
+
+  /**
+   * An indicator that reads as a lamp rather than a filled circle.
+   *
+   * A 6px dot of solid colour is a legend swatch; the same dot with a soft
+   * halo is a light that is *on*. It is the cheapest life on the screen and it
+   * also carries information — the glow is only ever applied to the healthy
+   * state, so a wall of Devices reads at a glance without anybody parsing a
+   * colour.
+   *
+   * The halo is the token's own hue, so it follows the theme rather than being
+   * a hardcoded rgba that would be right in one mode and wrong in the other.
+   */
+  .lamp-ok {
+    box-shadow: 0 0 0 1px rgb(var(--c-ok) / 0.25), 0 0 6px 0 rgb(var(--c-ok) / 0.55);
+  }
+  .lamp-bad {
+    box-shadow: 0 0 0 1px rgb(var(--c-bad) / 0.25), 0 0 6px 0 rgb(var(--c-bad) / 0.5);
+  }
+  .lamp-warn {
+    box-shadow: 0 0 0 1px rgb(var(--c-warn) / 0.25), 0 0 6px 0 rgb(var(--c-warn) / 0.5);
+  }
+
+  /** The same, for something small enough that a full card shadow is too much. */
+  .surface-tile {
+    background-color: rgb(var(--c-surface-raised));
+    box-shadow:
+      inset 0 1px 0 0 rgb(var(--c-edge-top) / var(--edge-top-alpha)),
+      var(--shadow-soft);
+  }
+
+  /**
+   * A surface that responds to the pointer.
+   *
+   * Lifting on hover is what tells somebody a card is a door before they click
+   * it. Kept to a 1px rise and a slightly stronger shadow: anything more and a
+   * dashboard of twenty tiles becomes a trampoline.
+   */
+  .surface-interactive {
+    transition:
+      box-shadow 140ms ease,
+      transform 140ms ease,
+      border-color 140ms ease;
+  }
+  .surface-interactive:hover {
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 0 rgb(var(--c-edge-top) / var(--edge-top-alpha)),
+      var(--shadow-card);
+  }
+  /* Nobody wants a dashboard that moves if they asked the system not to. */
+  @media (prefers-reduced-motion: reduce) {
+    .surface-interactive,
+    .surface-interactive:hover {
+      transition: none;
+      transform: none;
+    }
   }
 }

@@ -32,44 +32,12 @@ import { DataTable, type Column } from "@/components/tables/DataTable";
 import { formatCapacity, formatNumber } from "@/format/value";
 import { useSelection } from "@/state/selection";
 import { useNavigate } from "react-router-dom";
-
-/**
- * A capacity-weighted mean of a fleet-wide ratio.
- *
- * Weighted, not arithmetic: a 2 MW Plant and a 200 MW Plant do not contribute
- * equally to fleet performance, and an unweighted mean lets a small outlier
- * dominate. Plants whose figure is undefined are excluded from both sides of
- * the fraction rather than counted as zero (§4.3).
- */
-function weightedRatio(
-  entries: { figure: KpiFigure | undefined; weight: number }[],
-): KpiFigure {
-  let numerator = 0;
-  let denominator = 0;
-  let variant: string | null = null;
-  let contributing = 0;
-
-  for (const entry of entries) {
-    const value = entry.figure?.value;
-    if (value === null || value === undefined || entry.weight <= 0) continue;
-    numerator += value * entry.weight;
-    denominator += entry.weight;
-    variant = entry.figure?.variant ?? variant;
-    contributing += 1;
-  }
-
-  if (denominator === 0) {
-    return {
-      value: null,
-      variant,
-      undefined_reason:
-        contributing === 0
-          ? "No active Plant reported a defined figure for this period."
-          : "No Plant with a defined figure has a capacity to weight it by.",
-    };
-  }
-  return { value: numerator / denominator, variant, undefined_reason: null };
-}
+import {
+  fleetTotal,
+  instrumentedSplit,
+  weightedRatio,
+} from "./fleet/aggregate";
+import { FleetComparison, buildFleetRows } from "./fleet/FleetComparison";
 
 export function PortfolioDashboard(): JSX.Element {
   const navigate = useNavigate();
@@ -128,22 +96,30 @@ export function PortfolioDashboard(): JSX.Element {
     (sum, plant) => sum + (plant.ac_capacity_kw ?? 0),
     0,
   );
-  const totalEnergy = kpis.reduce((sum, kpi) => sum + (kpi?.energy_kwh ?? 0), 0);
-  const totalCo2 = kpis.reduce(
-    (sum, kpi) => sum + (kpi?.co2_avoided_kg.value ?? 0),
-    0,
-  );
+  const totalEnergy = fleetTotal(kpis.map((kpi) => kpi?.energy_kwh));
+  const totalCo2 = fleetTotal(kpis.map((kpi) => kpi?.co2_avoided_kg.value));
 
+  /*
+    ⚠ Every ratio carries each Plant's coverage, and that is load-bearing.
+    A Plant with no Devices answers `availability: 0.0` — a real number, not a
+    null — so without this one healthy Plant beside two uncommissioned ones
+    reported **52.6% fleet availability**. Nothing was down; nothing was even
+    connected. `couldAnswer` drops a Plant that was never due to report and
+    keeps one that was due and silent, which is the case the figure exists for.
+  */
   const weights = counted.map((plant) => plant.dc_capacity_kwp ?? 0);
-  const fleetPr = weightedRatio(
-    kpis.map((kpi, index) => ({ figure: kpi?.performance_ratio, weight: weights[index] })),
-  );
-  const fleetAvailability = weightedRatio(
-    kpis.map((kpi, index) => ({ figure: kpi?.availability, weight: weights[index] })),
-  );
-  const fleetCuf = weightedRatio(
-    kpis.map((kpi, index) => ({ figure: kpi?.cuf, weight: weights[index] })),
-  );
+  const ratioEntries = (pick: (kpi: (typeof kpis)[number]) => KpiFigure | undefined) =>
+    kpis.map((kpi, index) => ({
+      figure: pick(kpi),
+      weight: weights[index],
+      coverage: kpi?.coverage,
+    }));
+
+  const fleetPr = weightedRatio(ratioEntries((kpi) => kpi?.performance_ratio));
+  const fleetAvailability = weightedRatio(ratioEntries((kpi) => kpi?.availability));
+  const fleetCuf = weightedRatio(ratioEntries((kpi) => kpi?.cuf));
+  const split = instrumentedSplit(kpis);
+  const fleetRows = buildFleetRows(counted, kpis);
 
   const alarms = alarmsQuery.data ?? [];
   const bySeverity = (["critical", "high", "medium", "low"] as const).map((severity) => ({
@@ -200,6 +176,20 @@ export function PortfolioDashboard(): JSX.Element {
             Computed across {counted.length} active Plant(s). Portfolio is never
             stored — these figures are summed from each Plant.
           </p>
+          {/*
+            Which Plants actually contributed to the averages. A fleet ratio
+            computed over two of five Plants is not wrong, but it is a narrower
+            claim than the headline implies, and the difference is invisible
+            unless it is said.
+          */}
+          {split.notInstrumented > 0 ? (
+            <p className="mt-0.5 text-[11px] text-warn">
+              {split.notInstrumented} of {counted.length} active Plant(s) have no Devices
+              bound, so nothing was expected of them. They are excluded from the averages
+              below — counting their zeros would report a fleet that is not under-performing
+              as though it were.
+            </p>
+          ) : null}
         </div>
         <PeriodPicker value={period} onChange={setPeriod} />
       </div>
@@ -270,19 +260,19 @@ export function PortfolioDashboard(): JSX.Element {
         />
       </div>
 
-      <Panel
-        title="Active Plants"
-        subtitle="Counted in the totals above."
-      >
-        <DataTable
-          rows={counted}
-          columns={columns}
-          rowKey={(plant) => plant.id}
-          onRowClick={(plant) => openPlant(plant.id)}
-          filterPlaceholder="Filter Plants…"
-          emptyMessage="No active Plants. Plants still onboarding are listed below."
-        />
-      </Panel>
+      {/*
+        The fleet, compared. This is the question a multi-Plant owner has that a
+        single-Plant one does not — *which of these needs me* — and it is a
+        ranking question, so the Plants have to be on one axis together. A
+        Client with one Plant sees a one-bar chart and a table of one, which is
+        honest and costs nothing.
+      */}
+      <FleetComparison
+        rows={fleetRows}
+        period={period}
+        onOpenPlant={openPlant}
+        isLoading={kpisLoading}
+      />
 
       {onboarding.length > 0 ? (
         <Panel

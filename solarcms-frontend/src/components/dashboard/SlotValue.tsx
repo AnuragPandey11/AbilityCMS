@@ -183,9 +183,23 @@ export function SlotStat({
   const text = headline ? headline.text : slotText(slot);
 
   return (
-    <div className="min-w-0 rounded-card border border-line bg-surface-raised px-3 py-2">
+    <div className="surface-tile min-w-0 rounded-card border border-line px-3 py-2">
       <div className="flex items-center gap-1.5">
-        {Icon ? <Icon size={12} className="shrink-0 text-ink-faint" /> : null}
+        {/*
+          The icon chip is the brand hue, and the brand hue only.
+          
+          It is tempting to tint each metric by kind — power amber, energy
+          blue — and it is a trap: this platform spends green, amber and red on
+          *status*, and a decorative tint sitting next to a figure would be read
+          as a judgement about that figure. One accent, used for "this is a
+          headline metric" and nothing else, adds the life a row of grey boxes
+          was missing without inventing a meaning.
+        */}
+        {Icon ? (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-accent/10 text-accent">
+            <Icon size={11} />
+          </span>
+        ) : null}
         <span className="truncate text-[10px] font-medium uppercase tracking-wide text-ink-muted">
           {slot.label}
         </span>

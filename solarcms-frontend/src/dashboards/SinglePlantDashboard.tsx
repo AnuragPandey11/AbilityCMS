@@ -40,6 +40,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
 import {
   useAlarms,
@@ -50,10 +51,10 @@ import {
   usePlantDashboard,
   usePlantDevices,
   usePlantKpis,
-  useTagsById,
 } from "@/api/hooks";
 import { useSlotTrend, TREND_RANGES, type TrendRange } from "@/api/useSlotTrend";
 import { useLatestValues } from "@/api/useLatestValues";
+import { useTypeColumns } from "@/api/useTypeColumns";
 import { qk } from "@/api/queryKeys";
 import * as plantsApi from "@/api/endpoints/plants";
 import type {
@@ -69,6 +70,7 @@ import { ReadingsPanel } from "@/components/charts/ReadingsPanel";
 import { PlantSchematic } from "@/components/sld/PlantSchematic";
 import { DeviceCard } from "@/components/devices/DeviceCard";
 import { DeviceArt } from "@/components/devices/DeviceArt";
+import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { SummaryCard, type SummaryFigure } from "@/components/dashboard/SummaryCard";
 import { CoverageBadge } from "@/components/dashboard/CoverageBadge";
 import { SlotRow, SlotStat, slotText } from "@/components/dashboard/SlotValue";
@@ -93,6 +95,7 @@ import {
 } from "@/components/domain";
 import {
   IconAlarm,
+  IconChevronRight,
   IconClock,
   IconEnergy,
   IconGauge,
@@ -106,6 +109,7 @@ import { formatCapacity, formatNumber, formatValue, UNDEFINED_DISPLAY, formatRat
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
 import { useSelection } from "@/state/selection";
 import { usePlantScope } from "@/state/usePlantScope";
+import { usePermission } from "@/auth/usePermission";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { useLiveRefresh } from "@/live/useLiveRefresh";
 
@@ -173,9 +177,12 @@ function toFigures(slots: ResolvedSlot[], n: number): SummaryFigure[] {
 }
 
 export function SinglePlantDashboard(): JSX.Element {
+  const navigate = useNavigate();
+  const canManage = usePermission("plant.manage");
   const { period, setPeriod } = useSelection();
   const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
   const [range, setRange] = useState<TrendRange>("24h");
+  const [chartView, setChartView] = useState<"power" | "energy">("power");
   const [open, setOpen] = useState<OpenPanel>(null);
 
   const plantQuery = usePlant(plantId);
@@ -192,13 +199,20 @@ export function SinglePlantDashboard(): JSX.Element {
   const devicesQuery = usePlantDevices(plantId);
   const healthQuery = useDeviceHealth(plantId);
   const alarmsQuery = useAlarms({ plantId: plantId ?? undefined, state: "active" });
-  const tagsById = useTagsById();
   const { devices: liveDevices } = useLiveSocket();
 
   // The two charts. Both read the slot the server already resolved, so the
   // curve under a tile is the same claim as the tile — same Device Type, same
   // Tag, same aggregate (see `useSlotTrend`).
   const powerTrend = useSlotTrend(plantId, "kpi.current_power", range);
+  /*
+    Energy per day, from the same slot the "Today's Energy" tile uses.
+    `ENERGY_TODAY` is a counter that resets at midnight, so it is read at the
+    daily tier where the roll-up's `last` is that day's total — at any finer
+    tier it draws the counter climbing, which is a true picture of a different
+    thing.
+  */
+  const energyTrend = useSlotTrend(plantId, "kpi.energy_today", range, "agg_1d");
   const irradianceTrend = useSlotTrend(plantId, "env.irradiance", range);
   const moduleTempTrend = useSlotTrend(plantId, "env.module_temperature", range);
 
@@ -232,32 +246,49 @@ export function SinglePlantDashboard(): JSX.Element {
       if (bucket) bucket.push(device);
       else byType.set(device.type_code, [device]);
     }
-    return [...byType]
-      // Only types the catalogue has configured figures for. A type with no
-      // columns would render a row of cards with nothing on them.
-      .filter(([typeCode, group]) => (columns[typeCode]?.length ?? 0) > 0 && group.length > 0)
-      // Most numerous first: the seventeen Inverters are what the carousel is
-      // for, and a single meter above them wastes the row.
-      .sort((a, b) => b[1].length - a[1].length)
-      .map(([typeCode, group]) => ({
-        typeCode,
-        devices: [...group].sort((a, b) =>
-          a.code.localeCompare(b.code, undefined, { numeric: true }),
-        ),
-        columns: columns[typeCode] ?? [],
-      }));
+    return (
+      [...byType]
+        .filter(([, group]) => group.length > 0)
+        // Most numerous first: the seventeen Inverters are what the carousel is
+        // for, and a single meter above them wastes the row.
+        .sort((a, b) => b[1].length - a[1].length)
+        .map(([typeCode, group]) => ({
+          typeCode,
+          devices: [...group].sort((a, b) =>
+            a.code.localeCompare(b.code, undefined, { numeric: true }),
+          ),
+          /** Empty for an uncurated Type; `useTypeColumns` fills it in. */
+          columns: columns[typeCode] ?? [],
+        }))
+    );
   }, [devices, columnsQuery.data]);
 
   /**
-   * The strip the carousel shows — the most numerous Device Type. Its cards are
-   * seeded from stored readings so they are populated on arrival, and each is
-   * overwritten by the live socket as that Device's next frame lands.
+   * Which Device Type the carousel is showing.
+   *
+   * It used to show only the most numerous group, which on this Plant meant the
+   * seventeen Inverters and *nothing else* — the meter, the transformer, the
+   * weather station and the plant controller were reachable only by opening a
+   * schematic stage or the health table. Six registered Devices with no route
+   * to them from the screen that is meant to show the Plant.
+   *
+   * A type switcher costs one row of chips and makes every Device on the Plant
+   * two clicks away, without the page growing by a panel per type.
    */
-  const strip = deviceGroups[0] ?? null;
+  const [stripType, setStripType] = useState<string | null>(null);
+  const strip =
+    deviceGroups.find((group) => group.typeCode === stripType) ?? deviceGroups[0] ?? null;
+  /**
+   * The selected strip's columns — from the catalogue where it has been
+   * curated, from a Device's own bindings where it has not. Without the
+   * fallback, a Type nobody curated was dropped from the screen entirely.
+   */
+  const stripColumns = useTypeColumns(strip?.typeCode ?? null, strip?.devices[0] ?? null);
+
   const latest = useLatestValues(
     strip?.devices.map((device) => device.id) ?? [],
-    strip?.columns.map((column) => column.tag_id) ?? [],
-    strip !== null,
+    stripColumns.columns.map((column) => column.tag_id),
+    strip !== null && stripColumns.columns.length > 0,
   );
 
   /**
@@ -275,6 +306,12 @@ export function SinglePlantDashboard(): JSX.Element {
     if (!stored && !live) return undefined;
     return { ...stored, ...live };
   };
+
+  /** id → Device, so the inspector can name a parent rather than print `#38`. */
+  const deviceById = useMemo(
+    () => new Map(devices.map((device) => [device.id, device])),
+    [devices],
+  );
 
   const healthCounts = useMemo(() => {
     const counts = { online: 0, degraded: 0, offline: 0, unknown: 0 };
@@ -339,6 +376,62 @@ export function SinglePlantDashboard(): JSX.Element {
         return open.stage.label;
       case "device":
         return `${open.device.code} — ${open.device.name}`;
+    }
+  })();
+
+  /**
+   * Where a drawer leads.
+   *
+   * A summary that opens a panel and stops there is a dead end: the operator
+   * came to the card because something looked wrong, and the detail behind it
+   * is usually one step short of the screen that lets them act. Every drawer
+   * that has a fuller home names it, and the ones whose fuller home is another
+   * Device open that Device instead.
+   */
+  const drawerFooter = (() => {
+    if (!open) return null;
+    const link = (to: string, label: string) => (
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(null);
+          navigate(to);
+        }}
+        className="flex w-full items-center justify-between gap-2 rounded-control border border-line px-2.5 py-1.5 text-[11px] font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
+      >
+        {label}
+        <IconChevronRight size={13} />
+      </button>
+    );
+    switch (open.kind) {
+      case "alarms":
+        return link("/d/alarms", "Open the Alarms dashboard");
+      case "performance":
+        return link("/d/reports", "Generate a performance report");
+      case "device":
+        return canManage
+          ? link("/admin/plant-setup", `Configure ${open.device.code} in Plants & Devices`)
+          : null;
+      case "health":
+        return link("/d/sld", "See how these Devices are connected");
+      case "stage":
+        return link("/d/sld", "Open the full Single Line Diagram");
+      case "panel":
+        // These panels are answered by Devices; the useful next step is the
+        // list of what answered them, which is one drawer away rather than
+        // one navigation.
+        return (
+          <button
+            type="button"
+            onClick={() => setOpen({ kind: "health" })}
+            className="flex w-full items-center justify-between gap-2 rounded-control border border-line px-2.5 py-1.5 text-[11px] font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
+          >
+            See the Devices behind these figures
+            <IconChevronRight size={13} />
+          </button>
+        );
+      default:
+        return null;
     }
   })();
 
@@ -522,26 +615,70 @@ export function SinglePlantDashboard(): JSX.Element {
           ) : null}
         </Panel>
 
+        {/*
+          Two charts, one panel. Power over time and energy per day are the two
+          questions asked of a Plant's output and they are asked at different
+          altitudes — "what is it doing" and "how much did it make" — so they
+          are genuinely different views rather than two series to overlay.
+          Stacking them as separate panels would have cost a third of the
+          screen for a chart most visits do not look at.
+        */}
         <Panel
           fill
           className="xl:col-span-5"
-          title={powerTrend.label}
-          subtitle="One measure, one axis. Gaps are drawn as gaps — a Plant that reported nothing was not producing zero."
+          title={chartView === "power" ? powerTrend.label : "Energy per day"}
+          subtitle={
+            chartView === "power"
+              ? "One measure, one axis. Gaps are drawn as gaps — a Plant that reported nothing was not producing zero."
+              : "One bar per day, from the daily tier — the counter's closing value, which is that day's total."
+          }
+          actions={
+            <SegmentedControl
+              label="Chart view"
+              value={chartView}
+              onChange={setChartView}
+              options={[
+                { value: "power", label: "Power", hint: "Output over the selected window." },
+                { value: "energy", label: "Energy", hint: "Generation per day over the selected window." },
+              ]}
+            />
+          }
         >
-          {powerTrend.unavailableReason ? (
+          {chartView === "power" ? (
+            powerTrend.unavailableReason ? (
+              <p className="py-8 text-center text-xs text-ink-faint">
+                {powerTrend.unavailableReason}
+              </p>
+            ) : (
+              <TrendChart
+                points={powerTrend.points}
+                unit={powerTrend.unit}
+                label={powerTrend.label}
+                tier={powerTrend.tier}
+                provenance={powerTrend.provenance}
+                flaggedCount={powerTrend.flaggedCount}
+                timezone={timezone}
+                height={188}
+              />
+            )
+          ) : energyTrend.unavailableReason ? (
             <p className="py-8 text-center text-xs text-ink-faint">
-              {powerTrend.unavailableReason}
+              {energyTrend.unavailableReason}
             </p>
           ) : (
             <TrendChart
-              points={powerTrend.points}
-              unit={powerTrend.unit}
-              label={powerTrend.label}
-              tier={powerTrend.tier}
-              provenance={powerTrend.provenance}
-              flaggedCount={powerTrend.flaggedCount}
+              points={energyTrend.points}
+              unit={energyTrend.unit}
+              label="Energy"
+              tier={energyTrend.tier}
+              provenance={energyTrend.provenance}
+              flaggedCount={energyTrend.flaggedCount}
               timezone={timezone}
               height={188}
+              shape="bar"
+              // The largest day in a month is not a fact anybody acts on, and
+              // the label would sit over a neighbouring bar.
+              markPeak={false}
             />
           )}
         </Panel>
@@ -568,7 +705,34 @@ export function SinglePlantDashboard(): JSX.Element {
                   fill
                   key={group.typeCode}
                   title={`${group.typeCode} — ${group.devices.length}`}
-                  subtitle="Figures come from the catalogue's columns for this Device Type, not from this screen. Tap a card for everything the Device reports."
+                  subtitle={
+                    stripColumns.isFallback
+                      ? "No summary columns are curated for this Device Type, so these are its own bound signals. Tap a card for everything the Device reports."
+                      : "Figures come from the catalogue's columns for this Device Type, not from this screen. Tap a card for everything the Device reports."
+                  }
+                  actions={
+                    deviceGroups.length > 1 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {deviceGroups.map((option) => (
+                          <button
+                            key={option.typeCode}
+                            type="button"
+                            onClick={() => setStripType(option.typeCode)}
+                            aria-pressed={option.typeCode === group.typeCode}
+                            title={`${option.devices.length} ${option.typeCode}`}
+                            className={`rounded-control border px-2 py-0.5 text-[10px] font-medium transition ${
+                              option.typeCode === group.typeCode
+                                ? "border-accent/50 bg-accent/10 text-accent"
+                                : "border-line text-ink-muted hover:text-ink"
+                            }`}
+                          >
+                            {option.typeCode}
+                            <span className="ml-1 opacity-60">{option.devices.length}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null
+                  }
                 >
                   <Carousel
                     ariaLabel={`${group.typeCode} Devices`}
@@ -578,7 +742,7 @@ export function SinglePlantDashboard(): JSX.Element {
                       <CarouselItem key={device.id}>
                         <DeviceCard
                           device={device}
-                          columns={group.columns}
+                          columns={stripColumns.columns}
                           maxFigures={6}
                           values={valuesFor(device.id)}
                           onSelect={(selected) => setOpen({ kind: "device", device: selected })}
@@ -647,7 +811,7 @@ export function SinglePlantDashboard(): JSX.Element {
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         <SummaryCard
           icon={IconGauge}
-          title={`Performance · ${period}`}
+          title="Performance"
           figures={[
             {
               label: "PR",
@@ -672,7 +836,12 @@ export function SinglePlantDashboard(): JSX.Element {
               unit: "kWh",
             },
           ]}
-          count={<CoverageBadge coverage={kpis?.coverage} />}
+          count={
+            <span className="flex items-center justify-between gap-2">
+              <span className="capitalize">{period}</span>
+              <CoverageBadge coverage={kpis?.coverage} />
+            </span>
+          }
           onOpen={() => setOpen({ kind: "performance" })}
         />
 
@@ -790,6 +959,7 @@ export function SinglePlantDashboard(): JSX.Element {
               ? "Every Device whose Type folds into this stage."
               : undefined
         }
+        footer={drawerFooter}
       >
         {open?.kind === "performance" ? (
           <PerformancePanel kpis={kpis} period={period} />
@@ -826,121 +996,46 @@ export function SinglePlantDashboard(): JSX.Element {
             {open.stage.devices.length === 0 ? (
               <p className="text-xs text-ink-faint">Nothing folds into this stage.</p>
             ) : (
+              /* Each row opens that Device's full inspector. A stage listing
+                 its Devices and stopping there is a dead end — the reason
+                 somebody opened the stage is almost always one machine in it. */
               <ul className="divide-y divide-line-soft">
-                {open.stage.devices.map((device) => (
-                  <li key={device.device_id} className="flex items-center gap-2 py-1.5">
-                    <DeviceArt typeCode={device.device_type_code} size={26} />
-                    <span className="text-xs font-medium text-ink">{device.code}</span>
-                    <span className="text-[11px] text-ink-faint">{device.device_type_code}</span>
-                    <span
-                      className={`ml-auto h-1.5 w-1.5 rounded-full ${device.online ? "bg-ok" : "bg-bad"}`}
-                      title={device.online ? "Reporting" : "Not reporting"}
-                    />
-                  </li>
-                ))}
+                {open.stage.devices.map((entry) => {
+                  const full = deviceById.get(entry.device_id);
+                  return (
+                    <li key={entry.device_id}>
+                      <button
+                        type="button"
+                        disabled={!full}
+                        onClick={() => full && setOpen({ kind: "device", device: full })}
+                        className="flex w-full items-center gap-2 py-1.5 text-left transition hover:text-accent disabled:cursor-default"
+                      >
+                        <DeviceArt typeCode={entry.device_type_code} size={26} />
+                        <span className="text-xs font-medium text-ink">{entry.code}</span>
+                        <span className="text-[11px] text-ink-faint">
+                          {entry.device_type_code}
+                        </span>
+                        <span
+                          className={`ml-auto h-1.5 w-1.5 rounded-full ${entry.online ? "bg-ok" : "bg-bad"}`}
+                          title={entry.online ? "Reporting" : "Not reporting"}
+                        />
+                        {full ? <IconChevronRight size={13} className="text-ink-faint" /> : null}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
         ) : null}
 
         {open?.kind === "device" ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 rounded-card border border-line bg-surface-sunken p-3">
-              <DeviceArt typeCode={open.device.type_code} size={72} />
-              <dl className="min-w-0 space-y-0.5 text-[11px]">
-                <div className="flex gap-2">
-                  <dt className="text-ink-faint">Type</dt>
-                  <dd className="text-ink">{open.device.type_name ?? open.device.type_code}</dd>
-                </div>
-                {open.device.model_code ? (
-                  <div className="flex gap-2">
-                    <dt className="text-ink-faint">Model</dt>
-                    <dd className="truncate text-ink">
-                      {open.device.manufacturer ? `${open.device.manufacturer} ` : ""}
-                      {open.device.model_code}
-                    </dd>
-                  </div>
-                ) : null}
-                <div className="flex gap-2">
-                  <dt className="text-ink-faint">Comms</dt>
-                  <dd><CommStatusBadge status={open.device.comm_status} /></dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="text-ink-faint">Interval</dt>
-                  <dd
-                    className="text-ink"
-                    title="Registered from measurement, never from a default. The health sweep calls a Device degraded at twice this."
-                  >
-                    {open.device.expected_interval_s}s
-                  </dd>
-                </div>
-                {open.device.collector_code ? (
-                  <div className="flex gap-2">
-                    <dt className="text-ink-faint">Collector</dt>
-                    <dd
-                      className="text-ink"
-                      title="The enclosure this Device publishes from, named by its topic. A Collector is a room, not a component."
-                    >
-                      {open.device.collector_code}
-                    </dd>
-                  </div>
-                ) : null}
-                {open.device.source_address ? (
-                  <div className="flex gap-2">
-                    <dt className="shrink-0 text-ink-faint">Topic</dt>
-                    <dd className="truncate font-mono text-[10px] text-ink-muted">
-                      {open.device.source_address}
-                    </dd>
-                  </div>
-                ) : null}
-                <div className="flex gap-2">
-                  <dt className="text-ink-faint">Last seen</dt>
-                  <dd className="text-ink">
-                    {open.device.last_seen_at
-                      ? formatDateTime(open.device.last_seen_at, timezone)
-                      : "never"}
-                  </dd>
-                </div>
-              </dl>
-            </div>
-
-            <div>
-              <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
-                Live values
-              </h3>
-              {(() => {
-                const entries = Object.entries(valuesFor(open.device.id) ?? {});
-                if (entries.length === 0) {
-                  return (
-                    <p className="text-[11px] text-ink-faint">
-                      No live frame has arrived for this Device. Silence is not zero — it may be
-                      off, its Collector may be down, or its Tags may simply be throttled and not
-                      due yet.
-                    </p>
-                  );
-                }
-                return (
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
-                    {entries.map(([tagId, value]) => {
-                      const tag = tagsById.get(Number(tagId));
-                      return (
-                        <div key={tagId} className="flex items-baseline justify-between gap-2">
-                          <dt className="truncate text-[10px] text-ink-faint" title={tag?.name}>
-                            {tag?.code ?? `#${tagId}`}
-                          </dt>
-                          <dd className="shrink-0 font-mono text-[11px] tabular-nums text-ink">
-                            {/* The unit comes from the catalogue, never from
-                                the Tag's name (§4.1). */}
-                            {formatValue(value, tag?.unit)}
-                          </dd>
-                        </div>
-                      );
-                    })}
-                  </dl>
-                );
-              })()}
-            </div>
-          </div>
+          <DeviceInspector
+            device={open.device}
+            values={valuesFor(open.device.id)}
+            timezone={timezone}
+            deviceLookup={deviceById}
+          />
         ) : null}
 
         {open?.kind === "health" ? (
@@ -954,6 +1049,7 @@ export function SinglePlantDashboard(): JSX.Element {
                 columns={deviceColumns}
                 rowKey={(device) => device.id}
                 filterPlaceholder="Filter Devices…"
+                onRowClick={(device) => setOpen({ kind: "device", device })}
               />
             )}
           </div>

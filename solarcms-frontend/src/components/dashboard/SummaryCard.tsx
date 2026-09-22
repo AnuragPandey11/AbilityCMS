@@ -65,15 +65,25 @@ export function SummaryCard({
 
   const frame =
     accent === "bad"
-      ? "border-bad/40 bg-bad/[0.04]"
+      ? "border-bad/40 bg-bad/[0.05]"
       : accent === "warn"
-        ? "border-warn/40 bg-warn/[0.04]"
-        : "border-line bg-surface-raised";
+        ? "border-warn/40 bg-warn/[0.05]"
+        : "surface-tile border-line";
 
   const body = (
     <>
       <div className="flex items-center gap-1.5">
-        <Icon size={14} className="text-ink-faint" />
+        <span
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${
+            accent === "bad"
+              ? "bg-bad/12 text-bad"
+              : accent === "warn"
+                ? "bg-warn/12 text-warn"
+                : "bg-accent/10 text-accent"
+          }`}
+        >
+          <Icon size={12} />
+        </span>
         <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
           {title}
         </span>
@@ -112,8 +122,8 @@ export function SummaryCard({
     </>
   );
 
-  const className = `flex min-w-0 flex-col rounded-card border p-2.5 text-left transition ${frame} ${
-    interactive ? "cursor-pointer hover:border-accent/50 hover:shadow-soft" : ""
+  const className = `flex min-w-0 flex-col rounded-card border p-2.5 text-left ${frame} ${
+    interactive ? "surface-interactive cursor-pointer hover:border-accent/55" : ""
   } ${unavailable ? "opacity-60" : ""}`;
 
   if (!interactive) return <div className={className}>{body}</div>;

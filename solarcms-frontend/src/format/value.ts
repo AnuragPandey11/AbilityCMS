@@ -150,8 +150,13 @@ export function formatCompact(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return UNDEFINED_DISPLAY;
   }
+  // ⚠ Uppercased, for the same reason `formatHeadline` uppercases: `en-GB`
+  // compact notation emits a lowercase `k`/`m`, and `1.5m kWh` reads as
+  // *milli*-something to exactly the audience this is for. This function feeds
+  // chart axis ticks, where the suffix sits right beside the unit name.
   return Intl.NumberFormat("en-GB", { notation: "compact", maximumFractionDigits: 1 })
-    .format(value);
+    .format(value)
+    .toUpperCase();
 }
 
 /**

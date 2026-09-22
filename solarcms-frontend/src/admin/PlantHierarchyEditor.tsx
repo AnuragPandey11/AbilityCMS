@@ -47,9 +47,10 @@ import { usePlantScope } from "@/state/usePlantScope";
 import { usePermission } from "@/auth/usePermission";
 import { PlantPicker } from "@/components/domain";
 import { SldTree } from "@/components/sld/SldTree";
-import { DeviceDetailCard } from "@/components/devices/DeviceDetailCard";
+import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { DeviceIcon } from "@/components/devices/DeviceIcon";
-import { useTagsById } from "@/api/hooks";
+import { usePlant } from "@/api/hooks";
+import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { Badge, Button, Panel, inputClass } from "@/components/ui";
 import {
   EmptyState,
@@ -206,7 +207,9 @@ export function PlantHierarchyEditor(): JSX.Element {
    */
   const editedCollectors = useRef<Set<number>>(new Set());
 
-  const tagsById = useTagsById();
+  // Timestamps in the inspector render in the Plant's zone (Guardrail 11).
+  const plantQuery = usePlant(plantId);
+  const timezone = plantQuery.data?.timezone ?? DEFAULT_TIMEZONE;
   const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data]);
   const descendants = useMemo(() => descendantMap(devices), [devices]);
   const query = filter.trim().toLowerCase();
@@ -942,13 +945,29 @@ export function PlantHierarchyEditor(): JSX.Element {
               </Panel>
 
               {inspectedDevice ? (
-                <DeviceDetailCard
-                  device={inspectedDevice}
-                  devicesById={devicesById}
-                  live={null}
-                  tagsById={tagsById}
-                  onClose={() => setInspecting(null)}
-                />
+                /* The same inspector the dashboards open. A Device must not
+                   look like a different thing depending on which screen found
+                   it — and on this screen in particular, the wiring being
+                   edited is right there in its Placement section. */
+                <Panel
+                  title={`${inspectedDevice.code} — ${inspectedDevice.name}`}
+                  actions={
+                    <button
+                      type="button"
+                      onClick={() => setInspecting(null)}
+                      className="rounded-control border border-line px-2 py-1 text-[11px] text-ink-muted transition hover:text-ink"
+                    >
+                      Close
+                    </button>
+                  }
+                >
+                  <DeviceInspector
+                    device={inspectedDevice}
+                    values={undefined}
+                    timezone={timezone}
+                    deviceLookup={devicesById}
+                  />
+                </Panel>
               ) : null}
             </div>
 

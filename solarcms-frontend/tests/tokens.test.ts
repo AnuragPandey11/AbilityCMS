@@ -18,7 +18,8 @@
 
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { seriesPalette, withAlpha } from "@/theme/tokens";
+import { qualityColor, seriesPalette, token, tokenAlpha, withAlpha } from "@/theme/tokens";
+import { parse as parseColor } from "zrender/lib/tool/color.js";
 import { join } from "node:path";
 
 const ROOT = join(__dirname, "..");
@@ -149,12 +150,21 @@ describe("every token the config references is defined in every theme", () => {
 });
 
 describe("withAlpha", () => {
-  it("adds an alpha channel to an rgb() colour", () => {
-    // The bug this guards: appending hex alpha to `rgb(57 135 229)` produces
-    // `rgb(57 135 229)44`, which the canvas rejects at `addColorStop` — and it
-    // throws inside ECharts, so the whole chart fails to paint with an error
-    // naming neither the chart nor the caller.
-    expect(withAlpha("rgb(57 135 229)", 0.26)).toBe("rgb(57 135 229 / 0.26)");
+  it("adds an alpha channel, in the legacy comma syntax", () => {
+    // Two bugs are guarded here at once.
+    //
+    // The first: appending hex alpha to an `rgb()` string — the reflex from
+    // hex — produces `rgb(57,135,229)44`, which the canvas rejects at
+    // `addColorStop`, throwing inside ECharts so the whole chart fails to
+    // paint with an error naming neither the chart nor the caller.
+    //
+    // The second: emitting `rgb(r g b / a)`. That is valid CSS and the canvas
+    // renders it, but zrender's parser returns `undefined` for it, and the
+    // chart then vanishes the moment anything interpolates the colour.
+    expect(withAlpha("rgb(57,135,229)", 0.26)).toBe("rgba(57,135,229,0.26)");
+    // A space-separated input is normalised rather than passed through, so a
+    // hand-edited token cannot reintroduce the unparseable form.
+    expect(withAlpha("rgb(57 135 229)", 0.26)).toBe("rgba(57,135,229,0.26)");
   });
 
   it("leaves a colour it does not recognise untouched", () => {
@@ -164,9 +174,109 @@ describe("withAlpha", () => {
   });
 
   it("never produces a value the canvas would reject", () => {
-    const canvasSafe = /^(rgb\([\d\s]+(\s\/\s[\d.]+)?\)|#[0-9a-f]{3,8})$/i;
+    const canvasSafe = /^(rgba?\([\d.,]+\)|#[0-9a-f]{3,8})$/i;
     for (const color of seriesPalette()) {
       expect(withAlpha(color, 0.14)).toMatch(canvasSafe);
+    }
+  });
+});
+
+/**
+ * The same silent failure as an undefined colour, in the spacing scale.
+ *
+ * Tailwind's default spacing has fractional steps only at 0.5, 1.5, 2.5 and
+ * 3.5. `h-4.5` looks entirely plausible, compiles, lints, and emits **nothing**
+ * — the element simply has no height and takes whatever its content gives it.
+ * It shipped once here, on an icon chip that was meant to be a fixed square.
+ */
+describe("spacing scale", () => {
+  const VALID_FRACTIONS = new Set(["0.5", "1.5", "2.5", "3.5"]);
+
+  it("uses no fractional spacing step Tailwind does not define", () => {
+    const offenders: string[] = [];
+    for (const file of sourceFiles(join(ROOT, "src"))) {
+      const source = readFileSync(file, "utf8");
+      // w-, h-, m-, p-, gap-, inset-, top- … followed by a fractional step.
+      for (const match of source.matchAll(
+        /\b(?:-)?(w|h|m[trblxy]?|p[trblxy]?|gap(?:-[xy])?|inset|top|right|bottom|left|space-[xy])-(\d+\.\d+)\b/g,
+      )) {
+        if (!VALID_FRACTIONS.has(match[2])) {
+          offenders.push(`${file.replace(ROOT, "")}: ${match[0]}`);
+        }
+      }
+    }
+    expect(offenders, offenders.join("\n")).toEqual([]);
+  });
+});
+
+
+/**
+ * Every colour handed to a chart must be readable by the charting library.
+ *
+ * This guards the strangest bug the app has had. The tokens are stored as
+ * space-separated channels because Tailwind needs them that way, and emitting
+ * them in the same shape — `rgb(42 120 214)`, CSS Color Level 4 — yields a
+ * string the browser parses happily. Canvas filled with it, every chart drew
+ * correctly, and everything looked fine.
+ *
+ * zrender's own colour parser predates Level 4 and returns `undefined` for it.
+ * Nothing broke until something *interpolated* a colour — which is what
+ * hovering a series does — and then `interpolate1DArray` threw
+ * `Cannot read properties of undefined (reading 'length')` and the chart
+ * disappeared. A rendering test would never have caught it; only parsing does.
+ */
+describe("chart colours are parseable by the charting library", () => {
+  const names = [
+    "surface", "surface-raised", "surface-sunken",
+    "line", "line-soft", "line-strong",
+    "ink", "ink-muted", "ink-faint",
+    "accent", "accent-strong", "accent-soft",
+    "ok", "warn", "bad", "info",
+    "q0", "q1", "q2", "q3",
+    "chart-grid", "chart-axis", "chart-tooltip-bg", "chart-tooltip-border",
+  ] as const;
+
+  it("parses every opaque token", () => {
+    for (const name of names) {
+      const color = token(name);
+      expect(parseColor(color), `${name} -> ${color}`).toBeDefined();
+    }
+  });
+
+  it("parses every token at partial opacity", () => {
+    for (const name of names) {
+      for (const alpha of [0, 0.12, 0.5, 1]) {
+        const color = tokenAlpha(name, alpha);
+        expect(parseColor(color), `${name}@${alpha} -> ${color}`).toBeDefined();
+      }
+    }
+  });
+
+  it("parses every categorical series colour, plain and faded", () => {
+    for (const color of seriesPalette()) {
+      expect(parseColor(color), color).toBeDefined();
+      expect(parseColor(withAlpha(color, 0.26)), withAlpha(color, 0.26)).toBeDefined();
+    }
+  });
+
+  it("parses every quality colour", () => {
+    for (const code of [0, 1, 2, 3]) {
+      const color = qualityColor(code);
+      expect(parseColor(color), `q${code} -> ${color}`).toBeDefined();
+    }
+  });
+
+  it("never emits the space-separated form anywhere", () => {
+    const level4 = /rgba?\([^),]*\s[^),]*\)/;
+    const emitted = [
+      ...names.map((n) => token(n)),
+      ...names.map((n) => tokenAlpha(n, 0.4)),
+      ...seriesPalette(),
+      ...seriesPalette().map((c) => withAlpha(c, 0.3)),
+      ...[0, 1, 2, 3].map((c) => qualityColor(c)),
+    ];
+    for (const color of emitted) {
+      expect(color, `${color} uses CSS Level 4 syntax`).not.toMatch(level4);
     }
   });
 });

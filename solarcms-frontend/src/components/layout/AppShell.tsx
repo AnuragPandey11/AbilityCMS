@@ -70,7 +70,8 @@ export function AppShell(): JSX.Element {
   const dashboards = useDashboards();
   const { has } = usePermissions();
   const adminLinks = ADMIN_LINKS.filter((link) => has(link.permission));
-  const groups = groupDashboards(dashboards);
+  // `has` is passed so the menu cannot offer a dashboard whose screen refuses.
+  const groups = groupDashboards(dashboards, has);
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
 
@@ -84,7 +85,7 @@ export function AppShell(): JSX.Element {
   useEffect(() => setMenuOpen(false), [location.pathname]);
 
   return (
-    <div className="flex min-h-screen bg-surface text-ink">
+    <div className="app-ground flex min-h-screen text-ink">
       {/* The scrim. Present only while the drawer is, and only below `lg`. */}
       {menuOpen ? (
         <button
@@ -96,7 +97,7 @@ export function AppShell(): JSX.Element {
       ) : null}
 
       <aside
-        className={`z-40 flex w-60 shrink-0 flex-col border-r border-line bg-surface-sunken transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
+        className={`z-40 flex w-60 shrink-0 flex-col border-r border-line bg-surface-sunken/85 backdrop-blur-xl transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
           menuOpen
             ? "fixed inset-y-0 left-0 translate-x-0"
             : "fixed inset-y-0 left-0 -translate-x-full lg:flex"

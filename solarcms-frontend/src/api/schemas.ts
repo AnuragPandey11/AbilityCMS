@@ -252,9 +252,17 @@ export type KpiFigure = z.infer<typeof KpiFigureSchema>;
  * every KPI on the screen with a parse failure.
  */
 export const KpiCoverageSchema = z.object({
-  /** 0..1 — received samples over expected. Expected is counted per binding
-   *  against each Tag's own throttle, never per Device. */
-  ratio: numeric(),
+  /**
+   * 0..1 — received samples over expected. Expected is counted per binding
+   * against each Tag's own throttle, never per Device.
+   *
+   * **Null when nothing was expected**, which is what a Plant with no Devices
+   * reports: `expected_samples` is 0, so there is no ratio to take. That is a
+   * different statement from 0% coverage — nothing was missed, because nothing
+   * was due — and collapsing the two is how a Plant that has not been
+   * commissioned yet ends up reported as one that has gone dark.
+   */
+  ratio: nullableNumeric(),
   complete: z.boolean(),
   expected_samples: z.number(),
   received_samples: z.number(),

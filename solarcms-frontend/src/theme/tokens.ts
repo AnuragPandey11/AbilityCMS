@@ -91,14 +91,43 @@ function rawChannels(variable: string): string {
   return value || fallback;
 }
 
+/**
+ * ⚠ **Every colour leaving this module uses the legacy comma syntax, and that
+ * is not a style preference.**
+ *
+ * The tokens are stored as space-separated channels because that is what
+ * Tailwind's `rgb(var(--x) / <alpha-value>)` needs. Emitting them in the same
+ * shape — `rgb(42 120 214)`, CSS Color Level 4 — produces a string the browser
+ * understands perfectly, so a canvas fills with it and every chart *renders*
+ * correctly. ECharts then cannot read its own colours back: zrender's parser
+ * predates Level 4, returns `undefined` for the space-separated form, and any
+ * code path that *interpolates* a colour crashes on it.
+ *
+ * The symptom was bizarre and looked like anything but a colour bug — charts
+ * drew fine and then **vanished on hover**, with
+ * `TypeError: Cannot read properties of undefined (reading 'length')` thrown
+ * from deep inside `interpolate1DArray` during the emphasis animation. Hovering
+ * is simply the first thing that asks ECharts to blend one colour into another.
+ *
+ * So: `rgb(r,g,b)` and `rgba(r,g,b,a)`. Both are valid CSS, both parse in
+ * zrender, and SVG accepts them too — the other consumer of `token()`.
+ * `tests/tokens.test.ts` runs every emitted colour through zrender's own parser
+ * so this cannot come back.
+ */
+function commaChannels(variable: string): string {
+  // Tolerates "42 120 214" and "42, 120, 214" alike — a hand-edited token
+  // should not be able to produce an unparseable colour.
+  return rawChannels(variable).trim().split(/[\s,]+/).filter(Boolean).join(",");
+}
+
 /** A token as an opaque `rgb(...)` string. */
 export function token(name: TokenName): string {
-  return `rgb(${rawChannels(`--c-${name}`)})`;
+  return `rgb(${commaChannels(`--c-${name}`)})`;
 }
 
 /** A token at partial opacity — the runtime equivalent of Tailwind's `/nn`. */
 export function tokenAlpha(name: TokenName, alpha: number): string {
-  return `rgb(${rawChannels(`--c-${name}`)} / ${alpha})`;
+  return `rgba(${commaChannels(`--c-${name}`)},${alpha})`;
 }
 
 /**
@@ -112,16 +141,18 @@ export function tokenAlpha(name: TokenName, alpha: number): string {
  * translucent series fill through this.
  */
 export function withAlpha(color: string, alpha: number): string {
-  // `rgb(r g b)` → `rgb(r g b / a)`. Anything else is returned untouched: a
-  // caller passing a hex or a named colour gets their own value back rather
-  // than a mangled one.
+  // `rgb(r,g,b)` → `rgba(r,g,b,a)`, in the legacy syntax for the reason above.
+  // Anything else is returned untouched: a caller passing a hex or a named
+  // colour gets their own value back rather than a mangled one.
   const match = /^rgb\(([^/)]+)\)$/.exec(color.trim());
-  return match ? `rgb(${match[1].trim()} / ${alpha})` : color;
+  if (!match) return color;
+  const channels = match[1].trim().split(/[\s,]+/).filter(Boolean).join(",");
+  return `rgba(${channels},${alpha})`;
 }
 
 /** The categorical series palette, in order. */
 export function seriesPalette(): string[] {
-  return [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `rgb(${rawChannels(`--c-series-${n}`)})`);
+  return [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `rgb(${commaChannels(`--c-series-${n}`)})`);
 }
 
 /** Quality code → colour, so a flagged point never takes the series colour. */
