@@ -243,6 +243,7 @@ export function PortfolioDashboard(): JSX.Element {
         <StatTile
           label="Active alarms"
           numeric={alarms.length}
+          digits={0}
           tone={alarms.length > 0 ? "warn" : "default"}
           footnote={
             <span className="flex flex-wrap gap-1">

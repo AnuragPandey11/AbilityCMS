@@ -61,15 +61,40 @@
     --c-chart-tooltip-bg: 255 255 255;
     --c-chart-tooltip-border: 229 234 231;
     /* Categorical series colours. Deliberately not semantic — a series identity
-       must never be mistaken for a quality or a status. */
-    --c-series-1: 47 127 209;
-    --c-series-2: 122 108 214;
-    --c-series-3: 13 148 136;
-    --c-series-4: 219 39 119;
-    --c-series-5: 217 119 6;
-    --c-series-6: 8 145 178;
-    --c-series-7: 234 88 12;
-    --c-series-8: 100 116 139;
+       must never be mistaken for a quality or a status.
+
+       ⚠ **This order is the colourblind-safety mechanism, not a preference.**
+       Re-ordering the slots, or substituting a hue that "looks similar", breaks
+       it. The previous set paired blue with a violet one step away: adjacent
+       slots 1 and 2 were ΔE 0.8 apart under deuteranopia and 9.1 under normal
+       vision, so on a chart of seventeen Inverters two of them were the same
+       line to everybody and three of them were the same line to one reader in
+       twelve. Verified with the palette validator against this app's own
+       surfaces (#ffffff light, #161d26 dark): every check passes in both.
+
+       Light-mode aqua, yellow and magenta sit just under 3:1 against white,
+       which is a documented relief case — it obliges every chart carrying them
+       to have visible labels or a legend, which `TimeSeriesChart` does. */
+    --c-series-1: 42 120 214; /* blue */
+    --c-series-2: 235 104 52; /* orange */
+    --c-series-3: 27 175 122; /* aqua */
+    --c-series-4: 237 161 0; /* yellow */
+    --c-series-5: 232 123 164; /* magenta */
+    --c-series-6: 0 131 0; /* green */
+    --c-series-7: 74 58 167; /* violet */
+    --c-series-8: 227 73 72; /* red */
+
+
+    /* ── Equipment artwork ───────────────────────────────────────────────── */
+    /* The two parts of a device drawing that must know what is behind it.
+       Everything else in `components/devices/art/` is a fixed material colour,
+       because a transformer tank is grey in both themes. The rim light and the
+       contact shadow are not materials — they are the drawing's relationship to
+       the page, and they invert with it. */
+    --art-rim: 255 255 255;
+    --art-rim-alpha: 0.6;
+    --art-shadow: 15 30 25;
+    --art-shadow-alpha: 0.16;
 
     --shadow-card: 0 1px 2px rgb(16 32 24 / 0.04), 0 8px 22px -12px rgb(16 32 24 / 0.14);
     --shadow-soft: 0 1px 2px rgb(16 32 24 / 0.05);
@@ -109,16 +134,22 @@
       --c-chart-axis: 139 152 169;
       --c-chart-tooltip-bg: 22 29 38;
       --c-chart-tooltip-border: 36 48 64;
-      --c-series-1: 59 130 246;
-      --c-series-2: 56 189 248;
-      --c-series-3: 167 139 250;
-      --c-series-4: 244 114 182;
-      --c-series-5: 251 191 36;
-      --c-series-6: 52 211 153;
-      --c-series-7: 251 146 60;
-      --c-series-8: 148 163 184;
+      --c-series-1: 57 135 229; /* blue */
+      --c-series-2: 217 89 38; /* orange */
+      --c-series-3: 25 158 112; /* aqua */
+      --c-series-4: 201 133 0; /* yellow */
+      --c-series-5: 213 81 129; /* magenta */
+      --c-series-6: 0 131 0; /* green */
+      --c-series-7: 144 133 233; /* violet */
+      --c-series-8: 230 103 103; /* red */
 
-      --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -12px rgb(0 0 0 / 0.6);
+  
+    --art-rim: 226 240 255;
+    --art-rim-alpha: 0.24;
+    --art-shadow: 0 0 0;
+    --art-shadow-alpha: 0.45;
+
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -12px rgb(0 0 0 / 0.6);
       --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.35);
 
       color-scheme: dark;
@@ -157,14 +188,20 @@
     --c-chart-axis: 139 152 169;
     --c-chart-tooltip-bg: 22 29 38;
     --c-chart-tooltip-border: 36 48 64;
-    --c-series-1: 59 130 246;
-    --c-series-2: 56 189 248;
-    --c-series-3: 167 139 250;
-    --c-series-4: 244 114 182;
-    --c-series-5: 251 191 36;
-    --c-series-6: 52 211 153;
-    --c-series-7: 251 146 60;
-    --c-series-8: 148 163 184;
+    --c-series-1: 57 135 229; /* blue */
+    --c-series-2: 217 89 38; /* orange */
+    --c-series-3: 25 158 112; /* aqua */
+    --c-series-4: 201 133 0; /* yellow */
+    --c-series-5: 213 81 129; /* magenta */
+    --c-series-6: 0 131 0; /* green */
+    --c-series-7: 144 133 233; /* violet */
+    --c-series-8: 230 103 103; /* red */
+
+
+    --art-rim: 226 240 255;
+    --art-rim-alpha: 0.24;
+    --art-shadow: 0 0 0;
+    --art-shadow-alpha: 0.45;
 
     --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 22px -12px rgb(0 0 0 / 0.6);
     --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.35);

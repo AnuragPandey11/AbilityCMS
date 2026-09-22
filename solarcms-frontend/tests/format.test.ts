@@ -14,6 +14,7 @@ import {
   formatRatioAsPercent,
   formatValue,
   variantNote,
+  digitsForUnit,
 } from "@/format/value";
 import { formatAge, formatDate, formatDateTime, formatTime } from "@/format/datetime";
 import { isGoodQuality, quality, summariseQuality } from "@/format/quality";
@@ -176,5 +177,33 @@ describe("headline figures compact rather than shrink", () => {
     const negative = formatHeadline(-2_500_000);
     expect(negative.compacted).toBe(true);
     expect(negative.text.startsWith("-")).toBe(true);
+  });
+});
+
+describe("digitsForUnit", () => {
+  it("gives a count no decimals", () => {
+    // A tally has no fractional part to round. The magnitude rule returned two
+    // decimals below 1, so zero open Alarms rendered as "0.00" and seventeen
+    // Inverters as "17.00 count" — a precision the quantity cannot have.
+    expect(digitsForUnit("count")).toBe(0);
+    expect(formatValue(0, "count")).toBe("0 count");
+    expect(formatValue(17, "count")).toBe("17 count");
+  });
+
+  it("gives a ratio three decimals", () => {
+    expect(digitsForUnit("ratio")).toBe(3);
+    expect(formatValue(0.9876, "ratio")).toBe("0.988 ratio");
+  });
+
+  it("leaves every other unit to the magnitude rule", () => {
+    expect(digitsForUnit("kW")).toBeUndefined();
+    expect(digitsForUnit(null)).toBeUndefined();
+    // A measurement keeps its decimals: 0.00 kW is a reading, not a tally.
+    expect(formatValue(0, "kW")).toBe("0.00 kW");
+    expect(formatValue(25609.36, "kWh")).toBe("25,609 kWh");
+  });
+
+  it("still lets a caller override", () => {
+    expect(formatValue(17, "count", { digits: 2 })).toBe("17.00 count");
   });
 });

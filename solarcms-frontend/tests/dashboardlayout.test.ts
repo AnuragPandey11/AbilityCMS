@@ -1,0 +1,123 @@
+/**
+ * The two pure rules the single-screen dashboard rests on.
+ *
+ * Both decide what the operator *does not* see, which is exactly the kind of
+ * rule that fails silently: a panel wrongly judged a duplicate simply is not
+ * there, and nothing on the screen says so.
+ */
+
+import { describe, expect, it } from "vitest";
+import { fullyDuplicated, sourceSignature } from "@/dashboards/single-plant/duplication";
+import { groupDashboards, NAV_GROUPS } from "@/components/layout/navigation";
+import type { ResolvedSlot } from "@/api/schemas";
+
+function slot(
+  code: string,
+  source: Partial<NonNullable<ResolvedSlot["source"]>> | null,
+): ResolvedSlot {
+  return {
+    slot_code: code,
+    label: code,
+    position: 1,
+    value: 1,
+    unit: "kWh",
+    undefined_reason: null,
+    source: source
+      ? {
+          kind: "device_tag",
+          device_type_code: "INVERTER",
+          tag_code: "ENERGY_TODAY",
+          aggregate: "sum",
+          device_count: 17,
+          is_aggregated: true,
+          degraded: false,
+          ...source,
+        }
+      : null,
+  };
+}
+
+describe("panel deduplication", () => {
+  it("treats two slots as the same claim when the resolved source matches", () => {
+    // The real case on KULAR_GREEN: `kpi.energy_today` and
+    // `energy.generated_today` are different catalogue positions with
+    // different labels that resolve to the identical sum over the identical
+    // seventeen Inverters. Rendered together they are one figure twice under
+    // two names, which invites the reader to look for a difference.
+    const headline = [slot("kpi.energy_today", {})];
+    const panel = [slot("energy.generated_today", {})];
+    expect(fullyDuplicated(panel, headline)).toBe(true);
+  });
+
+  it("keeps a panel that holds even one distinct figure", () => {
+    // It never hides a *figure*, only a second copy of one. Dropping the
+    // duplicate row from inside a panel would leave a hole in a list whose
+    // order is catalogue configuration.
+    const headline = [slot("kpi.energy_today", {})];
+    const panel = [
+      slot("energy.generated_today", {}),
+      slot("energy.exported", { tag_code: "ENERGY_EXPORT_TODAY" }),
+    ];
+    expect(fullyDuplicated(panel, headline)).toBe(false);
+  });
+
+  it("separates the same Tag measured on a different Device Type", () => {
+    // Energy summed from the Inverters and energy read at the meter are two
+    // different claims about the same quantity, and the gap between them is a
+    // real loss somebody is paid to look at.
+    const headline = [slot("kpi.energy_today", { device_type_code: "INVERTER" })];
+    const panel = [
+      slot("energy.metered", { device_type_code: "MFM", is_aggregated: false, device_count: 1 }),
+    ];
+    expect(fullyDuplicated(panel, headline)).toBe(false);
+  });
+
+  it("separates the same source over a different number of Devices", () => {
+    // Four of seventeen Inverters answering is not the same claim as all
+    // seventeen — which is the normal state part-way through commissioning.
+    const headline = [slot("kpi.energy_today", { device_count: 17 })];
+    const panel = [slot("energy.generated_today", { device_count: 4 })];
+    expect(fullyDuplicated(panel, headline)).toBe(false);
+  });
+
+  it("never collapses two slots that have no source", () => {
+    // Two positions this Plant cannot answer are two separate commissioning
+    // gaps. Collapsing them hides the second behind the first.
+    const a = slot("a", null);
+    const b = slot("b", null);
+    expect(sourceSignature(a)).toBeNull();
+    expect(fullyDuplicated([b], [a])).toBe(false);
+  });
+});
+
+describe("navigation grouping", () => {
+  it("keeps only the dashboards the server granted", () => {
+    // A-3: a User who lacks a dashboard has no entry and no route — not a
+    // hidden link, an absent one.
+    const groups = groupDashboards(["portfolio", "single_plant"]);
+    expect(groups.flatMap((g) => g.codes)).toEqual(["portfolio", "single_plant"]);
+  });
+
+  it("drops a group whose every dashboard was withheld", () => {
+    const groups = groupDashboards(["alarms"]);
+    expect(groups.map((g) => g.label)).toEqual(["Operations"]);
+  });
+
+  it("keeps a dashboard no group claims, in the server's own order", () => {
+    // Adding a dashboard is a database row. One this file has not heard of
+    // must still be reachable without a frontend release.
+    const groups = groupDashboards(["portfolio", "brand_new", "another_new"]);
+    const more = groups.find((g) => g.label === "More");
+    expect(more?.codes).toEqual(["brand_new", "another_new"]);
+  });
+
+  it("lists no dashboard twice", () => {
+    const all = NAV_GROUPS.flatMap((g) => g.codes);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("returns nothing at all when nothing was granted", () => {
+    // Zero assignments means zero, never all (I-5, Guardrail 7).
+    expect(groupDashboards([])).toEqual([]);
+  });
+});

@@ -46,6 +46,21 @@ import {
 /** Below this the labels stop being readable; above it the boxes are absurd. */
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 4;
+/**
+ * The smallest scale an *automatic* fit is allowed to choose.
+ *
+ * A pure fit optimises for "all of it on screen", which on a Plant with
+ * seventeen Inverters side by side meant 23% — every box a grey smudge, every
+ * label gone, and a diagram that answers no question at all. Below this the
+ * fit stops shrinking and the viewport pans instead: some of the diagram,
+ * readable, beats all of it, illegible. Pressing *Fit* still overrides this
+ * and frames the whole thing, because that is a deliberate request to see the
+ * shape rather than the detail, and zooming out by hand is unrestricted down
+ * to `MIN_SCALE`.
+ *
+ * 0.55 is where the 9px type on a node stops being resolvable.
+ */
+const MIN_AUTOFIT_SCALE = 0.55;
 /** One button press. A ratio rather than a step, so zooming is even at any scale. */
 const BUTTON_STEP = 1.25;
 /** Breathing room around a fitted diagram, in CSS pixels. */
@@ -117,7 +132,7 @@ export function DiagramCanvas({
   /** Distance and midpoint at the moment the second finger landed. */
   const pinch = useRef<{ distance: number; k: number } | null>(null);
 
-  const fit = useCallback((): void => {
+  const fit = useCallback((options?: { floor?: boolean }): void => {
     const viewport = viewportRef.current;
     const content = contentRef.current;
     if (!viewport || !content) return;
@@ -133,9 +148,18 @@ export function DiagramCanvas({
     };
     // Never magnify to fill. A four-box diagram blown up to 3x looks like an
     // error, and the natural size is the size the labels were designed at.
-    const k = clampScale(
-      Math.min(1, available.width / width, available.height / contentHeight),
-    );
+    const ideal = Math.min(1, available.width / width, available.height / contentHeight);
+    // `floor` is the automatic fit — on first paint and on resize. An explicit
+    // press of Fit passes nothing and gets the true fit.
+    const k = clampScale(options?.floor ? Math.max(ideal, MIN_AUTOFIT_SCALE) : ideal);
+    // Centred in both axes, including when the content overflows.
+    //
+    // Left-aligning an overflow sounds right — start at the beginning of the
+    // chain — and is wrong here: a tree lays its root out at the horizontal
+    // *centre* of its own canvas with the leaves spread either side, so the
+    // left edge of the SVG is empty margin. Left-aligned, the viewport opened
+    // on blank space. Centred, an overflowing diagram opens on the root, which
+    // is the part somebody navigates out from.
     setTransform({
       k,
       x: (viewport.clientWidth - width * k) / 2,
@@ -147,7 +171,7 @@ export function DiagramCanvas({
   // effect, not effect: measuring after the browser has painted produces one
   // frame of un-fitted diagram, which reads as a flicker on every navigation.
   useLayoutEffect(() => {
-    const timer = window.setTimeout(fit, 0);
+    const timer = window.setTimeout(() => fit({ floor: true }), 0);
     return () => window.clearTimeout(timer);
   }, [fit, fitKey, expanded]);
 
@@ -156,7 +180,7 @@ export function DiagramCanvas({
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => fit());
+    const observer = new ResizeObserver(() => fit({ floor: true }));
     observer.observe(viewport);
     return () => observer.disconnect();
   }, [fit]);
@@ -338,7 +362,7 @@ export function DiagramCanvas({
           </CanvasButton>
           <button
             type="button"
-            onClick={fit}
+            onClick={() => fit()}
             title="Fit the whole diagram in view"
             className="min-w-[3.25rem] rounded-control border border-line bg-surface-raised px-1.5 py-1 font-mono text-[11px] text-ink-muted hover:text-ink"
           >
@@ -351,7 +375,7 @@ export function DiagramCanvas({
           >
             <svg {...ICON}><path d="M12 5v14M5 12h14" /></svg>
           </CanvasButton>
-          <CanvasButton onClick={fit} title="Fit to view" label="Fit to view">
+          <CanvasButton onClick={() => fit()} title="Fit to view" label="Fit to view">
             <svg {...ICON}>
               <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
             </svg>

@@ -34,6 +34,7 @@ import { AlarmRulesAdmin } from "@/admin/AlarmRulesAdmin";
 import { UsersAdmin } from "@/admin/UsersAdmin";
 import { SystemAdmin } from "@/admin/SystemAdmin";
 import { usePermission, type Permission } from "@/auth/usePermission";
+import { ArtPreview } from "@/dev/ArtPreview";
 import { ForbiddenState } from "@/components/state";
 
 /** One component per dashboard code. Codes come from the database. */
@@ -112,6 +113,8 @@ export function AppRoutes(): JSX.Element {
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to={landing} replace />} />
         <Route path="/d/:code" element={<DashboardRoute />} />
+        {/* Development contact sheet for the equipment artwork. Not navigable. */}
+        <Route path="/dev/art" element={<ArtPreview />} />
 
         <Route
           path="/admin/onboarding"

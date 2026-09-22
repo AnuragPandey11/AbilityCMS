@@ -12,9 +12,10 @@
 
 import type { CommStatus, SldNodeData } from "@/api/schemas";
 import { token } from "@/theme/tokens";
+import { DeviceArt } from "@/components/devices/DeviceArt";
 
-export const NODE_WIDTH = 132;
-export const NODE_HEIGHT = 46;
+export const NODE_WIDTH = 158;
+export const NODE_HEIGHT = 50;
 
 // A function, not a constant: SVG attributes take a resolved colour, so these
 // must be read per render rather than frozen at module load.
@@ -97,18 +98,29 @@ export function SldNode({
         strokeDasharray={unwired && !selected ? "5 3" : undefined}
         opacity={stale ? 0.55 : 1}
       />
-      <circle cx={10} cy={11} r={3.5} fill={stroke} />
-      <text x={20} y={15} fill={token("ink")} fontSize={11} fontWeight={600}>
-        {node.code.length > 15 ? `${node.code.slice(0, 14)}…` : node.code}
+      {/*
+        The equipment, drawn, nested as its own SVG viewport.
+        
+        The status dot stays — colour is `comm_status` and the drawing must not
+        carry it, because a transformer tinted green stops looking like a
+        transformer. Together they say two different things in the space one
+        used to: *what this is* and *whether we can hear it*.
+      */}
+      <g transform="translate(4, 11)" opacity={unwired ? 0.75 : 1}>
+        <DeviceArt typeCode={node.type} size={36} />
+      </g>
+      <circle cx={48} cy={13} r={3.2} fill={stroke} />
+      <text x={56} y={16.5} fill={token("ink")} fontSize={11} fontWeight={600}>
+        {node.code.length > 13 ? `${node.code.slice(0, 12)}…` : node.code}
       </text>
-      <text x={8} y={29} fill={token("ink-muted")} fontSize={9}>
+      <text x={44} y={30} fill={token("ink-muted")} fontSize={9}>
         {node.type}
         {node.variant ? ` · ${node.variant}` : ""}
         {unwired ? " · no current" : ""}
       </text>
       <text
         x={NODE_WIDTH - 8}
-        y={40}
+        y={43}
         fill={livePower ? token("info") : token("ink-faint")}
         fontSize={10}
         fontFamily="ui-monospace, monospace"

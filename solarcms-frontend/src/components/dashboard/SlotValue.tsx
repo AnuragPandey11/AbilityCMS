@@ -16,7 +16,14 @@
  */
 
 import type { ResolvedSlot, SlotSource } from "@/api/schemas";
-import { UNDEFINED_DISPLAY, formatHeadline, formatNumber } from "@/format/value";
+import {
+  UNDEFINED_DISPLAY,
+  digitsForUnit,
+  formatHeadline,
+  formatNumber,
+} from "@/format/value";
+import type { ComponentType } from "react";
+import type { IconProps } from "@/components/icons";
 import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 
@@ -66,9 +73,10 @@ function titleCase(code: string): string {
  */
 export function slotText(slot: ResolvedSlot): string {
   if (slot.value === null) return UNDEFINED_DISPLAY;
-  return slot.unit === "ratio"
-    ? formatNumber(slot.value, { digits: 3 })
-    : formatNumber(slot.value);
+  // The unit decides where it can: three decimals for a ratio, none for a
+  // count — "17.00 count" invites the reader to look for a precision that
+  // cannot exist. Everything else follows magnitude.
+  return formatNumber(slot.value, { digits: digitsForUnit(slot.unit) });
 }
 
 function Provenance({ slot }: { slot: ResolvedSlot }): JSX.Element | null {
@@ -98,7 +106,7 @@ export function SlotTile({ slot }: { slot: ResolvedSlot }): JSX.Element {
   // energy counter, which is compacted rather than scaled down to fit. The unit
   // the backend supplied is passed through untouched either way (§4.1).
   const headline =
-    slot.unit === "ratio" ? null : formatHeadline(slot.value);
+    slot.unit === "ratio" ? null : formatHeadline(slot.value, { digits: digitsForUnit(slot.unit) });
   const text = headline ? headline.text : slotText(slot);
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
@@ -143,6 +151,76 @@ export function SlotRow({ slot }: { slot: ResolvedSlot }): JSX.Element {
           ) : null}
         </span>
       </span>
+    </div>
+  );
+}
+
+/**
+ * The dense variant of `SlotTile`, for the dashboard's headline strip.
+ *
+ * Same content, roughly half the height. The dashboard fits one screen only if
+ * the row that never changes — capacity, current power, today, month, lifetime
+ * — costs about 80px rather than about 150px. What is given up is the tile's
+ * generous padding, and nothing else: the figure, the unit and the provenance
+ * are all still here, because dropping provenance would make 6.32 MW measured
+ * and 6.32 MW summed the same claim, which is exactly the distinction the slot
+ * catalogue exists to keep.
+ *
+ * `icon` is decorative and optional. It labels the *kind* of figure — power,
+ * energy, a ratio — so the strip can be scanned by shape before it is read.
+ */
+export function SlotStat({
+  slot,
+  icon: Icon,
+}: {
+  slot: ResolvedSlot;
+  icon?: ComponentType<IconProps>;
+}): JSX.Element {
+  const isUndefined = slot.value === null;
+  const explanation = undefinedExplanation(slot);
+  const headline =
+    slot.unit === "ratio" ? null : formatHeadline(slot.value, { digits: digitsForUnit(slot.unit) });
+  const text = headline ? headline.text : slotText(slot);
+
+  return (
+    <div className="min-w-0 rounded-card border border-line bg-surface-raised px-3 py-2">
+      <div className="flex items-center gap-1.5">
+        {Icon ? <Icon size={12} className="shrink-0 text-ink-faint" /> : null}
+        <span className="truncate text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+          {slot.label}
+        </span>
+        {slot.override_note ? (
+          <InfoHint text={`Source overridden for this Plant: ${slot.override_note}`} />
+        ) : null}
+      </div>
+      <div className="mt-0.5 flex items-baseline gap-1">
+        {/*
+          Proportional figures, not `tabular-nums`: equal-width digits make a
+          large standalone number look loose, and nothing in this row lines up
+          vertically with anything. The tables elsewhere do use tabular figures,
+          where columns of numbers genuinely need to align.
+        */}
+        <span
+          className={`truncate text-[19px] font-semibold leading-tight ${
+            isUndefined ? "text-ink-faint" : "text-ink"
+          }`}
+          title={
+            isUndefined
+              ? explanation
+              : headline?.compacted
+                ? `${headline.exact}${slot.unit ? ` ${slot.unit}` : ""}`
+                : String(slot.value)
+          }
+        >
+          {text}
+        </span>
+        {!isUndefined && slot.unit ? (
+          <span className="shrink-0 text-[10px] text-ink-muted">{slot.unit}</span>
+        ) : null}
+      </div>
+      <p className="truncate text-[9px] leading-snug text-ink-faint">
+        {isUndefined ? explanation : <Provenance slot={slot} />}
+      </p>
     </div>
   );
 }

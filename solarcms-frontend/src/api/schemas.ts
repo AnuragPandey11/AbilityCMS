@@ -235,6 +235,36 @@ export const KpiFigureSchema = z.object({
 });
 export type KpiFigure = z.infer<typeof KpiFigureSchema>;
 
+/**
+ * How much of the period the figures beside it actually saw.
+ *
+ * ⚠ **Guardrail 18: never render a KPI without this.** A gap does not make a
+ * figure look wrong, it makes it look *low* — an average over fewer samples is
+ * still an average, a total over a hole is simply smaller, and for availability
+ * a gap reads as nothing having happened. None of those announce themselves,
+ * and nothing else on the response reveals them.
+ *
+ * It never corrects the figure, and neither may anything downstream: scaling a
+ * total by `1 / ratio` is inventing data.
+ *
+ * `.catch(null)` rather than required, so a deployment where the API has not
+ * yet shipped the block degrades to "coverage unknown" instead of blanking
+ * every KPI on the screen with a parse failure.
+ */
+export const KpiCoverageSchema = z.object({
+  /** 0..1 — received samples over expected. Expected is counted per binding
+   *  against each Tag's own throttle, never per Device. */
+  ratio: numeric(),
+  complete: z.boolean(),
+  expected_samples: z.number(),
+  received_samples: z.number(),
+  missing_seconds: z.number(),
+  /** Planned work. Excluded from coverage, so servicing does not degrade the
+   *  figure a performance guarantee is paid on. */
+  excluded_seconds: z.number(),
+});
+export type KpiCoverage = z.infer<typeof KpiCoverageSchema>;
+
 export const PlantKpisSchema = z.object({
   plant_id: z.number(),
   period: z.string(),
@@ -243,6 +273,10 @@ export const PlantKpisSchema = z.object({
   cuf: KpiFigureSchema,
   availability: KpiFigureSchema,
   co2_avoided_kg: KpiFigureSchema,
+  coverage: KpiCoverageSchema.nullable().catch(null),
+  /** Which tier served these. A figure from `agg_1d` over "today" is a
+   *  different resolution of claim than one from `agg_1m`. */
+  source_tier: z.string().nullable().optional().catch(null),
   assumptions_note: z.string(),
 });
 export type PlantKpis = z.infer<typeof PlantKpisSchema>;
@@ -499,7 +533,18 @@ export const ReadingPointSchema = z
     min_value: nullableNumeric().optional(),
     max_value: nullableNumeric().optional(),
     last_value: nullableNumeric().optional(),
-    sample_count: z.number().nullable().optional(),
+    /**
+     * ⚠ Arrives as a **JSON string** on the aggregate tiers.
+     *
+     * It is a `count(*)`, so Postgres types it `BIGINT`, and this driver path
+     * serialises BIGINT as a string to avoid the 2^53 precision cliff. Declared
+     * as `z.number()` it failed `safeParse` for every aggregate response — and
+     * because the whole envelope is parsed at once, one string here blanked the
+     * entire chart with "Unexpected response shape from GET /readings". The raw
+     * tier carries no `sample_count` at all, which is why it only ever broke on
+     * ranges long enough to be served by an aggregate.
+     */
+    sample_count: nullableNumeric().optional(),
     rollup_method: z.string().nullable().optional(),
   })
   .passthrough();

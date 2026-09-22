@@ -70,14 +70,14 @@ const FALLBACK: Record<string, string> = {
   "--c-chart-axis": "141 152 143",
   "--c-chart-tooltip-bg": "255 255 255",
   "--c-chart-tooltip-border": "229 234 231",
-  "--c-series-1": "47 127 209",
-  "--c-series-2": "122 108 214",
-  "--c-series-3": "13 148 136",
-  "--c-series-4": "219 39 119",
-  "--c-series-5": "217 119 6",
-  "--c-series-6": "8 145 178",
-  "--c-series-7": "234 88 12",
-  "--c-series-8": "100 116 139",
+  "--c-series-1": "42 120 214",
+  "--c-series-2": "235 104 52",
+  "--c-series-3": "27 175 122",
+  "--c-series-4": "237 161 0",
+  "--c-series-5": "232 123 164",
+  "--c-series-6": "0 131 0",
+  "--c-series-7": "74 58 167",
+  "--c-series-8": "227 73 72",
 };
 
 function rawChannels(variable: string): string {
@@ -101,6 +101,24 @@ export function tokenAlpha(name: TokenName, alpha: number): string {
   return `rgb(${rawChannels(`--c-${name}`)} / ${alpha})`;
 }
 
+/**
+ * The same colour at partial opacity.
+ *
+ * ⚠ Needed because every colour this module produces is `rgb(r g b)`, and the
+ * obvious shortcut — appending two hex digits, as you would to `#2a78d6` —
+ * silently produces `rgb(57 135 229)44`, which the canvas rejects at
+ * `addColorStop` and which throws *inside ECharts*, so the whole chart fails to
+ * paint with an error that names neither the chart nor the caller. Route every
+ * translucent series fill through this.
+ */
+export function withAlpha(color: string, alpha: number): string {
+  // `rgb(r g b)` → `rgb(r g b / a)`. Anything else is returned untouched: a
+  // caller passing a hex or a named colour gets their own value back rather
+  // than a mangled one.
+  const match = /^rgb\(([^/)]+)\)$/.exec(color.trim());
+  return match ? `rgb(${match[1].trim()} / ${alpha})` : color;
+}
+
 /** The categorical series palette, in order. */
 export function seriesPalette(): string[] {
   return [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `rgb(${rawChannels(`--c-series-${n}`)})`);
@@ -120,7 +138,10 @@ export function chartTheme() {
   return {
     textStyle: { color: token("ink-muted"), fontFamily: "Inter, system-ui, sans-serif" },
     axisLine: { lineStyle: { color: token("chart-grid") } },
-    splitLine: { lineStyle: { color: token("chart-grid"), type: "dashed" as const } },
+    // A solid hairline, never dashed. A dashed rule reads as a projection or a
+    // threshold — both of which this platform draws for real elsewhere — and a
+    // grid that looks like a threshold is a grid nobody trusts.
+    splitLine: { lineStyle: { color: token("chart-grid"), type: "solid" as const, width: 1 } },
     tooltipBackground: token("chart-tooltip-bg"),
     tooltipBorder: token("chart-tooltip-border"),
     palette: seriesPalette(),

@@ -18,6 +18,7 @@
 
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { seriesPalette, withAlpha } from "@/theme/tokens";
 import { join } from "node:path";
 
 const ROOT = join(__dirname, "..");
@@ -144,5 +145,28 @@ describe("every token the config references is defined in every theme", () => {
       });
     });
     expect(missing).toEqual([]);
+  });
+});
+
+describe("withAlpha", () => {
+  it("adds an alpha channel to an rgb() colour", () => {
+    // The bug this guards: appending hex alpha to `rgb(57 135 229)` produces
+    // `rgb(57 135 229)44`, which the canvas rejects at `addColorStop` — and it
+    // throws inside ECharts, so the whole chart fails to paint with an error
+    // naming neither the chart nor the caller.
+    expect(withAlpha("rgb(57 135 229)", 0.26)).toBe("rgb(57 135 229 / 0.26)");
+  });
+
+  it("leaves a colour it does not recognise untouched", () => {
+    // Better a fully opaque mark than a mangled colour string that throws.
+    expect(withAlpha("#2a78d6", 0.5)).toBe("#2a78d6");
+    expect(withAlpha("", 0.5)).toBe("");
+  });
+
+  it("never produces a value the canvas would reject", () => {
+    const canvasSafe = /^(rgb\([\d\s]+(\s\/\s[\d.]+)?\)|#[0-9a-f]{3,8})$/i;
+    for (const color of seriesPalette()) {
+      expect(withAlpha(color, 0.14)).toMatch(canvasSafe);
+    }
   });
 });

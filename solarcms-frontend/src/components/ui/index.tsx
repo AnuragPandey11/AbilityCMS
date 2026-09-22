@@ -8,29 +8,46 @@ export function Panel({
   actions,
   children,
   className = "",
+  fill = false,
+  padding = "p-4",
 }: {
   title?: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
+  /**
+   * Make the body take the leftover height.
+   *
+   * For a Panel sitting in a grid row beside a taller one. A CSS grid stretches
+   * every cell to the row's height, but the *card* stretching does not make its
+   * *contents* stretch — so a short panel next to a chart renders as a box with
+   * a third of its area blank underneath the content, which reads as a loading
+   * state that never finishes. With `fill`, the body is a flex child that grows
+   * and its own content can use `h-full`.
+   */
+  fill?: boolean;
+  /** For a body that manages its own padding — a table, a full-bleed chart. */
+  padding?: string;
 }): JSX.Element {
   return (
     <section
-      className={`rounded-card border border-line bg-surface-raised shadow-soft ${className}`}
+      className={`rounded-card border border-line bg-surface-raised shadow-soft ${
+        fill ? "flex flex-col" : ""
+      } ${className}`}
     >
       {(title || actions) && (
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
-          <div>
+          <div className="min-w-0">
             {title ? <h2 className="text-sm font-semibold text-ink">{title}</h2> : null}
             {subtitle ? (
-              <p className="mt-0.5 text-xs text-ink-muted">{subtitle}</p>
+              <p className="mt-0.5 text-xs leading-snug text-ink-muted">{subtitle}</p>
             ) : null}
           </div>
           {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
         </header>
       )}
-      <div className="p-4">{children}</div>
+      <div className={`${padding} ${fill ? "min-h-0 flex-1" : ""}`}>{children}</div>
     </section>
   );
 }
@@ -288,3 +305,12 @@ export function SectionHeading({
     </div>
   );
 }
+
+/**
+ * Re-exported so callers keep one import site for presentational primitives.
+ * They live in their own files because each is substantial enough to deserve
+ * its own header — a slide-over has focus management and scroll locking to
+ * explain, and a carousel has two input methods to justify.
+ */
+export { Drawer } from "./Drawer";
+export { Carousel, CarouselItem } from "./Carousel";

@@ -26,7 +26,7 @@ import { useTagsById } from "@/api/hooks";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { formatValue } from "@/format/value";
 import { Badge } from "@/components/ui";
-import { DeviceIcon } from "@/components/devices/DeviceIcon";
+import { DeviceArt } from "@/components/devices/DeviceArt";
 import { DiagramCanvas } from "./DiagramCanvas";
 
 /**
@@ -335,23 +335,32 @@ export function PlantFlow({
                 onClick={() =>
                   setOpenStage((current) => (current === stage.key ? null : stage.key))
                 }
-                className={`flex w-[128px] flex-col items-center gap-2 rounded-xl border p-3 text-center shadow-sm transition ${
+                className={`flex w-[136px] flex-col items-center gap-1.5 rounded-xl border p-3 text-center shadow-sm transition ${
                   openStage === stage.key
                     ? "border-accent bg-accent/10 shadow-soft ring-1 ring-accent/25"
                     : "border-line bg-surface hover:border-line-strong hover:shadow-soft"
                 }`}
                 title={`${stage.devices.length} ${stage.typeCode} — click for detail`}
               >
+                {/*
+                  The equipment, drawn. The status stays on the *plinth* under
+                  it rather than tinting the drawing: `DeviceIcon` renders a
+                  glyph in `currentColor`, which is right for a list row whose
+                  colour already means something, and wrong here — a monochrome
+                  silhouette of a transformer and a monochrome silhouette of a
+                  switchgear cubicle are the same shape at 44px, and in a
+                  schematic the picture *is* the label.
+                */}
                 <span
-                  className={`flex h-11 w-11 items-center justify-center rounded-xl ${
+                  className={`flex h-14 w-[72px] items-end justify-center rounded-lg border-b-2 ${
                     stage.online === stage.devices.length
-                      ? "bg-ok/10 text-ok"
+                      ? "border-ok/70 bg-ok/[0.07]"
                       : stage.online === 0
-                        ? "bg-bad/10 text-bad"
-                        : "bg-warn/10 text-warn"
+                        ? "border-bad/70 bg-bad/[0.07]"
+                        : "border-warn/70 bg-warn/[0.07]"
                   }`}
                 >
-                  <DeviceIcon typeCode={stage.typeCode} />
+                  <DeviceArt typeCode={stage.typeCode} size={64} />
                 </span>
                 <span className="text-xs font-semibold leading-tight text-ink">
                   {/* A Plant can have the same type at two points in the chain —
@@ -439,12 +448,11 @@ export function PlantFlow({
           })}
 
           {/* The grid is not a Device — it is what "feeds into nothing" means. */}
-          <div className="flex w-[128px] flex-col items-center gap-2 rounded-xl border border-dashed border-line p-3 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-surface-sunken text-ink-muted">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" strokeWidth={1.7} strokeLinecap="round">
-                <path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5" />
-              </svg>
+          <div className="flex w-[136px] flex-col items-center gap-1.5 rounded-xl border border-dashed border-line p-3 text-center">
+            {/* The pylon: the one drawing in the set depicting something
+                outside the fence, which is exactly what the Grid is. */}
+            <span className="flex h-14 w-[72px] items-end justify-center rounded-lg border-b-2 border-dashed border-line bg-surface-sunken">
+              <DeviceArt typeCode="GRID" size={64} />
             </span>
             <span className="text-xs font-semibold leading-tight text-ink">Grid</span>
             <span className="text-[11px] leading-tight text-ink-faint">

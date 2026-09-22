@@ -1,5 +1,38 @@
 # Device Type icons
 
+There are **two layers**, and which one a screen uses depends on whether the
+picture is the label.
+
+| | `DeviceArt` | `DeviceIcon` |
+| --- | --- | --- |
+| Where | diagrams, schematic stages, Device cards, drawers | list rows, chips, inline labels, hierarchy rows |
+| Looks like | full-colour equipment, shaded, on a transparent ground | a single-colour line glyph |
+| Colour | the materials the equipment is made of | `currentColor` — inherits the container |
+| Lives in | `src/components/devices/art/` | `src/components/devices/DeviceIcon.tsx` |
+| Supplied artwork | not supported — the drawings are code | drop an SVG here, see below |
+
+**Neither supersedes the other.** A glyph in `currentColor` is right where the
+container is already coloured by state: a row that turns amber when a Device
+goes degraded must not contain one element that stays put. It is wrong where
+nothing else on the tile says what the equipment is, because a monochrome
+silhouette of a transformer is the same shape as a monochrome silhouette of a
+switchgear cubicle at 40px — which is the whole reason `DeviceArt` exists.
+
+In `DeviceArt` the **status never touches the drawing**. It goes on the frame
+around it, which is the component that actually knows whether the Device is
+reporting; a transformer that turns green stops looking like a transformer.
+Two theme variables are the exception — `--art-rim` and `--art-shadow` are the
+drawing's relationship to the page behind it rather than a material, so they
+invert with the theme while the tank stays grey.
+
+Both layers are keyed on the canonical `device_types.code` the API sends, so
+neither can drift from the catalogue without the other noticing.
+`tests/deviceart.test.tsx` fails if a Device Type has no drawing, if two types
+draw identically without a documented reason, or if a drawing reaches for a
+status colour.
+
+## Supplying a single-colour icon
+
 Drop an SVG here and name it in `SUPPLIED_ICONS` in
 `src/components/devices/DeviceIcon.tsx`. Until a type is named there, it renders
 the built-in drawing from that same file, so the app never waits on artwork.

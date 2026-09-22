@@ -175,3 +175,53 @@ describe("alarm rule operators (§7.3)", () => {
     expect(operatorNeedsThreshold("gt")).toBe(true);
   });
 });
+
+describe("ReadingsResponseSchema", () => {
+  const base = {
+    tier: "agg_15m",
+    resolution_requested: "agg_15m",
+    from: "2026-09-21T15:07:00Z",
+    to: "2026-09-22T15:07:00Z",
+    count: 1,
+  };
+
+  it("accepts sample_count as a JSON string", () => {
+    // `count(*)` is BIGINT, and this driver path serialises BIGINT as a string
+    // to avoid the 2^53 precision cliff. Declared as `z.number()` this failed
+    // for every aggregate-tier response, and because the envelope is parsed as
+    // a whole, one string here blanked the entire chart.
+    const parsed = ReadingsResponseSchema.parse({
+      ...base,
+      items: [
+        {
+          bucket: "2026-09-21T16:30:00Z",
+          device_id: 40,
+          tag_id: 53,
+          tag_code: "GTI",
+          value: -1.5,
+          avg_value: -1.5,
+          min_value: -2,
+          max_value: -1,
+          last_value: -1,
+          sample_count: "10",
+          quality: 1,
+          rollup_method: "avg",
+        },
+      ],
+    });
+    expect(parsed.items[0].sample_count).toBe(10);
+  });
+
+  it("still accepts it as a number, and absent on the raw tier", () => {
+    const parsed = ReadingsResponseSchema.parse({
+      ...base,
+      tier: "readings",
+      items: [
+        { bucket: "2026-09-21T16:30:00Z", device_id: 40, tag_id: 53, tag_code: "GTI", value: 1, quality: 0, sample_count: 3 },
+        { bucket: "2026-09-21T16:31:00Z", device_id: 40, tag_id: 53, tag_code: "GTI", value: 2, quality: 0 },
+      ],
+    });
+    expect(parsed.items[0].sample_count).toBe(3);
+    expect(parsed.items[1].sample_count).toBeUndefined();
+  });
+});

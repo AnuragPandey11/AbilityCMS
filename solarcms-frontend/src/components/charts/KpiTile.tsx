@@ -108,6 +108,7 @@ export function StatTile({
   hint,
   tone = "default",
   footnote,
+  digits,
 }: {
   label: string;
   value?: ReactNode;
@@ -118,6 +119,14 @@ export function StatTile({
   hint?: string;
   tone?: "default" | "ok" | "warn" | "bad";
   footnote?: ReactNode;
+  /**
+   * Decimal places. Pass `0` for a tally.
+   *
+   * The default rule is magnitude-based, which is right for a measurement and
+   * wrong for a count: it gave two decimals below 1, so zero open Alarms
+   * rendered as "0.00". A count has no fractional part to round.
+   */
+  digits?: number;
 }): JSX.Element {
   const tones: Record<string, string> = {
     default: "text-ink",
@@ -125,7 +134,7 @@ export function StatTile({
     warn: "text-warn",
     bad: "text-bad",
   };
-  const headline = numeric === undefined ? null : formatHeadline(numeric);
+  const headline = numeric === undefined ? null : formatHeadline(numeric, { digits });
   const isNumeric = headline !== null;
   const undefinedNumeric = isNumeric && headline.text === UNDEFINED_DISPLAY;
 

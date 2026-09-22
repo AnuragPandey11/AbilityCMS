@@ -23,6 +23,28 @@ function significantDigits(magnitude: number): number {
 }
 
 /**
+ * How many decimals a unit deserves, where the unit itself settles it.
+ *
+ * The default rule is magnitude-based, which is right for a measurement and
+ * wrong for a tally: `significantDigits(0)` is 2, so a count of zero open
+ * Alarms rendered as **"0.00"** and seventeen Inverters as "17.00 count". A
+ * fractional part on a count is not a rounding choice, it is a category error —
+ * there is no such thing as 0.4 of an Alarm, and the two extra digits invite
+ * the reader to look for a precision that does not exist.
+ *
+ * `ratio` goes the other way: it is always well under 1, so the magnitude rule
+ * would give it three digits anyway, but stating it here keeps the two special
+ * cases together instead of leaving one at each call site.
+ *
+ * Returns `undefined` for every other unit, meaning "use the magnitude rule".
+ */
+export function digitsForUnit(unit: string | null | undefined): number | undefined {
+  if (unit === "count") return 0;
+  if (unit === "ratio") return 3;
+  return undefined;
+}
+
+/**
  * A bare number, grouped, at a sensible precision. `null` is undefined, and
  * undefined is not zero (§4.3, Guardrail 3).
  */
@@ -49,7 +71,9 @@ export function formatValue(
   unit: string | null | undefined,
   options: { digits?: number } = {},
 ): string {
-  const rendered = formatNumber(value, options);
+  const rendered = formatNumber(value, {
+    digits: options.digits ?? digitsForUnit(unit),
+  });
   if (rendered === UNDEFINED_DISPLAY) return rendered;
   return unit ? `${rendered} ${unit}` : rendered;
 }
@@ -161,11 +185,12 @@ export const COMPACT_ABOVE = 1_000_000;
  */
 export function formatHeadline(
   value: number | null | undefined,
+  options: { digits?: number } = {},
 ): { text: string; exact: string; compacted: boolean } {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return { text: UNDEFINED_DISPLAY, exact: UNDEFINED_DISPLAY, compacted: false };
   }
-  const exact = formatNumber(value);
+  const exact = formatNumber(value, options);
   if (Math.abs(value) < COMPACT_ABOVE) {
     return { text: exact, exact, compacted: false };
   }
