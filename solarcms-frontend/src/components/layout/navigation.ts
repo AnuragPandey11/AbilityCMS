@@ -26,7 +26,6 @@ import {
   IconDevices,
   IconGauge,
   IconInverter,
-  IconList,
   IconMapping,
   IconOverview,
   IconPlant,
@@ -62,10 +61,24 @@ export const DASHBOARD_REQUIRES: Record<string, Permission> = {
   reports: "report.generate",
 };
 
+/**
+ * Dashboard codes that render the *same screen*, and which of them the menu
+ * should show.
+ *
+ * `plant_overview` and `plant_list` are one screen with a view toggle. Both
+ * codes still route — a Client granted only one of them must still get in, and
+ * a pasted URL must still work — but two menu entries for one destination is
+ * the exact duplication the merge removed. The survivor is the code the User
+ * actually holds; where they hold both, the first wins.
+ */
+const MERGED_INTO: Record<string, string> = {
+  plant_list: "plant_overview",
+};
+
 export const DASHBOARD_ICONS: Record<string, IconComponent> = {
   portfolio: IconPortfolio,
   plant_overview: IconOverview,
-  plant_list: IconList,
+  plant_list: IconOverview,
   single_plant: IconPlant,
   sld: IconSld,
   inverter_monitoring: IconInverter,
@@ -113,10 +126,22 @@ export function groupDashboards(
   has: (permission: Permission) => boolean = () => true,
 ): NavGroup[] {
   // A dashboard the screen will refuse is not offered. See DASHBOARD_REQUIRES.
-  const usable = granted.filter((code) => {
+  const permitted = granted.filter((code) => {
     const required = DASHBOARD_REQUIRES[code];
     return required === undefined || has(required);
   });
+
+  // Codes that share a screen collapse to one entry. Where the User holds only
+  // the merged-away code, it stands in for the pair rather than disappearing.
+  const seen = new Set<string>();
+  const usable: string[] = [];
+  for (const code of permitted) {
+    const canonical = MERGED_INTO[code] ?? code;
+    const target = permitted.includes(canonical) ? canonical : code;
+    if (seen.has(target)) continue;
+    seen.add(target);
+    usable.push(target);
+  }
 
   const claimed = new Set(NAV_GROUPS.flatMap((group) => group.codes));
   const groups = NAV_GROUPS.map((group) => ({

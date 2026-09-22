@@ -215,6 +215,46 @@ export function formatHeadline(
 }
 
 /**
+ * A ratio that is outside anything the physical quantity can be.
+ *
+ * ── Why this exists ────────────────────────────────────────────────────────
+ * `/plants/{id}/kpis?period=month` returned a Performance Ratio of **3.89** —
+ * 389%. A PR is energy out over energy available, so it cannot meaningfully
+ * exceed 1; 3.89 means the numerator and the denominator were measured over
+ * different spans. On this Plant that is exactly what happened: a month of
+ * Inverter energy divided by irradiance the weather station only reported for
+ * 15% of it.
+ *
+ * The figure is **not corrected and not hidden**. Correcting it would invent
+ * data, and hiding it would conceal the gap that produced it — the same stance
+ * the platform already takes on out-of-range readings, which are stored and
+ * flagged rather than discarded (Guardrail 4). It is flagged, so nobody reads
+ * 389% as a result.
+ *
+ * ⚠ The ceiling is deliberately loose. A PR slightly above 1 is physically real
+ * in cold, bright conditions — modules outperform their 25 °C nameplate — so a
+ * tight bound would flag good data. 1.2 is well past anything weather explains
+ * and well below the order-of-magnitude errors a coverage mismatch produces.
+ */
+export const RATIO_PLAUSIBLE_MAX = 1.2;
+
+export function ratioIsImplausible(value: number | null | undefined): boolean {
+  if (value === null || value === undefined || !Number.isFinite(value)) return false;
+  return value < 0 || value > RATIO_PLAUSIBLE_MAX;
+}
+
+/** Why a ratio is being flagged, in words an operator can act on. */
+export function implausibleRatioReason(value: number, label = "This figure"): string {
+  return (
+    `${label} is ${formatRatioAsPercent(value)}, which is outside the range the quantity ` +
+    `can physically take. It almost always means the numerator and the denominator were ` +
+    `measured over different spans — a period of generation divided by irradiance that was ` +
+    `only recorded for part of it. Check the coverage beside it. The figure is shown ` +
+    `unaltered: correcting it would invent data, and hiding it would conceal the gap.`
+  );
+}
+
+/**
  * A one-line note naming the provisional formula behind a figure.
  *
  * Every KPI is provisional until the client supplies theirs and figures will be

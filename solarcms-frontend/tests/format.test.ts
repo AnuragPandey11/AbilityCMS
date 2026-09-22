@@ -16,6 +16,8 @@ import {
   variantNote,
   digitsForUnit,
   formatCompact,
+  ratioIsImplausible,
+  implausibleRatioReason,
 } from "@/format/value";
 import { formatAge, formatDate, formatDateTime, formatTime,
   formatBucket,
@@ -280,5 +282,44 @@ describe("formatCompact", () => {
   it("returns a dash rather than NaN for nothing", () => {
     expect(formatCompact(null)).toBe("—");
     expect(formatCompact(Number.NaN)).toBe("—");
+  });
+});
+
+describe("implausible ratios", () => {
+  it("flags a ratio outside what the quantity can physically be", () => {
+    // The real case: `/kpis?period=month` returned a Performance Ratio of 3.89
+    // — a month of Inverter energy over irradiance the weather station only
+    // reported for 15% of it. The gauge clamped its arc to 100% and printed
+    // "389.2%" beside it, so the ring said "perfect" and the number said
+    // "impossible". The ring is what gets read.
+    expect(ratioIsImplausible(3.89)).toBe(true);
+    expect(ratioIsImplausible(-0.2)).toBe(true);
+  });
+
+  it("leaves a legitimately high ratio alone", () => {
+    // A PR slightly above 1 is physically real in cold, bright conditions —
+    // modules outperform their 25 °C nameplate. A tight bound would flag good
+    // data as broken, which is its own kind of lie.
+    expect(ratioIsImplausible(1.0)).toBe(false);
+    expect(ratioIsImplausible(1.05)).toBe(false);
+    expect(ratioIsImplausible(1.2)).toBe(false);
+    expect(ratioIsImplausible(0)).toBe(false);
+  });
+
+  it("never flags an absent figure", () => {
+    // Undefined is not implausible — it is the normal night-time state of PR.
+    expect(ratioIsImplausible(null)).toBe(false);
+    expect(ratioIsImplausible(undefined)).toBe(false);
+    expect(ratioIsImplausible(Number.NaN)).toBe(false);
+  });
+
+  it("explains the cause rather than just naming the number", () => {
+    // The exact figure the API returned for this Plant over a month.
+    const reason = implausibleRatioReason(3.8918546365914786, "Performance ratio");
+    expect(reason).toContain("Performance ratio");
+    expect(reason).toContain("389.2%");
+    expect(reason).toContain("coverage");
+    // It must say the figure is untouched — correcting it would invent data.
+    expect(reason).toMatch(/unaltered|shown/);
   });
 });

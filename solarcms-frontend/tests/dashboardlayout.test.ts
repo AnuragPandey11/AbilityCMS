@@ -147,13 +147,39 @@ describe("navigation never offers a dashboard that refuses", () => {
     // DASHBOARD_REQUIRES. Hiding a screen because one button is unavailable
     // takes away the reading a Guest is entitled to.
     const guest = groupDashboards(ALL, (p) => p === "dashboard.view").flatMap((g) => g.codes);
-    for (const code of ALL.filter((c) => c !== "reports")) {
+    for (const code of ALL.filter((c) => c !== "reports" && c !== "plant_list")) {
       expect(guest, `${code} was hidden from a viewer`).toContain(code);
     }
   });
 
-  it("shows everything granted when no permission check is supplied", () => {
-    // The default keeps the previous behaviour for callers that only group.
-    expect(groupDashboards(ALL).flatMap((g) => g.codes)).toHaveLength(ALL.length);
+  it("shows every granted dashboard except the one merged away", () => {
+    // `plant_list` renders the same screen as `plant_overview`, so the menu
+    // carries one entry for the pair.
+    const codes = groupDashboards(ALL).flatMap((g) => g.codes);
+    expect(codes).toHaveLength(ALL.length - 1);
+    expect(codes).toContain("plant_overview");
+    expect(codes).not.toContain("plant_list");
+  });
+});
+
+describe("dashboards that share one screen", () => {
+  it("shows one entry when a User holds both codes", () => {
+    // Two menu entries for one destination is the duplication the merge
+    // removed — and the question it provoked ("which of these is the real
+    // one?") is the one a menu should never raise.
+    const codes = groupDashboards(["plant_overview", "plant_list"]).flatMap((g) => g.codes);
+    expect(codes).toEqual(["plant_overview"]);
+  });
+
+  it("still shows the merged-away code when it is the only one granted", () => {
+    // A Client granted only `plant_list` must still get in. The code stands in
+    // for the pair rather than vanishing from the menu.
+    const codes = groupDashboards(["plant_list"]).flatMap((g) => g.codes);
+    expect(codes).toEqual(["plant_list"]);
+  });
+
+  it("leaves a User granted only the survivor untouched", () => {
+    const codes = groupDashboards(["plant_overview"]).flatMap((g) => g.codes);
+    expect(codes).toEqual(["plant_overview"]);
   });
 });

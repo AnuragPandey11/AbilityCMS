@@ -33,6 +33,15 @@ import { formatCapacity, formatNumber } from "@/format/value";
 import { useSelection } from "@/state/selection";
 import { useNavigate } from "react-router-dom";
 import {
+  IconAlarm,
+  IconAvailability,
+  IconCapacity,
+  IconEnergy,
+  IconGauge,
+  IconHealth,
+  IconLeaf,
+} from "@/components/icons";
+import {
   fleetTotal,
   instrumentedSplit,
   weightedRatio,
@@ -197,6 +206,7 @@ export function PortfolioDashboard(): JSX.Element {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
         <StatTile
           label="Total DC capacity"
+          icon={IconCapacity}
           numeric={totalDcCapacity}
           unit="kWp"
           footnote={`AC ${formatCapacity(totalAcCapacity, "kW")}`}
@@ -204,34 +214,40 @@ export function PortfolioDashboard(): JSX.Element {
         />
         <StatTile
           label={`Energy (${period})`}
+          icon={IconEnergy}
           {...(kpisLoading ? { value: "…" } : { numeric: totalEnergy, unit: "kWh" })}
           hint="Summed from each Plant's export counter endpoints, read from hourly aggregates rather than raw Readings."
         />
         <KpiTile
           label="Fleet performance ratio"
+          icon={IconGauge}
           figure={fleetPr}
           kind="ratio"
           hint="Capacity-weighted across active Plants. Plants with an undefined PR are excluded from the weighting, never counted as zero."
         />
         <KpiTile
           label="Fleet availability"
+          icon={IconAvailability}
           figure={fleetAvailability}
           kind="ratio"
           hint="Capacity-weighted. Communication loss and equipment downtime are distinguished at the Device level."
         />
         <KpiTile
           label="Fleet CUF"
+          icon={IconGauge}
           figure={fleetCuf}
           kind="ratio"
           hint="Capacity utilisation factor, capacity-weighted."
         />
         <StatTile
           label="CO₂ avoided"
+          icon={IconLeaf}
           {...(kpisLoading ? { value: "…" } : { numeric: totalCo2, unit: "kg" })}
           hint="Uses each region's grid emission factor. Provisional pending OPEN-16."
         />
         <StatTile
           label="Active alarms"
+          icon={IconAlarm}
           numeric={alarms.length}
           digits={0}
           tone={alarms.length > 0 ? "warn" : "default"}
@@ -251,6 +267,7 @@ export function PortfolioDashboard(): JSX.Element {
         />
         <StatTile
           label="Device health"
+          icon={IconHealth}
           value={
             <span className="text-base">
               <DeviceHealthStrip health={healthQuery.data} />

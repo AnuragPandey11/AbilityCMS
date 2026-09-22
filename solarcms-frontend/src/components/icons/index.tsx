@@ -351,6 +351,38 @@ export const IconPower = (p: IconProps) => (
   </Svg>
 );
 
+/**
+ * Nameplate capacity — a PV module with its rating plate.
+ *
+ * Deliberately *not* `IconPlant` (which is a whole installation, used for a
+ * count of Plants) and not a location pin, which was the placeholder here and
+ * says "where" about a figure that means "how big". Capacity is the size of the
+ * array, so the icon is the array.
+ */
+export const IconCapacity = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.4 4.6h17.2l-1.8 10.2H5.2Z" />
+    <path d="M4.2 8.2h15.6M3.9 11.6h16.2" />
+    <path d="M9.4 4.6 8.4 14.8M14.6 4.6l1 10.2" />
+    <path d="M12 14.8v4.6M8.6 19.4h6.8" />
+  </Svg>
+);
+
+/**
+ * CO₂ avoided — a leaf.
+ *
+ * The one place a natural metaphor is right: the figure is an environmental
+ * claim, not an electrical one, and every other icon in this set is equipment
+ * or instrumentation. A cloud would read as weather, which this platform
+ * measures for real elsewhere.
+ */
+export const IconLeaf = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4.6 19.4c-1.8-5.2.4-10.6 5-13 2.6-1.4 6-1.6 9.4-1.2.5 3.6.2 7.2-1.4 10-2.3 4-6.6 5.8-11 4.6Z" />
+    <path d="M4.6 19.4c1.6-4.6 4.6-8 8.6-10.2" />
+  </Svg>
+);
+
 export const IconInfo = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="8.8" />

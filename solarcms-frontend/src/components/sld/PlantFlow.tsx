@@ -288,10 +288,25 @@ export function PlantFlow({
   devices,
   dcCapacityKwp,
   collectorEdges,
+  onSelectStage,
 }: {
   devices: DeviceListItem[];
   /** Shown on the leftmost stage when the Plant records one. */
   dcCapacityKwp?: number | null;
+  /**
+   * Hand the stage to the caller instead of expanding in place.
+   *
+   * ⚠ The in-place expander is the problem this exists to solve. It opened a
+   * panel *between* the schematic and whatever sat under it, so the page grew
+   * by ~70px and everything below jumped down — on a screen whose whole job is
+   * a diagram you are pointing at. With a callback the caller opens a drawer
+   * instead, the page never moves, and clicking a stage here behaves exactly
+   * like clicking one on the Plant dashboard.
+   *
+   * Omitted, the component keeps its own expander, so nothing that already
+   * embeds it changes behaviour.
+   */
+  onSelectStage?: (stage: { typeCode: string; deviceIds: number[] }) => void;
   /**
    * What each enclosure feeds into. Without it a Plant wired only at the room
    * level reads as unwired, because its occupants carry no parent of their own
@@ -305,7 +320,7 @@ export function PlantFlow({
 
   const edges = collectorEdges ?? EMPTY_EDGES;
   const stages = useMemo(() => buildStages(devices, edges), [devices, edges]);
-  const selected = stages.find((s) => s.key === openStage) ?? null;
+  const selected = onSelectStage ? null : (stages.find((s) => s.key === openStage) ?? null);
 
   if (stages.length === 0) {
     return (
@@ -332,9 +347,16 @@ export function PlantFlow({
             <div key={stage.key} className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() =>
-                  setOpenStage((current) => (current === stage.key ? null : stage.key))
-                }
+                onClick={() => {
+                  if (onSelectStage) {
+                    onSelectStage({
+                      typeCode: stage.typeCode,
+                      deviceIds: stage.devices.map((device) => device.id),
+                    });
+                    return;
+                  }
+                  setOpenStage((current) => (current === stage.key ? null : stage.key));
+                }}
                 className={`flex w-[136px] flex-col items-center gap-1.5 rounded-xl border p-3 text-center shadow-sm transition ${
                   openStage === stage.key
                     ? "border-accent bg-accent/10 shadow-soft ring-1 ring-accent/25"

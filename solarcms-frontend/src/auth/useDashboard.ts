@@ -24,8 +24,9 @@ export type DashboardCode = (typeof DASHBOARD_CODES)[number];
 
 export const DASHBOARD_LABELS: Record<string, string> = {
   portfolio: "Portfolio",
-  plant_overview: "Plant Overview",
-  plant_list: "Plant List",
+  // One screen, two codes — see `navigation.ts`.
+  plant_overview: "Plants",
+  plant_list: "Plants",
   single_plant: "Single Plant",
   sld: "Single Line Diagram",
   inverter_monitoring: "Inverter Monitoring",

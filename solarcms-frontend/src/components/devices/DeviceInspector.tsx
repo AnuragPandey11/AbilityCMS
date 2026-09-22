@@ -592,8 +592,6 @@ export function DeviceInspector({
               shown as states above because plotting a trip contact as a number hides the
               only thing that matters about it.
             </p>
-          ) : readingsQuery.isLoading ? (
-            <Skeleton className="h-40 w-full" />
           ) : readingsQuery.isError ? (
             <p className="text-[11px] text-bad">
               That range could not be read. Narrow it, or try another signal.
@@ -611,6 +609,7 @@ export function DeviceInspector({
               provenance={device.code}
               timezone={timezone}
               height={168}
+              isLoading={readingsQuery.isLoading}
               flaggedCount={
                 (readingsQuery.data?.items ?? []).filter(
                   (point) => point.quality !== null && point.quality !== 0,

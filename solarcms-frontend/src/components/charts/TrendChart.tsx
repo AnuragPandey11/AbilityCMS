@@ -68,6 +68,14 @@ export interface TrendChartProps {
    * opposite things.
    */
   flaggedCount?: number;
+  /**
+   * The series is still being fetched.
+   *
+   * Kept separate from "no points", because the two look identical and mean
+   * opposite things: one is a Plant that reported nothing, the other is a
+   * question nobody has answered yet.
+   */
+  isLoading?: boolean;
 }
 
 /**
@@ -134,6 +142,7 @@ export function TrendChart({
   colorToken = "series",
   markPeak = true,
   flaggedCount = 0,
+  isLoading = false,
 }: TrendChartProps): JSX.Element {
   const [tableView, setTableView] = useState(false);
   const { version: themeVersion } = useTheme();
@@ -403,7 +412,33 @@ export function TrendChart({
         </button>
       </div>
 
-      {plottable === 0 && !tableView ? (
+      {/*
+        ⚠ Each branch carries its own `key`, and that is load-bearing.
+
+        All three render a `div` at the same position, so without distinct keys
+        React reuses one DOM node and only swaps its props and children. ECharts
+        then appends a canvas into the very node React is still reconciling, and
+        the next swap throws `NotFoundError: Failed to execute 'removeChild'` —
+        which unmounts the whole dashboard, not just the chart. Switching to the
+        table view and back did exactly that. Distinct keys make React mount and
+        unmount separate nodes, so the callback ref disposes the old instance and
+        initialises a new one, and React never fights the library for a child.
+      */}
+      {isLoading ? (
+        /*
+          Loading is not emptiness. "No readings in this window" is a statement
+          about the Plant, and printing it while the request is still in flight
+          asserts something nobody has checked — on a slow link it was the first
+          thing the operator read, every time.
+        */
+        <div
+          key="loading"
+          style={{ height }}
+          className="flex items-center justify-center rounded-control border border-line"
+        >
+          <span className="text-[11px] text-ink-faint">Loading readings…</span>
+        </div>
+      ) : plottable === 0 && !tableView ? (
         /*
           An empty plot with axes and no marks reads as a broken chart. The
           three reasons a series is empty are different problems — nothing was
@@ -412,6 +447,7 @@ export function TrendChart({
           guessed from a blank rectangle.
         */
         <div
+          key="empty"
           style={{ height }}
           className="flex items-center justify-center rounded-control border border-dashed border-line px-4 text-center"
         >
@@ -422,7 +458,11 @@ export function TrendChart({
           </p>
         </div>
       ) : tableView ? (
-        <div style={{ height }} className="overflow-auto rounded-control border border-line">
+        <div
+          key="table"
+          style={{ height }}
+          className="overflow-auto rounded-control border border-line"
+        >
           <table className="w-full text-[11px]">
             <thead className="sticky top-0 bg-surface-sunken text-ink-muted">
               <tr>
@@ -456,7 +496,7 @@ export function TrendChart({
           </table>
         </div>
       ) : (
-        <div ref={ref} style={{ height }} />
+        <div key="chart" ref={ref} style={{ height }} />
       )}
 
       {flaggedCount > 0 ? (

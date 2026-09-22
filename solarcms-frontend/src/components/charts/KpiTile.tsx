@@ -11,16 +11,57 @@
  * recomputation from looking like a defect.
  */
 
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { KpiFigure } from "@/api/schemas";
+import type { IconProps } from "@/components/icons";
 import {
   UNDEFINED_DISPLAY,
   formatHeadline,
   formatRatioAsPercent,
+  implausibleRatioReason,
+  ratioIsImplausible,
   variantNote,
 } from "@/format/value";
 import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "./FittedFigure";
+
+
+/**
+ * The tile's icon chip.
+ *
+ * ⚠ The icon has to be a *logical* match for the quantity, not decoration. A
+ * location pin beside a capacity says "where" about a figure that means "how
+ * big"; a bolt beside an energy total says "rate" about a figure that is an
+ * accumulation. Both were in place and both quietly taught the wrong thing.
+ * The mapping lives with each dashboard, because only the caller knows what the
+ * number means.
+ *
+ * One hue — the brand accent — because status owns green, amber and red on this
+ * platform and a tinted chip beside a figure would read as a judgement about it.
+ * A `tone` is honoured only where the caller has *already* made a judgement.
+ */
+function TileIcon({
+  icon: Icon,
+  tone,
+}: {
+  icon?: ComponentType<IconProps>;
+  tone?: "default" | "ok" | "warn" | "bad";
+}): JSX.Element | null {
+  if (!Icon) return null;
+  const chrome =
+    tone === "bad"
+      ? "bg-bad/12 text-bad"
+      : tone === "warn"
+        ? "bg-warn/12 text-warn"
+        : tone === "ok"
+          ? "bg-ok/12 text-ok"
+          : "bg-accent/10 text-accent";
+  return (
+    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${chrome}`}>
+      <Icon size={12} />
+    </span>
+  );
+}
 
 export function KpiTile({
   label,
@@ -28,9 +69,12 @@ export function KpiTile({
   kind,
   unit,
   hint,
+  icon,
 }: {
   label: string;
   figure: KpiFigure | null | undefined;
+  /** A logical match for the quantity — see `TileIcon`. */
+  icon?: ComponentType<IconProps>;
   /** `ratio` is 0..1 from the API and rendered as a percentage. */
   kind: "ratio" | "quantity";
   unit?: string;
@@ -62,22 +106,40 @@ export function KpiTile({
   const undefinedReason =
     figure?.undefined_reason ?? "This figure is not defined for the selected period.";
 
+  // A ratio outside its physical range is a fault in the inputs, not a result.
+  // Flagged rather than corrected or hidden — see `ratioIsImplausible`.
+  const implausible = kind === "ratio" && ratioIsImplausible(value);
+
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
-      <div className="flex items-center text-xs text-ink-muted">
-        {label}
+      <div className="flex items-center gap-1.5 text-xs text-ink-muted">
+        <TileIcon icon={icon} />
+        <span className="min-w-0 truncate">{label}</span>
         {hint ? <InfoHint text={hint} /> : null}
       </div>
       <div className="mt-1">
         <FittedFigure
           value={rendered}
           unit={unitLabel}
-          className={`font-mono text-2xl ${isUndefined ? "text-ink-faint" : "text-ink"}`}
-          title={isUndefined ? undefinedReason : exactTitle}
+          className={`font-mono text-2xl ${
+            isUndefined ? "text-ink-faint" : implausible ? "text-warn" : "text-ink"
+          }`}
+          title={
+            isUndefined
+              ? undefinedReason
+              : implausible && value !== null
+                ? implausibleRatioReason(value, label)
+                : exactTitle
+          }
         />
       </div>
       {isUndefined ? (
         <p className="mt-1 text-[11px] leading-snug text-ink-faint">{undefinedReason}</p>
+      ) : implausible ? (
+        <p className="mt-1 text-[11px] leading-snug text-warn">
+          Outside the range this quantity can take. The numerator and denominator cover
+          different spans — check the coverage for this period.
+        </p>
       ) : figure?.variant ? (
         <p
           className="mt-1 text-[11px] text-ink-faint"
@@ -109,6 +171,7 @@ export function StatTile({
   tone = "default",
   footnote,
   digits,
+  icon,
 }: {
   label: string;
   value?: ReactNode;
@@ -119,6 +182,8 @@ export function StatTile({
   hint?: string;
   tone?: "default" | "ok" | "warn" | "bad";
   footnote?: ReactNode;
+  /** A logical match for the quantity — see `TileIcon`. */
+  icon?: ComponentType<IconProps>;
   /**
    * Decimal places. Pass `0` for a tally.
    *
@@ -140,8 +205,9 @@ export function StatTile({
 
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
-      <div className="flex items-center text-xs text-ink-muted">
-        {label}
+      <div className="flex items-center gap-1.5 text-xs text-ink-muted">
+        <TileIcon icon={icon} tone={tone} />
+        <span className="min-w-0 truncate">{label}</span>
         {hint ? <InfoHint text={hint} /> : null}
       </div>
       <div className="mt-1">

@@ -27,6 +27,9 @@ import { Panel, Badge } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonPanel } from "@/components/state";
 import { CommStatusBadge, PlantPicker } from "@/components/domain";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
+import { Drawer } from "@/components/ui";
+import { IconChevronRight } from "@/components/icons";
+import { DeviceArt } from "@/components/devices/DeviceArt";
 import { usePlantScope } from "@/state/usePlantScope";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
@@ -45,6 +48,16 @@ export function SldDashboard(): JSX.Element {
   const tagsById = useTagsById();
   const { devices: liveDevices } = useLiveSocket();
   const [selected, setSelected] = useState<number | null>(null);
+  /**
+   * The stage whose Devices are being listed.
+   *
+   * Held here rather than inside `PlantFlow` so the list opens in a drawer
+   * beside the page instead of expanding between the schematic and the power
+   * path, which pushed everything below it down by the height of the list.
+   */
+  const [openStage, setOpenStage] = useState<{ typeCode: string; deviceIds: number[] } | null>(
+    null,
+  );
 
   if (hasNoPlants) {
     return (
@@ -169,7 +182,11 @@ export function SldDashboard(): JSX.Element {
         title="Plant schematic"
         subtitle="Derived from the wiring, not from a fixed sequence — a Plant with a meter mid-chain or two transformers draws itself."
       >
-        <PlantFlow devices={devices} collectorEdges={collectorEdges} />
+        <PlantFlow
+          devices={devices}
+          collectorEdges={collectorEdges}
+          onSelectStage={(stage) => setOpenStage(stage)}
+        />
       </Panel>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_20rem]">
@@ -193,42 +210,35 @@ export function SldDashboard(): JSX.Element {
         </Panel>
 
         <div className="space-y-4">
-          {selectedDevice ? (
-            /*
-              The same inspector the Plant screen opens, not a second, smaller
-              summary of the same Device. Clicking a box in the diagram and
-              clicking a card on the dashboard asked the identical question and
-              used to get two different answers — this one listed the wiring and
-              a few live values, the other listed every Tag. One component means
-              a Device cannot look different depending on which screen found it.
-            */
-            <Panel
-              title={`${selectedDevice.code} — ${selectedDevice.name}`}
-              actions={
-                <button
-                  type="button"
-                  onClick={() => setSelected(null)}
-                  className="rounded-control border border-line px-2 py-1 text-[11px] text-ink-muted transition hover:text-ink"
-                >
-                  Clear
-                </button>
-              }
-            >
-              <DeviceInspector
-                device={selectedDevice}
-                values={liveDevices[selectedDevice.id]?.values}
-                timezone={timezone}
-                deviceLookup={devicesById}
-              />
-            </Panel>
-          ) : (
-            <Panel title="Device detail">
-              <p className="text-xs text-ink-faint">
-                Select a box in the diagram to see everything recorded about that
-                Device — its wiring, its collector, its topic and its health.
-              </p>
-            </Panel>
-          )}
+          {/*
+            A hint, not a panel that grows.
+
+            The full inspector used to render *here*, in a 20rem column beside a
+            460px diagram. A Device with eighteen Tags and a chart made that
+            column two and a half times the height of the thing it sat next to,
+            so selecting a Device stretched the page, shifted everything below
+            it and left a long narrow ribbon to scroll — on the one screen whose
+            job is a diagram you are pointing at. The detail now opens in the
+            same drawer every other screen uses, so the page never moves and the
+            Device looks identical wherever it was clicked.
+          */}
+          <Panel title="Device detail">
+            <p className="text-xs leading-snug text-ink-faint">
+              Tap any box in either diagram. Everything recorded about that Device — its
+              wiring, its collector, its topic, its health and every Tag it is bound to —
+              opens beside the page without moving it.
+            </p>
+            {selectedDevice ? (
+              <button
+                type="button"
+                onClick={() => setSelected(selectedDevice.id)}
+                className="mt-2 flex w-full items-center justify-between gap-2 rounded-control border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-left text-[11px] font-medium text-accent transition hover:bg-accent/15"
+              >
+                Reopen {selectedDevice.code}
+                <IconChevronRight size={13} />
+              </button>
+            ) : null}
+          </Panel>
 
           {sld.collectors.length > 0 ? (
             <Panel
@@ -294,6 +304,70 @@ export function SldDashboard(): JSX.Element {
           </Panel>
         </div>
       </div>
+
+      {/*
+        ── One flow for "what is this thing" ──────────────────────────────────
+        A Device opens the same inspector, in the same drawer, whether it was
+        found on the schematic, in the power path, in the not-in-power-path
+        list, or on the Plant dashboard. The page behind it does not move, and
+        the panel is a fixed column at every width rather than whatever a grid
+        cell happened to leave over — which is what made the old right-hand
+        version a long ribbon on a wide screen and a full-width wall on a narrow
+        one.
+      */}
+      <Drawer
+        open={selectedDevice !== null}
+        onClose={() => setSelected(null)}
+        title={selectedDevice ? `${selectedDevice.code} — ${selectedDevice.name}` : ""}
+      >
+        {selectedDevice ? (
+          <DeviceInspector
+            device={selectedDevice}
+            values={liveDevices[selectedDevice.id]?.values}
+            timezone={timezone}
+            deviceLookup={devicesById}
+          />
+        ) : null}
+      </Drawer>
+
+      {/* A stage lists its Devices, each of which opens the inspector above. */}
+      <Drawer
+        open={openStage !== null && selectedDevice === null}
+        onClose={() => setOpenStage(null)}
+        title={openStage ? openStage.typeCode.replace(/_/g, " ") : ""}
+        subtitle="Every Device folded into this stage of the schematic."
+      >
+        {openStage ? (
+          <ul className="divide-y divide-line-soft">
+            {openStage.deviceIds.map((deviceId) => {
+              const device = devicesById.get(deviceId);
+              if (!device) return null;
+              return (
+                <li key={deviceId}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(deviceId)}
+                    className="flex w-full items-center gap-2 py-2 text-left transition hover:text-accent"
+                  >
+                    <DeviceArt typeCode={device.type_code} size={30} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium text-ink">
+                        {device.code}
+                      </span>
+                      <span className="block truncate text-[10px] text-ink-faint">
+                        {device.type_code}
+                        {device.collector_code ? ` · in ${device.collector_code}` : ""}
+                      </span>
+                    </span>
+                    <CommStatusBadge status={device.comm_status} />
+                    <IconChevronRight size={13} className="shrink-0 text-ink-faint" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+      </Drawer>
     </div>
   );
 }

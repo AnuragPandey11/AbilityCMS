@@ -38,6 +38,7 @@ import {
   formatRatioAsPercent,
 } from "@/format/value";
 import { couldAnswer } from "./aggregate";
+import { TopBottomPerformers } from "./TopBottom";
 
 /**
  * What the Plants can be compared on.
@@ -290,23 +291,33 @@ export function FleetComparison({
           )}
         </Panel>
 
-        <Panel
-          fill
-          className="xl:col-span-5"
-          title={`Energy share — ${period}`}
-          subtitle="Which Plants produced the fleet's generation. Always energy: a share of a ratio has no meaning."
-        >
-          {isLoading ? (
-            <p className="py-10 text-center text-xs text-ink-faint">Loading…</p>
-          ) : (
-            <SharePie
-              slices={shareSlices}
-              unit="kWh"
-              height={196}
-              onSelect={onOpenPlant}
-            />
-          )}
-        </Panel>
+        <div className="flex min-w-0 flex-col gap-2.5 xl:col-span-5">
+          <Panel
+            fill
+            title={`Energy share — ${period}`}
+            subtitle="Which Plants produced the fleet's generation. Always energy: a share of a ratio has no meaning."
+          >
+            {isLoading ? (
+              <p className="py-10 text-center text-xs text-ink-faint">Loading…</p>
+            ) : (
+              <SharePie slices={shareSlices} unit="kWh" height={168} onSelect={onOpenPlant} />
+            )}
+          </Panel>
+
+          {/* The two ends of the ranking — the rows anybody acts on. The bar
+              chart answers "how do they compare"; this answers "who do I
+              call", and on a forty-Plant estate those are different jobs. */}
+          <Panel
+            title="Best and worst"
+            subtitle="By Performance Ratio, over the selected period. A Plant nobody measured is left out, never placed last."
+          >
+            {isLoading ? (
+              <p className="py-4 text-center text-xs text-ink-faint">Loading…</p>
+            ) : (
+              <TopBottomPerformers rows={rows} onOpenPlant={onOpenPlant} />
+            )}
+          </Panel>
+        </div>
       </div>
 
       <Panel

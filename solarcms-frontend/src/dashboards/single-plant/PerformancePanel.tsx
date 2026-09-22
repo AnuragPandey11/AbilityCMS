@@ -24,7 +24,14 @@
 import type { KpiFigure, PlantKpis } from "@/api/schemas";
 import { Gauge } from "@/components/charts/Gauge";
 import { CoverageBar } from "@/components/dashboard/CoverageBadge";
-import { UNDEFINED_DISPLAY, formatNumber, formatRatioAsPercent, variantNote } from "@/format/value";
+import {
+  UNDEFINED_DISPLAY,
+  formatNumber,
+  formatRatioAsPercent,
+  implausibleRatioReason,
+  ratioIsImplausible,
+  variantNote,
+} from "@/format/value";
 
 function FigureRow({
   label,
@@ -41,6 +48,9 @@ function FigureRow({
 }): JSX.Element {
   const value = figure?.value ?? null;
   const isUndefined = value === null;
+  // A ratio outside its physical range is a fault in the inputs, not a result.
+  // Shown unaltered and flagged — see `ratioIsImplausible`.
+  const implausible = kind === "ratio" && ratioIsImplausible(value);
   const text = isUndefined
     ? UNDEFINED_DISPLAY
     : kind === "ratio"
@@ -51,15 +61,22 @@ function FigureRow({
     <div className="flex items-baseline justify-between gap-3 border-b border-line-soft py-1.5 last:border-b-0">
       <div className="min-w-0">
         <div className="text-xs text-ink">{label}</div>
-        <div className="truncate text-[10px] leading-snug text-ink-faint">
+        <div
+          className={`truncate text-[10px] leading-snug ${implausible ? "text-warn" : "text-ink-faint"}`}
+        >
           {isUndefined
             ? (figure?.undefined_reason ??
               "This figure is not defined for the selected period.")
-            : (note ?? (figure?.variant ? variantNote(figure.variant) : ""))}
+            : implausible
+              ? "Outside the range this quantity can take — check coverage."
+              : (note ?? (figure?.variant ? variantNote(figure.variant) : ""))}
         </div>
       </div>
       <div
-        className={`shrink-0 font-mono text-sm tabular-nums ${isUndefined ? "text-ink-faint" : "text-ink"}`}
+        className={`shrink-0 font-mono text-sm tabular-nums ${
+          isUndefined ? "text-ink-faint" : implausible ? "text-warn" : "text-ink"
+        }`}
+        title={implausible && value !== null ? implausibleRatioReason(value, label) : undefined}
       >
         {text}
         {!isUndefined && unit ? (

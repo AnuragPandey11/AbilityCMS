@@ -17,8 +17,7 @@ import { useDashboards } from "@/auth/useDashboard";
 import { EmptyState, LoadingState } from "@/components/state";
 
 import { PortfolioDashboard } from "@/dashboards/PortfolioDashboard";
-import { PlantListDashboard } from "@/dashboards/PlantListDashboard";
-import { PlantOverviewDashboard } from "@/dashboards/PlantOverviewDashboard";
+import { PlantsDashboard } from "@/dashboards/PlantsDashboard";
 import { SinglePlantDashboard } from "@/dashboards/SinglePlantDashboard";
 import { SldDashboard } from "@/dashboards/SldDashboard";
 import { InverterMonitoringDashboard } from "@/dashboards/InverterMonitoringDashboard";
@@ -41,8 +40,13 @@ import { ForbiddenState } from "@/components/state";
 /** One component per dashboard code. Codes come from the database. */
 const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
   portfolio: PortfolioDashboard,
-  plant_overview: PlantOverviewDashboard,
-  plant_list: PlantListDashboard,
+  // ⚠ Both codes render the same screen. `plant_overview` (cards ordered by
+  // urgency) and `plant_list` (a sortable table) drew the same Plants from the
+  // same hook and differed only in shape, so they are now one screen with a
+  // view toggle. Both entries stay so a granted code and a pasted URL still
+  // resolve (A-3); the navigation collapses them into one (see `navigation.ts`).
+  plant_overview: PlantsDashboard,
+  plant_list: PlantsDashboard,
   single_plant: SinglePlantDashboard,
   sld: SldDashboard,
   inverter_monitoring: InverterMonitoringDashboard,

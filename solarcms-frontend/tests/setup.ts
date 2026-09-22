@@ -58,3 +58,27 @@ function installStorage(name: "localStorage" | "sessionStorage"): void {
 
 installStorage("localStorage");
 installStorage("sessionStorage");
+
+/**
+ * `ResizeObserver`, which jsdom does not implement.
+ *
+ * Every chart observes its container, because one inside a flex or grid panel
+ * is routinely 0×0 on the frame it first attaches and ECharts sizes to the node
+ * it was handed. Without a stub, rendering any chart in a test throws
+ * `ResizeObserver is not defined` from inside an event listener — which
+ * surfaces as an unrelated failure rather than as a missing global.
+ *
+ * Deliberately inert: it records nothing and never fires. These tests assert
+ * that a chart *exists* after a mount, hide and show, not that it resized —
+ * jsdom has no layout, so a callback here could only ever report zero.
+ */
+class InertResizeObserver implements ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+if (!("ResizeObserver" in globalThis)) {
+  (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+    InertResizeObserver as unknown as typeof ResizeObserver;
+}

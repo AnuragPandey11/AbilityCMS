@@ -26,6 +26,39 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { IconClose } from "@/components/icons";
 
+/**
+ * Page-scroll locking, counted rather than remembered per drawer.
+ *
+ * ⚠ The obvious implementation — each drawer stores `document.body.style
+ * .overflow` on open and writes it back on close — is wrong the moment two
+ * drawers hand over to each other, which is exactly what a stage list opening
+ * a Device does. The second drawer mounts while the first still has the body
+ * locked, captures `"hidden"` as the value to restore, and puts it back when
+ * it closes. The page is then locked with no drawer on screen and **cannot be
+ * scrolled again for the rest of the session** — silent, and impossible to
+ * attribute to the drawer that caused it.
+ *
+ * A count fixes it: the first drawer to open locks, the last to close
+ * restores, and a handover never touches the lock at all.
+ */
+let openDrawers = 0;
+let overflowBeforeLock = "";
+
+function lockPageScroll(): () => void {
+  if (openDrawers === 0) {
+    overflowBeforeLock = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  openDrawers += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    openDrawers = Math.max(0, openDrawers - 1);
+    if (openDrawers === 0) document.body.style.overflow = overflowBeforeLock;
+  };
+}
+
 export function Drawer({
   open,
   onClose,
@@ -59,12 +92,11 @@ export function Drawer({
 
     // The page behind must not scroll under the drawer — on a trackpad the
     // scroll otherwise passes through and the reader loses their place.
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const releaseScroll = lockPageScroll();
 
     return () => {
       document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previousOverflow;
+      releaseScroll();
       returnFocusTo.current?.focus?.();
     };
   }, [open, onClose]);

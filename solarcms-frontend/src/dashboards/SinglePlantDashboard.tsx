@@ -105,7 +105,15 @@ import {
   IconPower,
   IconSignal,
 } from "@/components/icons";
-import { formatCapacity, formatNumber, formatValue, UNDEFINED_DISPLAY, formatRatioAsPercent } from "@/format/value";
+import {
+  formatCapacity,
+  formatNumber,
+  formatValue,
+  implausibleRatioReason,
+  ratioIsImplausible,
+  UNDEFINED_DISPLAY,
+  formatRatioAsPercent,
+} from "@/format/value";
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
 import { useSelection } from "@/state/selection";
 import { usePlantScope } from "@/state/usePlantScope";
@@ -657,6 +665,7 @@ export function SinglePlantDashboard(): JSX.Element {
                 tier={powerTrend.tier}
                 provenance={powerTrend.provenance}
                 flaggedCount={powerTrend.flaggedCount}
+                isLoading={powerTrend.isLoading}
                 timezone={timezone}
                 height={188}
               />
@@ -673,6 +682,7 @@ export function SinglePlantDashboard(): JSX.Element {
               tier={energyTrend.tier}
               provenance={energyTrend.provenance}
               flaggedCount={energyTrend.flaggedCount}
+              isLoading={energyTrend.isLoading}
               timezone={timezone}
               height={188}
               shape="bar"
@@ -819,8 +829,21 @@ export function SinglePlantDashboard(): JSX.Element {
                 kpis?.performance_ratio.value == null
                   ? UNDEFINED_DISPLAY
                   : formatRatioAsPercent(kpis.performance_ratio.value),
-              tone: kpis?.performance_ratio.value == null ? "muted" : "default",
-              title: kpis?.performance_ratio.undefined_reason ?? kpis?.performance_ratio.variant ?? undefined,
+              // Amber where the figure is outside what a ratio can be — the
+              // summary must not be the one place it looks settled.
+              tone:
+                kpis?.performance_ratio.value == null
+                  ? "muted"
+                  : ratioIsImplausible(kpis.performance_ratio.value)
+                    ? "warn"
+                    : "default",
+              title:
+                kpis?.performance_ratio.value != null &&
+                ratioIsImplausible(kpis.performance_ratio.value)
+                  ? implausibleRatioReason(kpis.performance_ratio.value, "Performance ratio")
+                  : (kpis?.performance_ratio.undefined_reason ??
+                    kpis?.performance_ratio.variant ??
+                    undefined),
             },
             {
               label: "Availability",
