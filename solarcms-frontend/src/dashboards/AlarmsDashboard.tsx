@@ -195,8 +195,8 @@ export function AlarmsDashboard(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">Alarms</h1>
-          <p className="text-xs text-ink-muted">
+          <h1 className="page-title">Alarms</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
             One breach is one Alarm. A Collector failure appears once, covering every
             Device it carries.
           </p>

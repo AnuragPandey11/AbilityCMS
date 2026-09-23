@@ -55,7 +55,7 @@ function TileIcon({
         ? "bg-warn/12 text-warn"
         : tone === "ok"
           ? "bg-ok/12 text-ok"
-          : "bg-accent/10 text-accent";
+          : "icon-well";
   return (
     <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${chrome}`}>
       <Icon size={12} />
@@ -121,7 +121,7 @@ export function KpiTile({
         <FittedFigure
           value={rendered}
           unit={unitLabel}
-          className={`font-mono text-2xl ${
+          className={`figure text-2xl ${
             isUndefined ? "text-ink-faint" : implausible ? "text-warn" : "text-ink"
           }`}
           title={
@@ -214,7 +214,7 @@ export function StatTile({
         <FittedFigure
           value={isNumeric ? headline.text : (value ?? UNDEFINED_DISPLAY)}
           unit={isNumeric && !undefinedNumeric ? unit : null}
-          className={`font-mono text-2xl ${
+          className={`figure text-2xl ${
             undefinedNumeric ? "text-ink-faint" : tones[tone]
           }`}
           title={

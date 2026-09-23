@@ -59,7 +59,7 @@ function RankList({
   return (
     <div className="min-w-0">
       <div
-        className={`mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${
+        className={`mb-1 flex items-center gap-1.5 text-[13px] font-semibold ${
           tone === "ok" ? "text-ok" : "text-bad"
         }`}
       >

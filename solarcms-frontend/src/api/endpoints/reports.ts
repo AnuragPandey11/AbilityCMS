@@ -29,6 +29,8 @@ export async function requestRun(
   definitionId: number,
   periodStart: string,
   periodEnd: string,
+  // Required for a Super Admin, who belongs to no Client; ignored for anyone else.
+  clientId: number | null,
 ): Promise<{ run_id: number; state: string; created_at: string }> {
   const body = await request("/reports/runs", {
     method: "POST",
@@ -36,6 +38,7 @@ export async function requestRun(
       definition_id: definitionId,
       period_start: periodStart,
       period_end: periodEnd,
+      ...(clientId !== null ? { client_id: clientId } : {}),
     },
   });
   return parse(ReportRunRequestSchema, body, "POST /reports/runs");

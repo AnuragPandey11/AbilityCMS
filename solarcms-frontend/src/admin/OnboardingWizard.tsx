@@ -489,8 +489,8 @@ export function OnboardingWizard(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">Plant onboarding</h1>
-          <p className="text-xs text-ink-muted">
+          <h1 className="page-title">Plant onboarding</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
             A Client, then a Plant in <span className="font-mono">draft</span>,
             populated, then commissioned and activated.
           </p>

@@ -49,17 +49,18 @@ import {
 
 function navClass({ isActive }: { isActive: boolean }): string {
   // The active row carries a left rail as well as a tint, so it stays
-  // identifiable when the tint is close to a status colour.
+  // identifiable when the tint is close to a status colour. The sidebar is
+  // navy in both themes, so every colour here is a `nav-*` token.
   return `relative flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] font-medium transition ${
     isActive
-      ? "bg-accent/10 text-accent before:absolute before:inset-y-1.5 before:-left-2 before:w-[3px] before:rounded-full before:bg-accent"
-      : "text-ink-muted hover:bg-surface-raised hover:text-ink"
+      ? "bg-nav-accent/[0.14] text-nav-accent before:absolute before:inset-y-1.5 before:-left-2 before:w-[3px] before:rounded-full before:bg-nav-accent"
+      : "text-nav-muted hover:bg-nav-ink/[0.06] hover:text-nav-ink"
   }`;
 }
 
 function GroupHeading({ children }: { children: string }): JSX.Element {
   return (
-    <div className="px-1 pb-1.5 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint first:pt-1">
+    <div className="px-1 pb-1.5 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-nav-faint first:pt-1">
       {children}
     </div>
   );
@@ -97,19 +98,19 @@ export function AppShell(): JSX.Element {
       ) : null}
 
       <aside
-        className={`z-40 flex w-60 shrink-0 flex-col border-r border-line bg-surface-sunken/85 backdrop-blur-xl transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
+        className={`app-nav z-40 flex w-60 shrink-0 flex-col border-r border-nav-line transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
           menuOpen
             ? "fixed inset-y-0 left-0 translate-x-0"
             : "fixed inset-y-0 left-0 -translate-x-full lg:flex"
         }`}
       >
-        <div className="shrink-0 border-b border-line px-4 py-4">
-          <BrandMark />
+        <div className="shrink-0 border-b border-nav-line px-4 py-4">
+          <BrandMark onNavy />
         </div>
 
         <nav className="flex-1 overflow-y-auto p-3">
           {dashboards.length === 0 ? (
-            <p className="px-3 py-2 text-xs leading-snug text-ink-faint">
+            <p className="px-3 py-2 text-xs leading-snug text-nav-faint">
               No dashboards are assigned to this account. Dashboard access is granted
               explicitly by an administrator.
             </p>
@@ -151,12 +152,12 @@ export function AppShell(): JSX.Element {
           ) : null}
         </nav>
 
-        <div className="shrink-0 border-t border-line p-3">
+        <div className="shrink-0 border-t border-nav-line p-3">
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-ink">{me?.role ?? "—"}</div>
+              <div className="truncate text-xs font-medium text-nav-ink">{me?.role ?? "—"}</div>
               <div
-                className="truncate text-[11px] text-ink-faint"
+                className="truncate text-[11px] text-nav-faint"
                 title={
                   me?.client_id === null || me?.client_id === undefined
                     ? "No active Client. A platform administrator is a member of none."
@@ -177,7 +178,7 @@ export function AppShell(): JSX.Element {
               onClick={() => void logout()}
               title="Sign out"
               aria-label="Sign out"
-              className="rounded-control border border-line p-1.5 text-ink-muted transition hover:border-bad/40 hover:text-bad"
+              className="rounded-control border border-nav-line p-1.5 text-nav-muted transition hover:border-bad/60 hover:text-bad"
             >
               <IconLogout size={16} />
             </button>
@@ -186,7 +187,7 @@ export function AppShell(): JSX.Element {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-line bg-surface-raised/90 px-4 py-2.5 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-line bg-surface/85 px-4 py-2.5 backdrop-blur sm:px-6">
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}

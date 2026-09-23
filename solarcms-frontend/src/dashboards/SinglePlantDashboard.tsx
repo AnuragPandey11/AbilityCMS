@@ -39,7 +39,7 @@
  * "Unassigned" pseudo-Block, no empty grouping level.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
 import {
@@ -63,17 +63,17 @@ import type {
   ResolvedSlot,
   SldStage,
 } from "@/api/schemas";
-import { Panel, Badge, SegmentedControl, Drawer } from "@/components/ui";
-import { Carousel, CarouselItem } from "@/components/ui/Carousel";
+import { Panel, SegmentedControl, Drawer } from "@/components/ui";
+import { useScrollPager } from "@/components/ui/Carousel";
 import { TrendChart, SmallMultiples } from "@/components/charts/TrendChart";
 import { ReadingsPanel } from "@/components/charts/ReadingsPanel";
 import { PlantSchematic } from "@/components/sld/PlantSchematic";
-import { DeviceCard } from "@/components/devices/DeviceCard";
+import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
 import { DeviceArt } from "@/components/devices/DeviceArt";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { SummaryCard, type SummaryFigure } from "@/components/dashboard/SummaryCard";
 import { CoverageBadge } from "@/components/dashboard/CoverageBadge";
-import { SlotRow, SlotStat, slotText } from "@/components/dashboard/SlotValue";
+import { SlotRailTile, SlotRow, slotText } from "@/components/dashboard/SlotValue";
 import { PerformancePanel } from "./single-plant/PerformancePanel";
 import { fullyDuplicated } from "./single-plant/duplication";
 import {
@@ -95,6 +95,8 @@ import {
 } from "@/components/domain";
 import {
   IconAlarm,
+  IconCapacity,
+  IconChevronLeft,
   IconChevronRight,
   IconClock,
   IconEnergy,
@@ -121,9 +123,12 @@ import { usePermission } from "@/auth/usePermission";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { useLiveRefresh } from "@/live/useLiveRefresh";
 
-/** Which icon labels a headline slot. Purely presentational. */
+/**
+ * Which icon labels a headline slot — per *quantity*: the array for capacity,
+ * a bolt for a rate, accumulating bars for an energy total. Presentation only.
+ */
 const SLOT_ICONS: Record<string, typeof IconPower> = {
-  "kpi.plant_capacity": IconLocation,
+  "kpi.plant_capacity": IconCapacity,
   "kpi.current_power": IconPower,
   "kpi.energy_today": IconEnergy,
   "kpi.energy_month": IconEnergy,
@@ -182,6 +187,113 @@ function toFigures(slots: ResolvedSlot[], n: number): SummaryFigure[] {
         ? `${slot.source.aggregate} of ${slot.source.device_count} ${slot.source.device_type_code}`
         : (slot.source?.device_type_code ?? undefined),
     }));
+}
+
+/** A panel title at the size every panel on this screen uses. */
+const heading = (text: string) => <span className="text-lg">{text}</span>;
+const lede = (text: string) => <span className="text-sm">{text}</span>;
+
+/**
+ * The Plant's Devices, one Device Type at a time, sideways.
+ *
+ * Seventeen peers stacked vertically is 2000px of page and everything below
+ * them falls off the screen; across, the first three are visible and the rest
+ * are one press away. The type chips come first because the question is
+ * usually "show me the meter", and the paging buttons sit under them rather
+ * than over the cards, where they would cover a figure.
+ */
+function DeviceStrip({
+  groups,
+  current,
+  onPick,
+  isFallback,
+  children,
+  count,
+}: {
+  groups: { typeCode: string; devices: DeviceListItem[] }[];
+  current: string;
+  onPick: (typeCode: string) => void;
+  /** True when the Type has no curated columns and a Device's bindings stand in. */
+  isFallback: boolean;
+  children: ReactNode;
+  count: number;
+}): JSX.Element {
+  const pager = useScrollPager<HTMLDivElement>(undefined, `${current}:${count}`);
+  const pageBy = (direction: -1 | 1) => {
+    const track = pager.ref.current;
+    if (!track) return;
+    track.scrollBy({ left: direction * (track.clientWidth + 16), behavior: "smooth" });
+  };
+  return (
+    <div className="flex h-full min-w-0 flex-col">
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Device Type">
+        {groups.map((option) => {
+          const active = option.typeCode === current;
+          return (
+            <button
+              key={option.typeCode}
+              type="button"
+              onClick={() => onPick(option.typeCode)}
+              aria-pressed={active}
+              title={`${option.devices.length} ${option.typeCode}`}
+              className={`rounded-full border px-4 py-1.5 text-sm font-semibold transition ${
+                active
+                  ? "border-accent/60 bg-accent/10 text-accent"
+                  : "border-line text-ink hover:border-line-strong"
+              }`}
+            >
+              {option.typeCode}
+              <span className={`ml-1.5 ${active ? "" : "text-ink-muted"}`}>
+                {option.devices.length}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex min-h-9 items-center gap-3">
+        {pager.overflows ? (
+          <>
+            <button
+              type="button"
+              onClick={() => pageBy(-1)}
+              disabled={pager.atStart}
+              aria-label={`Previous ${current}`}
+              className="surface-tile flex h-9 w-9 items-center justify-center rounded-control border border-line text-ink-muted transition hover:text-ink disabled:opacity-40"
+            >
+              <IconChevronLeft size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={() => pageBy(1)}
+              disabled={pager.atEnd}
+              aria-label={`Next ${current}`}
+              className="surface-tile flex h-9 w-9 items-center justify-center rounded-control border border-line text-ink-muted transition hover:text-ink disabled:opacity-40"
+            >
+              <IconChevronRight size={15} />
+            </button>
+          </>
+        ) : null}
+        {/* Two different silences, and which one it is decides where to go
+            (Guardrail 26): an uncurated Type is fine, and says so. */}
+        {isFallback ? (
+          <span className="text-xs text-ink-faint">
+            No summary columns are curated for {current}, so these are its own bound
+            signals. Tap a card for everything it reports.
+          </span>
+        ) : null}
+      </div>
+
+      <div
+        ref={pager.ref}
+        role="group"
+        aria-label={`${current} Devices`}
+        className="mt-4 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:none]"
+      >
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export function SinglePlantDashboard(): JSX.Element {
@@ -345,7 +457,7 @@ export function SinglePlantDashboard(): JSX.Element {
       <div className="space-y-2.5">
         <SkeletonPanel lines={1} />
         <SkeletonKpiRow tiles={5} />
-        <div className="grid gap-2.5 xl:grid-cols-12">
+        <div className="grid gap-5 xl:grid-cols-12">
           <div className="xl:col-span-7"><SkeletonPanel lines={4} /></div>
           <div className="xl:col-span-5"><SkeletonPanel lines={4} /></div>
         </div>
@@ -503,26 +615,18 @@ export function SinglePlantDashboard(): JSX.Element {
   ];
 
   return (
-    <div className="flex flex-col gap-2.5">
-      {/*
-        One filter row, above everything it scopes. Two controls rather than
-        one because they genuinely scope different things and merging them
-        would be a lie: `Period` drives the derived figures, computed over a
-        calendar period from aggregates; `Window` drives the charts, which are
-        a rolling span of readings. "Today" and "the last 24 hours" are not the
-        same range and must not share a control.
-      */}
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="flex items-center gap-2 truncate text-base font-semibold text-ink">
-            {plant.code}
-            <span className="truncate font-normal text-ink-muted">{plant.name}</span>
+    <div className="flex flex-col gap-5">
+      <header className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <h1 className="flex min-w-0 items-baseline gap-3">
+            <span className="font-mono text-3xl font-bold tracking-tight text-ink">{plant.code}</span>
+            <span className="truncate text-2xl font-medium text-ink-muted">{plant.name}</span>
           </h1>
           {/*
             The control, not the badge beside it: `PlantStatusControl` already
-            renders the status as a Badge and adds the transition next to it, so
-            showing `PlantStatusBadge` here too put the word "active" on the
-            screen twice, 40px apart, which reads as two different facts.
+            renders the status and adds the transition next to it, so showing a
+            status badge here too put the word "active" on the screen twice,
+            40px apart, which reads as two different facts.
 
             Status is edited where the Plant is looked at. It used to be
             reachable only from the onboarding wizard, so a Plant that finished
@@ -530,44 +634,58 @@ export function SinglePlantDashboard(): JSX.Element {
             through a form built for creating one.
           */}
           <PlantStatusControl plantId={plant.id} status={plant.status} />
-        </div>
-
-        <div className="flex items-center gap-2 text-[11px] text-ink-muted">
-          <span title="Nameplate DC capacity from the Plant record.">
-            DC {formatCapacity(plant.dc_capacity_kwp, "kWp")}
+          <span className="flex items-center gap-2 text-base text-ink-muted">
+            <span title="Nameplate DC capacity from the Plant record.">
+              DC{" "}
+              <span className="figure font-semibold text-ink">
+                {formatCapacity(plant.dc_capacity_kwp, "kWp")}
+              </span>
+            </span>
+            <span className="text-ink-faint">·</span>
+            <span title="Nameplate AC capacity from the Plant record.">
+              AC{" "}
+              <span className="figure font-semibold text-ink">
+                {formatCapacity(plant.ac_capacity_kw, "kW")}
+              </span>
+            </span>
           </span>
-          <span className="text-ink-faint">·</span>
-          <span title="Nameplate AC capacity from the Plant record.">
-            AC {formatCapacity(plant.ac_capacity_kw, "kW")}
-          </span>
-          <Badge
-            tone="neutral"
+          <span
+            className="surface-tile rounded-control border border-line px-3 py-1 text-sm text-ink-muted"
             title="Every timestamp on this screen renders in the Plant's timezone, not the browser's."
           >
             {timezoneLabel(timezone)}
-          </Badge>
+          </span>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" />
-          <label className="flex items-center gap-1.5">
+        {/*
+          One filter row, above everything it scopes. Two time controls rather
+          than one because they genuinely scope different things and merging
+          them would be a lie: `Period` drives the derived figures, computed
+          over a calendar period from aggregates; `Window` drives the charts,
+          which are a rolling span of readings. "Today" and "the last 24 hours"
+          are not the same range and must not share a control.
+        */}
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+          <div className="flex items-center gap-2.5">
             <span
-              className="text-[11px] text-ink-muted"
+              className="text-sm font-medium text-ink-muted"
               title="Scopes the derived figures — PR, CUF, availability — which are computed over a calendar period."
             >
               Period
             </span>
-            <PeriodPicker value={period} onChange={setPeriod} />
-          </label>
-          <label className="flex items-center gap-1.5">
+            <PeriodPicker value={period} onChange={setPeriod} size="lg" />
+          </div>
+          <div className="flex items-center gap-2.5">
             <span
-              className="text-[11px] text-ink-muted"
+              className="text-sm font-medium text-ink-muted"
               title="Scopes the charts, which show a rolling span of readings. Deliberately separate from Period: 'today' and 'the last 24 hours' are different ranges."
             >
               Window
             </span>
             <SegmentedControl
               label="Chart window"
+              size="lg"
               value={range}
               onChange={setRange}
               options={TREND_RANGES.map((option) => ({
@@ -576,7 +694,7 @@ export function SinglePlantDashboard(): JSX.Element {
                 hint: option.hint,
               }))}
             />
-          </label>
+          </div>
         </div>
       </header>
 
@@ -591,25 +709,33 @@ export function SinglePlantDashboard(): JSX.Element {
       ) : dashboardQuery.isError ? (
         <ErrorState error={dashboardQuery.error} retry={() => void dashboardQuery.refetch()} />
       ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {headline.map((slot) => (
-            <SlotStat key={slot.slot_code} slot={slot} icon={SLOT_ICONS[slot.slot_code]} />
+            <SlotRailTile
+              key={slot.slot_code}
+              slot={slot}
+              icon={SLOT_ICONS[slot.slot_code] ?? IconGauge}
+            />
           ))}
         </div>
       )}
 
-      <div className="grid gap-2.5 xl:grid-cols-12">
+      <div className="grid gap-5 xl:grid-cols-12">
         {/*
           The four-stage schematic, fixed on every Plant. The detailed
           `parent_device_id` tree — which Inverter is the broken one — lives on
           the SLD dashboard; this answers the other question, whether the Plant
           is healthy at a glance and how it compares with the next one.
         */}
+        {/* Default padding, unchanged: the schematic keeps exactly the room it
+            had, and at mid widths every pixel is a stage that does not scroll. */}
         <Panel
           fill
           className="xl:col-span-7"
-          title="Plant Schematic"
-          subtitle="PV Array → Inverters → Transformer → Grid. Every power-path Device folds into one of the four by its Device Type."
+          title={heading("Plant Schematic")}
+          subtitle={lede(
+            "PV Array → Inverters → Transformer → Grid. Every power-path Device folds into one of the four by its Device Type.",
+          )}
         >
           {dashboardQuery.isLoading ? (
             <SkeletonPanel lines={3} title={false} />
@@ -633,16 +759,19 @@ export function SinglePlantDashboard(): JSX.Element {
         */}
         <Panel
           fill
+          padding="p-5"
           className="xl:col-span-5"
-          title={chartView === "power" ? powerTrend.label : "Energy per day"}
-          subtitle={
+          title={heading(chartView === "power" ? powerTrend.label : "Energy per day")}
+          subtitle={lede(
             chartView === "power"
               ? "One measure, one axis. Gaps are drawn as gaps — a Plant that reported nothing was not producing zero."
-              : "One bar per day, from the daily tier — the counter's closing value, which is that day's total."
-          }
-          actions={
+              : "One bar per day, from the daily tier — the counter's closing value, which is that day's total.",
+          )}
+        >
+          <div className="mb-3">
             <SegmentedControl
               label="Chart view"
+              size="lg"
               value={chartView}
               onChange={setChartView}
               options={[
@@ -650,8 +779,7 @@ export function SinglePlantDashboard(): JSX.Element {
                 { value: "energy", label: "Energy", hint: "Generation per day over the selected window." },
               ]}
             />
-          }
-        >
+          </div>
           {chartView === "power" ? (
             powerTrend.unavailableReason ? (
               <p className="py-8 text-center text-xs text-ink-faint">
@@ -667,7 +795,7 @@ export function SinglePlantDashboard(): JSX.Element {
                 flaggedCount={powerTrend.flaggedCount}
                 isLoading={powerTrend.isLoading}
                 timezone={timezone}
-                height={188}
+                height={210}
               />
             )
           ) : energyTrend.unavailableReason ? (
@@ -684,7 +812,7 @@ export function SinglePlantDashboard(): JSX.Element {
               flaggedCount={energyTrend.flaggedCount}
               isLoading={energyTrend.isLoading}
               timezone={timezone}
-              height={188}
+              height={210}
               shape="bar"
               // The largest day in a month is not a fact anybody acts on, and
               // the label would sit over a neighbouring bar.
@@ -694,7 +822,7 @@ export function SinglePlantDashboard(): JSX.Element {
         </Panel>
       </div>
 
-      <div className="grid gap-2.5 xl:grid-cols-12">
+      <div className="grid gap-5 xl:grid-cols-12">
         {/*
           The Inverters, sideways. Seventeen peers stacked vertically is 2000px
           of page and everything below them falls off the screen; across, the
@@ -709,61 +837,30 @@ export function SinglePlantDashboard(): JSX.Element {
               />
             </Panel>
           ) : (
-            <div className="space-y-2.5">
-              {(strip ? [strip] : []).map((group) => (
-                <Panel
-                  fill
-                  key={group.typeCode}
-                  title={`${group.typeCode} — ${group.devices.length}`}
-                  subtitle={
-                    stripColumns.isFallback
-                      ? "No summary columns are curated for this Device Type, so these are its own bound signals. Tap a card for everything the Device reports."
-                      : "Figures come from the catalogue's columns for this Device Type, not from this screen. Tap a card for everything the Device reports."
-                  }
-                  actions={
-                    deviceGroups.length > 1 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {deviceGroups.map((option) => (
-                          <button
-                            key={option.typeCode}
-                            type="button"
-                            onClick={() => setStripType(option.typeCode)}
-                            aria-pressed={option.typeCode === group.typeCode}
-                            title={`${option.devices.length} ${option.typeCode}`}
-                            className={`rounded-control border px-2 py-0.5 text-[10px] font-medium transition ${
-                              option.typeCode === group.typeCode
-                                ? "border-accent/50 bg-accent/10 text-accent"
-                                : "border-line text-ink-muted hover:text-ink"
-                            }`}
-                          >
-                            {option.typeCode}
-                            <span className="ml-1 opacity-60">{option.devices.length}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null
-                  }
+            strip ? (
+              <Panel fill tray padding="p-5" className="h-full">
+                <DeviceStrip
+                  groups={deviceGroups}
+                  current={strip.typeCode}
+                  onPick={setStripType}
+                  isFallback={stripColumns.isFallback}
+                  count={strip.devices.length}
                 >
-                  <Carousel
-                    ariaLabel={`${group.typeCode} Devices`}
-                    className="flex h-full items-center"
-                  >
-                    {group.devices.map((device) => (
-                      <CarouselItem key={device.id}>
-                        <DeviceCard
-                          device={device}
-                          columns={stripColumns.columns}
-                          maxFigures={6}
-                          values={valuesFor(device.id)}
-                          onSelect={(selected) => setOpen({ kind: "device", device: selected })}
-                          selected={open?.kind === "device" && open.device.id === device.id}
-                        />
-                      </CarouselItem>
-                    ))}
-                  </Carousel>
-                </Panel>
-              ))}
-            </div>
+                  {strip.devices.map((device) => (
+                    <div key={device.id} className="w-[17.5rem] shrink-0 snap-start">
+                      <DeviceFigureCard
+                        device={device}
+                        columns={stripColumns.columns}
+                        maxFigures={6}
+                        values={valuesFor(device.id)}
+                        onSelect={(selected) => setOpen({ kind: "device", device: selected })}
+                        selected={open?.kind === "device" && open.device.id === device.id}
+                      />
+                    </div>
+                  ))}
+                </DeviceStrip>
+              </Panel>
+            ) : null
           )}
         </div>
 
@@ -777,9 +874,12 @@ export function SinglePlantDashboard(): JSX.Element {
         */}
         <Panel
           fill
+          padding="p-5"
           className="xl:col-span-4"
-          title="Weather"
-          subtitle="Two measures, two scales, one shared time axis — never one plot with two y-axes."
+          title={heading("Weather")}
+          subtitle={lede(
+            "Two measures, two scales, one shared time axis — never one plot with two y-axes.",
+          )}
         >
           {irradianceTrend.unavailableReason && moduleTempTrend.unavailableReason ? (
             <p className="py-8 text-center text-xs text-ink-faint">
@@ -788,7 +888,7 @@ export function SinglePlantDashboard(): JSX.Element {
           ) : (
             <SmallMultiples
               timezone={timezone}
-              height={174}
+              height={210}
               series={[
                 {
                   key: "irradiance",
@@ -818,7 +918,7 @@ export function SinglePlantDashboard(): JSX.Element {
         glance. A card whose section cannot be answered here renders inert with
         the reason, rather than opening onto a list of dashes.
       */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <SummaryCard
           icon={IconGauge}
           title="Performance"

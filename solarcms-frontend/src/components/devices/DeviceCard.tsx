@@ -32,7 +32,7 @@ import { formatAge, ageSeconds } from "@/format/datetime";
  * failed is `offline` here and may be generating perfectly; the platform cannot
  * tell and must not imply that it can (Guardrail 16).
  */
-const STATUS: Record<
+export const COMM_CARD_STYLE: Record<
   CommStatus,
   { frame: string; dot: string; label: string; note: string }
 > = {
@@ -81,7 +81,7 @@ export function DeviceCard({
   onSelect?: (device: DeviceListItem) => void;
   selected?: boolean;
 }): JSX.Element {
-  const status = STATUS[device.comm_status ?? "unknown"];
+  const status = COMM_CARD_STYLE[device.comm_status ?? "unknown"];
   const shown = columns.slice(0, maxFigures);
   const age = ageSeconds(device.last_seen_at);
 

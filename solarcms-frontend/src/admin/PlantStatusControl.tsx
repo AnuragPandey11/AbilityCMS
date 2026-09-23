@@ -18,7 +18,8 @@ import * as plantsApi from "@/api/endpoints/plants";
 import { isApiError } from "@/api/problem";
 import { usePlantCommissioning } from "@/api/hooks";
 import { usePermission } from "@/auth/usePermission";
-import { Badge, Button } from "@/components/ui";
+import { Button } from "@/components/ui";
+import { PlantStatusPill } from "@/components/domain";
 import { CommissioningPanel } from "@/admin/CommissioningPanel";
 
 const NEXT: Record<string, { status: string; label: string } | undefined> = {
@@ -73,19 +74,18 @@ export function PlantStatusControl({
   const blocking = report.data?.blocking_count ?? 0;
 
   if (!canManage) {
-    return <Badge tone="neutral" title={MEANING[status]}>{status}</Badge>;
+    return <PlantStatusPill status={status} title={MEANING[status]} />;
   }
 
   return (
     <div className="inline-flex flex-col items-start gap-1">
-      <div className="flex items-center gap-2">
-        <Badge tone="neutral" title={MEANING[status]}>
-          {status}
-        </Badge>
+      <div className="flex items-center gap-3">
+        <PlantStatusPill status={status} title={MEANING[status]} />
         <button
           type="button"
           onClick={() => setOpen((previous) => !previous)}
-          className="text-[11px] text-ink-muted underline-offset-2 hover:text-ink hover:underline"
+          aria-expanded={open}
+          className="surface-tile rounded-control border border-line px-3 py-1 text-sm text-ink-muted transition hover:border-line-strong hover:text-ink"
         >
           {open ? "Hide readiness" : "Change status"}
         </button>

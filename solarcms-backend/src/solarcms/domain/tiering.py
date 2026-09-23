@@ -43,7 +43,9 @@ TIERS: Final[tuple[TierSpec, ...]] = (
 )
 
 
-def select_tier(start: datetime, end: datetime, now: datetime) -> Tier:
+def select_tier(
+    start: datetime, end: datetime, now: datetime, *, finest: Tier = Tier.READINGS,
+) -> Tier:
     """Coarsest tier that both covers the range and still retains it.
 
         range ≤ 6h  and within 30d → readings
@@ -55,13 +57,19 @@ def select_tier(start: datetime, end: datetime, now: datetime) -> Tier:
     Retention is checked against `start`, not `end`: a query for a six-hour window
     two months ago is short, but raw data for it was dropped at thirty days, so it
     must be served from an aggregate.
+
+    `finest` is the finest tier the *reader* may use. The scheduler, which renders
+    Reports, holds SELECT on `agg_1h_v` and `agg_1d_v` only (and Reports never
+    read raw), so it passes `Tier.AGG_1H` and a one-day Report reads hourly rows
+    instead of failing on a view it cannot see.
     """
     if end < start:
         start, end = end, start
     span = end - start
     age = now - start
 
-    for spec in TIERS:
+    allowed = TIERS[[spec.tier for spec in TIERS].index(finest):]
+    for spec in allowed:
         if span <= spec.max_range and age <= spec.retention:
             return spec.tier
     return Tier.AGG_1D

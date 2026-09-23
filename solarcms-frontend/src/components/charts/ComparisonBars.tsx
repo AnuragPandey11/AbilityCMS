@@ -22,12 +22,25 @@
  *
  * A gap, not a border, separates the bars: a keyline around each mark thickens
  * everything and makes a dense series read as one solid block.
+ *
+ * ── `gradient` is still one colour ──────────────────────────────────────────
+ * The `gradient` appearance runs every bar through the *same* brand wash —
+ * the accent into its strong step — along its length. It encodes nothing and differs between no two bars,
+ * so it is decoration of the one series rather than a second channel — the
+ * objection above is to hue varying *between* categories, which this does not.
+ *
+ * ── The mean line is a reference, not a target ──────────────────────────────
+ * `mean` draws a dashed rule at the average of the bars shown. It lets a
+ * reader see that one Inverter is far below its peers without the chart
+ * deciding how far is too far: colouring a bar by its distance from the mean
+ * needs a threshold nobody has supplied (INV_UNDERPERFORMANCE is unevaluated),
+ * so the colour stays reserved for communication status.
  */
 
 import { useMemo } from "react";
 import type { EChartsOption } from "echarts";
 import { chartTheme, useEcharts } from "./useEcharts";
-import { seriesPalette, token, tokenAlpha } from "@/theme/tokens";
+import { token, tokenAlpha } from "@/theme/tokens";
 import { useTheme } from "@/theme/ThemeProvider";
 import { formatValue } from "@/format/value";
 
@@ -48,6 +61,8 @@ export function ComparisonBars({
   metricLabel,
   height = 240,
   noun = "Device",
+  appearance = "plain",
+  mean,
 }: {
   rows: ComparisonRow[];
   unit: string | null;
@@ -60,10 +75,34 @@ export function ComparisonBars({
    * reader distrust the rest of the screen.
    */
   noun?: string;
+  /** `gradient`: larger bars in one blue-to-cyan wash, monospaced labels. */
+  appearance?: "plain" | "gradient";
+  /** Draws a dashed reference line at this value. */
+  mean?: number | null;
 }): JSX.Element {
   const { version: themeVersion } = useTheme();
   const theme = chartTheme();
-  const base = seriesPalette()[0] ?? token("accent");
+  // The brand accent, not categorical slot 1: this is one series, so its hue
+  // distinguishes it from nothing, and the figure being compared on each Device
+  // card takes the same colour (`DeviceFigureCard`).
+  const base = token("accent");
+  const gradient = appearance === "gradient";
+  // One wash for every bar, left to right. Colours through `token`, which
+  // emits the legacy syntax zrender can parse (Guardrail 28).
+  const barFill = gradient
+    ? {
+        type: "linear" as const,
+        x: 0,
+        y: 0,
+        x2: 1,
+        y2: 0,
+        colorStops: [
+          { offset: 0, color: base },
+          { offset: 1, color: token("accent-strong") },
+        ],
+      }
+    : base;
+  const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
   /**
    * Devices that reported, sorted by the measure; then the silent ones.
@@ -119,7 +158,7 @@ export function ComparisonBars({
       axisLine: { show: false },
       axisTick: { show: false },
       splitLine: theme.splitLine,
-      axisLabel: { fontSize: 9, color: token("ink-faint") },
+      axisLabel: { fontSize: gradient ? 10 : 9, color: token("ink-faint") },
     },
     yAxis: {
       type: "category",
@@ -127,8 +166,9 @@ export function ComparisonBars({
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: {
-        fontSize: 10,
-        color: token("ink-muted"),
+        fontSize: gradient ? 11 : 10,
+        color: gradient ? token("ink") : token("ink-muted"),
+        ...(gradient ? { fontFamily: mono } : {}),
         // The codes are the identity; never truncate them to fit a bar.
         width: 96,
         overflow: "truncate",
@@ -147,13 +187,13 @@ export function ComparisonBars({
                 ? tokenAlpha("ink-faint", 0.25)
                 : row.attention
                   ? token("warn")
-                  : base,
+                  : barFill,
             // Rounded at the data end only; the end meeting the axis stays
             // square so the baseline reads as a straight line.
             borderRadius: [0, 4, 4, 0],
           },
         })),
-        barMaxWidth: 13,
+        barMaxWidth: gradient ? 18 : 13,
         barCategoryGap: "34%",
         // Direct labels at the bar end — selective by construction, since a
         // horizontal bar chart has one label per row rather than one per point.
@@ -161,19 +201,31 @@ export function ComparisonBars({
           show: true,
           position: "right",
           distance: 6,
-          fontSize: 10,
-          color: token("ink-muted"),
+          fontSize: gradient ? 11 : 10,
+          color: gradient ? token("ink") : token("ink-muted"),
+          ...(gradient ? { fontFamily: mono } : {}),
           formatter: (params: { dataIndex: number }) => {
             const row = ordered[params.dataIndex];
             if (!row) return "";
             return row.value === null ? "no value" : formatValue(row.value, undefined);
           },
         },
+        ...(mean !== undefined && mean !== null
+          ? {
+              markLine: {
+                silent: true,
+                symbol: "none",
+                label: { show: false },
+                lineStyle: { type: "dashed" as const, color: token("ink-muted"), width: 1 },
+                data: [{ xAxis: mean }],
+              },
+            }
+          : {}),
       },
     ],
   };
 
-  const ref = useEcharts(option, [ordered, unit, metricLabel, themeVersion]);
+  const ref = useEcharts(option, [ordered, unit, metricLabel, themeVersion, appearance, mean]);
 
   return (
     <div>

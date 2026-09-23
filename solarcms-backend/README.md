@@ -143,6 +143,70 @@ at mosquitto on the canonical `scms/v1/#` contract.
 `--fault` induces what you cannot wait for: `silent` for the health sweeper,
 `frozen` for the stuck-sensor check, `underperform` for the sibling comparison.
 
+## A fabricated multi-Client fleet
+
+The client's broker carries one Plant, which cannot show whether one Client
+can see another's data. `tools/simulate_fleet.py` publishes two Clients × two
+Plants of deliberately different shape to the Docker broker (see the module
+docstring for the fleet and why each Plant is shaped as it is), using the same
+short payload keys the client's equipment sends, so commissioning binds the
+same Tags it would for real equipment. **The values are invented**: they say
+nothing about units, scaling or formulas (OPEN-14/15/16).
+
+```bash
+# 1. Point ingest at the Docker broker — .env already does; .env.clientbroker
+#    is the client-broker version, and `cp .env.clientbroker .env` switches back.
+# 2. Create the two Clients, four Plants and one Client Admin login each.
+.venv/bin/python scripts/seed_fleet.py
+# 3. Start publishing, and leave it running.
+.venv/bin/python tools/simulate_fleet.py
+# 4. Let the app discover and register the equipment — the same path a real
+#    customer's Devices take. Dry run first; read the plan; then apply.
+.venv/bin/python -m solarcms.cli commission-from-broker --topic 'scms/v1/#' --seconds 250
+.venv/bin/python -m solarcms.cli commission-from-broker --topic 'scms/v1/#' --seconds 250 --apply
+.venv/bin/python -m solarcms.cli commission-from-broker --topic 'SCMS/V1/#' --seconds 150 --apply
+# 5. Run the five processes as usual.
+```
+
+⚠ One filter per commissioning run. With several filters the command splits
+`--seconds` between them, and 150 s across two filters gives each 75 s — less
+than one cycle of the slowest Plant (WH2, 120 s), which is then simply absent
+from the plan. The window must also see every topic **twice**, or its
+interval is not measured and it is registered at the 60 s default.
+
+Logins: `sunfield@example.com` and `roofco@example.com`, password
+`fleet12345` (or `--password`), each a Client Admin over their own two Plants.
+`admin@example.com` (Super Admin) sees all four.
+
+Faults are a flag, not a scenario, so the same fleet can be broken in any way
+on any run:
+
+```bash
+.venv/bin/python tools/simulate_fleet.py --fault SF_NORTH:INVERTER_5:silent   # COMM_LOST
+.venv/bin/python tools/simulate_fleet.py --fault SF_NORTH:MCR_B:silent        # one COLLECTOR_OFFLINE, not six
+.venv/bin/python tools/simulate_fleet.py --fault WH2:*:silent                 # PLANT_SILENT
+.venv/bin/python tools/simulate_fleet.py --fault WH1:INVERTER_2:frozen        # stuck values
+.venv/bin/python tools/simulate_fleet.py --speed 4                            # every interval ÷ 4
+```
+
+`SF_NORTH/INVERTER_9` always runs 40% below its siblings — the case a relative
+underperformance rule exists for. Both Clients are `is_demo = true`; that flag,
+never the code, is how anything should tell them from a real tenant.
+
+Restarting the simulator is safe: every energy and irradiation counter is saved
+to `.artifacts/simulate_fleet_state.json` after each cycle and resumed on the
+next run, so a restart reads as a short silence rather than a jump. Before
+23 Sep 2026 each run started the lifetime counters at a new random value, and
+the KPI endpoint (which subtracts the lowest counter reading from the highest)
+turned every restart into gigawatt-hours of "generation" — PR in the tens of
+thousands of percent. `--fresh` deliberately starts the counters over — which
+puts exactly that jump into the stored readings, so use it only after clearing
+the fleet's counter readings:
+
+```bash
+.venv/bin/python tools/simulate_fleet.py --fresh
+```
+
 ## Tests
 
 ```bash

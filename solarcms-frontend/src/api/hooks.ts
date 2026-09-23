@@ -18,7 +18,7 @@ import * as reportsApi from "./endpoints/reports";
 import * as usersApi from "./endpoints/users";
 import { qk } from "./queryKeys";
 import { useLiveSocket } from "@/live/LiveSocket";
-import type { KpiPeriod, PlantKpis, Tag } from "./schemas";
+import type { KpiPeriod, PlantDashboard, PlantKpis, Tag } from "./schemas";
 
 const SESSION = {
   staleTime: Number.POSITIVE_INFINITY,
@@ -118,6 +118,33 @@ export function usePlantKpiFanout(
     // `isLoading` only — never `isFetching`. A refetch on the live interval
     // must not put the screen back into a loading state every ten seconds;
     // the figure on display stays until its replacement arrives.
+    isLoading: results.some((query) => query.isLoading),
+  };
+}
+
+/**
+ * Each Plant's resolved dashboard — one request each — for the figures only a
+ * slot answers, chiefly Current Power.
+ *
+ * The fleet's live generation is the sum of these, never a number computed
+ * here, so every Plant's contribution keeps the provenance its own screen
+ * shows. On the `LIVE_KPI` cadence rather than the socket-aware one: the
+ * Portfolio does not mount `useLiveRefresh` (that would open N Plant rooms),
+ * so the timer is the only thing keeping these current.
+ */
+export function usePlantDashboardFanout(
+  plants: { id: number }[],
+): { dashboards: (PlantDashboard | undefined)[]; isLoading: boolean } {
+  const results = useQueries({
+    queries: plants.map((plant) => ({
+      queryKey: qk.plantDashboard(plant.id),
+      queryFn: () => plantsApi.plantDashboard(plant.id),
+      ...LIVE_KPI,
+      ...ON_RETURN,
+    })),
+  });
+  return {
+    dashboards: results.map((query) => query.data as PlantDashboard | undefined),
     isLoading: results.some((query) => query.isLoading),
   };
 }

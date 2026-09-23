@@ -510,6 +510,36 @@ async def infer_device_type(session: AsyncSession, device_code: str) -> str | No
     return reverse[0] if len(reverse) == 1 else None
 
 
+async def _find_plant(session: AsyncSession, item: ObservedDevice) -> Any:
+    """The Plant a topic names — under the Client it names, when it names one.
+
+    `plants.code` is unique per Client, not globally (`uq_plants_client_id_code`),
+    so two Clients may both own a Plant called `MAIN`. Matching on the Plant
+    code alone picked whichever row sorted first, and registered the second
+    Client's equipment under the first — the one mistake multi-tenancy exists
+    to make impossible, made by the tool that onboards the tenants. When the
+    topic carries a Client code (every canonical shape does) it is part of the
+    lookup; only the legacy two-segment shape, which names no Client, falls
+    back to the Plant code by itself.
+
+    Both codes are matched case-insensitively here and here only, because a
+    human is about to read this plan and confirm it. At runtime the topic is
+    matched exactly — case-folding an origin would merge two Clients whose
+    codes differ only by case (Guardrail 5).
+    """
+    if item.client_code is not None:
+        return (await session.execute(text("""
+            SELECT p.id, p.client_id
+              FROM plants p JOIN clients c ON c.id = p.client_id
+             WHERE upper(p.code) = upper(:plant_code)
+               AND upper(c.code) = upper(:client_code)
+        """), {"plant_code": item.plant_code,
+               "client_code": item.client_code})).first()
+    return (await session.execute(text(
+        "SELECT id, client_id FROM plants WHERE upper(code) = upper(:code)"
+    ), {"code": item.plant_code})).first()
+
+
 async def plan_commissioning(
     session: AsyncSession, observed: list[ObservedDevice]
 ) -> list[dict[str, Any]]:
@@ -522,13 +552,7 @@ async def plan_commissioning(
         for key in item.source_keys:
             tag = alias_for(key, device_type)
             (mapped if tag and tag in TAG_SPECS else unmapped).append(key)
-        # The Plant code is matched case-insensitively here and here only,
-        # because a human is about to read this plan and confirm it. At runtime
-        # the topic is matched exactly — case-folding an origin would merge two
-        # Clients whose codes differ only by case (Guardrail 5).
-        plant = (await session.execute(text(
-            "SELECT id, client_id FROM plants WHERE upper(code) = upper(:code)"
-        ), {"code": item.plant_code})).first()
+        plant = await _find_plant(session, item)
         plan.append({
             "topic": item.topic,
             "device_code": item.device_code,
@@ -584,9 +608,7 @@ async def commission_observed_devices(
 
     for item in sorted(observed, key=lambda o: o.topic):
         device_type = await infer_device_type(session, item.device_code)
-        plant = (await session.execute(text(
-            "SELECT id, client_id FROM plants WHERE upper(code) = upper(:code)"
-        ), {"code": item.plant_code})).first()
+        plant = await _find_plant(session, item)
         if device_type is None or plant is None:
             summary["skipped"].append(
                 {"topic": item.topic,

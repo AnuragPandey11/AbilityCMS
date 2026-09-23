@@ -30,6 +30,65 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { IconChevronLeft, IconChevronRight } from "@/components/icons";
 
+/**
+ * Paging for any horizontal scroll container: whether each end has been
+ * reached, and a `page` that scrolls by most of a width. The `Carousel` below
+ * and any strip that puts its buttons elsewhere (a section header) share it,
+ * so the end-detection tolerance and the resize handling live once.
+ */
+export function useScrollPager<T extends HTMLElement>(
+  /** Pixels per page. Defaults to most of the container's width. */
+  step?: number,
+  /** Anything whose change can alter the content width. */
+  contentKey?: unknown,
+): {
+  ref: React.RefObject<T>;
+  atStart: boolean;
+  atEnd: boolean;
+  /** Both ends reachable means it all fits. */
+  overflows: boolean;
+  page: (direction: -1 | 1) => void;
+} {
+  const ref = useRef<T>(null);
+  const [atStart, setAtStart] = useState(true);
+  const [atEnd, setAtEnd] = useState(true);
+
+  const measure = useCallback(() => {
+    const track = ref.current;
+    if (!track) return;
+    // A 2px tolerance: sub-pixel layout means `scrollLeft + clientWidth` rarely
+    // lands exactly on `scrollWidth`, and without it the right button stays
+    // enabled forever at the end of the strip.
+    const max = track.scrollWidth - track.clientWidth;
+    setAtStart(track.scrollLeft <= 2);
+    setAtEnd(track.scrollLeft >= max - 2);
+  }, []);
+
+  useEffect(() => {
+    const track = ref.current;
+    if (!track) return;
+    measure();
+    track.addEventListener("scroll", measure, { passive: true });
+    // Also on resize: a card count that fits at 1600px overflows at 1100px, so
+    // whether the buttons are needed at all changes with the window.
+    const observer = new ResizeObserver(measure);
+    observer.observe(track);
+    return () => {
+      track.removeEventListener("scroll", measure);
+      observer.disconnect();
+    };
+  }, [measure, contentKey]);
+
+  const page = (direction: -1 | 1) => {
+    const track = ref.current;
+    if (!track) return;
+    const distance = step ?? Math.max(track.clientWidth * 0.8, 240);
+    track.scrollBy({ left: direction * distance, behavior: "smooth" });
+  };
+
+  return { ref, atStart, atEnd, overflows: !(atStart && atEnd), page };
+}
+
 export function Carousel({
   children,
   ariaLabel,
@@ -42,46 +101,10 @@ export function Carousel({
   step?: number;
   className?: string;
 }): JSX.Element {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const [atStart, setAtStart] = useState(true);
-  const [atEnd, setAtEnd] = useState(true);
-
-  const measure = useCallback(() => {
-    const track = trackRef.current;
-    if (!track) return;
-    // A 2px tolerance: sub-pixel layout means `scrollLeft + clientWidth` rarely
-    // lands exactly on `scrollWidth`, and without it the right button stays
-    // enabled forever at the end of the strip.
-    const max = track.scrollWidth - track.clientWidth;
-    setAtStart(track.scrollLeft <= 2);
-    setAtEnd(track.scrollLeft >= max - 2);
-  }, []);
-
-  useEffect(() => {
-    const track = trackRef.current;
-    if (!track) return;
-    measure();
-    track.addEventListener("scroll", measure, { passive: true });
-    // Also on resize: a card count that fits at 1600px overflows at 1100px, so
-    // whether the buttons are needed at all changes with the window.
-    const observer = new ResizeObserver(measure);
-    observer.observe(track);
-    return () => {
-      track.removeEventListener("scroll", measure);
-      observer.disconnect();
-    };
-  }, [measure, children]);
-
-  const page = (direction: -1 | 1) => {
-    const track = trackRef.current;
-    if (!track) return;
-    const distance = step ?? Math.max(track.clientWidth * 0.8, 240);
-    track.scrollBy({ left: direction * distance, behavior: "smooth" });
-  };
-
-  // Both ends reachable means it all fits: hide the controls rather than
-  // showing two permanently dead buttons.
-  const overflows = !(atStart && atEnd);
+  const { ref: trackRef, atStart, atEnd, overflows, page } = useScrollPager<HTMLDivElement>(
+    step,
+    children,
+  );
 
   return (
     <div className={`relative min-w-0 ${className}`}>

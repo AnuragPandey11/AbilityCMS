@@ -233,8 +233,8 @@ export function UsersAdmin(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">Users</h1>
-          <p className="text-xs text-ink-muted">
+          <h1 className="page-title">Users</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
             Users of this Client. Access is granted explicitly, never by
             default.
           </p>

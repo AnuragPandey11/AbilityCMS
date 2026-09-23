@@ -23,6 +23,7 @@ export type TokenName =
   | "accent"
   | "accent-strong"
   | "accent-soft"
+  | "on-accent"
   | "ok"
   | "warn"
   | "bad"
@@ -46,30 +47,31 @@ export type TokenName =
  * Guardrail 4 rather than raise an error. The `format` tests assert they differ.
  */
 const FALLBACK: Record<string, string> = {
-  "--c-surface": "234 238 236",
-  "--c-surface-raised": "255 255 255",
-  "--c-surface-sunken": "244 247 245",
-  "--c-line": "229 234 231",
-  "--c-line-soft": "238 242 240",
-  "--c-line-strong": "202 212 205",
-  "--c-ink": "16 26 21",
-  "--c-ink-muted": "88 103 97",
-  "--c-ink-faint": "141 152 143",
-  "--c-accent": "18 164 90",
-  "--c-accent-strong": "10 122 65",
-  "--c-accent-soft": "230 246 237",
+  "--c-surface": "228 232 238",
+  "--c-surface-raised": "252 252 253",
+  "--c-surface-sunken": "239 242 246",
+  "--c-line": "218 223 231",
+  "--c-line-soft": "231 235 240",
+  "--c-line-strong": "196 203 214",
+  "--c-ink": "33 38 59",
+  "--c-ink-muted": "88 96 117",
+  "--c-ink-faint": "122 130 150",
+  "--c-accent": "44 106 126",
+  "--c-accent-strong": "33 84 101",
+  "--c-accent-soft": "216 238 241",
+  "--c-on-accent": "255 255 255",
   "--c-ok": "18 164 90",
   "--c-warn": "224 152 42",
   "--c-bad": "223 75 75",
-  "--c-info": "47 127 209",
+  "--c-info": "58 102 219",
   "--c-q0": "18 164 90",
   "--c-q1": "224 152 42",
-  "--c-q2": "141 152 143",
+  "--c-q2": "122 130 150",
   "--c-q3": "223 75 75",
-  "--c-chart-grid": "229 234 231",
-  "--c-chart-axis": "141 152 143",
-  "--c-chart-tooltip-bg": "255 255 255",
-  "--c-chart-tooltip-border": "229 234 231",
+  "--c-chart-grid": "231 235 240",
+  "--c-chart-axis": "122 130 150",
+  "--c-chart-tooltip-bg": "252 252 253",
+  "--c-chart-tooltip-border": "218 223 231",
   "--c-series-1": "42 120 214",
   "--c-series-2": "235 104 52",
   "--c-series-3": "27 175 122",

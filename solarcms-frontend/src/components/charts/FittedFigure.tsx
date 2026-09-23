@@ -55,7 +55,22 @@ export function FittedFigure({
       // jsdom and a not-yet-laid-out tile both report 0; nothing to fit to.
       if (available <= 0) return;
       text.style.fontSize = "";
-      const gap = unitEl.current ? unitEl.current.offsetWidth + 4 : 0;
+      // Everything the unit takes on the line: its width, its own margins (a
+      // caller's `ml-1.5` is 6px this used to ignore — enough to wrap a figure
+      // that "fitted" by 2px) and the row's column gap.
+      const unitNode = unitEl.current;
+      const gap = unitNode
+        ? (() => {
+            const style = getComputedStyle(unitNode);
+            const columnGap = parseFloat(getComputedStyle(container).columnGap) || 0;
+            return (
+              unitNode.offsetWidth +
+              (parseFloat(style.marginLeft) || 0) +
+              (parseFloat(style.marginRight) || 0) +
+              columnGap
+            );
+          })()
+        : 0;
       const natural = text.scrollWidth;
       if (natural + gap <= available) return;
 
@@ -66,12 +81,18 @@ export function FittedFigure({
 
       // Keep the unit on the line if the figure can shrink enough; otherwise
       // let it wrap below and give the figure the whole width.
-      const withUnit = (available - gap) / natural;
+      // Two pixels of slack: widths are measured rounded, and a figure scaled
+      // to land exactly on the edge wraps its unit on the 1px it rounded up.
+      const withUnit = (available - gap - 2) / natural;
       const scale = Math.max(
         minScale,
         withUnit >= minScale ? withUnit : available / natural,
       );
-      text.style.fontSize = `${(scale * 100).toFixed(1)}%`;
+      // In pixels, from the figure's own size. A percentage here is resolved
+      // against the *parent's* font size (16px), not the figure's class size,
+      // so "90%" of a 30px figure rendered it at 14px — half size for a
+      // figure that needed to lose a tenth.
+      text.style.fontSize = `${(basePx * scale).toFixed(1)}px`;
     };
 
     fit();

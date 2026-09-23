@@ -8,12 +8,12 @@
 import type { ReactNode } from "react";
 import type { Alarm, CommStatus, DeviceHealth, KpiPeriod } from "@/api/schemas";
 import { KPI_PERIODS } from "@/api/schemas";
-import { Badge, type BadgeTone, inputClass } from "@/components/ui";
+import { Badge, type BadgeTone, SelectBox, inputClass } from "@/components/ui";
 import { formatAge, formatDateTime } from "@/format/datetime";
 
 // ── Plant status ────────────────────────────────────────────────────────────
 
-const PLANT_STATUS_TONE: Record<string, BadgeTone> = {
+export const PLANT_STATUS_TONE: Record<string, BadgeTone> = {
   active: "ok",
   commissioning: "warn",
   draft: "neutral",
@@ -43,6 +43,35 @@ export function PlantStatusBadge({ status }: { status: string }): JSX.Element {
     >
       {status}
     </Badge>
+  );
+}
+
+const STATUS_PILL: Record<BadgeTone, { frame: string; dot: string }> = {
+  ok: { frame: "border-ok/40 bg-ok/10 text-ok", dot: "bg-ok" },
+  warn: { frame: "border-warn/40 bg-warn/10 text-warn", dot: "bg-warn" },
+  bad: { frame: "border-bad/40 bg-bad/10 text-bad", dot: "bg-bad" },
+  info: { frame: "border-info/40 bg-info/10 text-info", dot: "bg-info" },
+  accent: { frame: "border-accent/40 bg-accent/10 text-accent", dot: "bg-accent" },
+  neutral: { frame: "border-line-strong bg-surface-sunken text-ink-muted", dot: "bg-ink-faint" },
+};
+
+/** The Plant's status as a rounded pill with a dot — for a card or a title band. */
+export function PlantStatusPill({
+  status,
+  title,
+}: {
+  status: string;
+  title?: string;
+}): JSX.Element {
+  const style = STATUS_PILL[PLANT_STATUS_TONE[status] ?? "neutral"];
+  return (
+    <span
+      title={title}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-semibold ${style.frame}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+      {status}
+    </span>
   );
 }
 
@@ -224,20 +253,47 @@ export function LastSeen({
 export function PeriodPicker({
   value,
   onChange,
+  size = "sm",
 }: {
   value: KpiPeriod;
   onChange: (period: KpiPeriod) => void;
+  /** `lg` for a page's title band, where it sits beside header cells. */
+  size?: "sm" | "lg";
 }): JSX.Element {
+  // The same anatomy as `SegmentedControl` — a sunken track, the choice a
+  // raised pill in the accent — so every "pick one of these" on a screen looks
+  // like one control. The accent, never green: a selection is not a status,
+  // and green here said "healthy" about a date range.
+  if (size === "lg") {
+    return (
+      <div className="inline-flex gap-1 rounded-control border border-line bg-surface-sunken p-1">
+        {KPI_PERIODS.map((period) => (
+          <button
+            key={period}
+            type="button"
+            onClick={() => onChange(period)}
+            className={`rounded-control px-3.5 py-1.5 text-sm font-semibold capitalize transition ${
+              value === period
+                ? "bg-surface-raised text-accent shadow-soft"
+                : "text-ink-muted hover:text-ink"
+            }`}
+          >
+            {period}
+          </button>
+        ))}
+      </div>
+    );
+  }
   return (
-    <div className="inline-flex rounded border border-line">
+    <div className="inline-flex rounded-control border border-line bg-surface-sunken p-0.5">
       {KPI_PERIODS.map((period) => (
         <button
           key={period}
           type="button"
           onClick={() => onChange(period)}
-          className={`px-2.5 py-1 text-xs capitalize transition ${
+          className={`rounded-control px-2.5 py-1 text-xs font-medium capitalize transition ${
             value === period
-              ? "bg-accent/15 text-accent"
+              ? "bg-surface-raised text-accent shadow-soft"
               : "text-ink-muted hover:text-ink"
           }`}
         >
@@ -255,13 +311,57 @@ export function PlantPicker({
   onChange,
   allowAll,
   label,
+  size = "sm",
 }: {
   plants: { id: number; code: string; name: string }[];
   value: number | null;
   onChange: (plantId: number | null) => void;
   allowAll?: boolean;
   label?: ReactNode;
+  /** `lg` for a page's title band: the code in mono and colour beside the name. */
+  size?: "sm" | "lg";
 }): JSX.Element {
+  const options = (
+    <>
+      {allowAll ? <option value="">All Plants</option> : null}
+      {plants.length === 0 ? (
+        <option value="" disabled>
+          No Plants assigned
+        </option>
+      ) : null}
+      {plants.map((plant) => (
+        <option key={plant.id} value={plant.id}>
+          {plant.code} — {plant.name}
+        </option>
+      ))}
+    </>
+  );
+  if (size === "lg") {
+    const current = plants.find((plant) => plant.id === value);
+    return (
+      <SelectBox
+        label={label}
+        value={value === null ? "" : String(value)}
+        onChange={(next) => onChange(next === "" ? null : Number(next))}
+        className="min-w-[15rem]"
+        display={
+          current ? (
+            <>
+              <span className="font-mono font-semibold text-accent">{current.code}</span>
+              <span className="text-ink-muted"> — </span>
+              {current.name}
+            </>
+          ) : (
+            <span className="text-ink-muted">
+              {allowAll ? "All Plants" : plants.length === 0 ? "No Plants assigned" : "Choose a Plant"}
+            </span>
+          )
+        }
+      >
+        {options}
+      </SelectBox>
+    );
+  }
   return (
     <label className="inline-flex items-center gap-2">
       {label ? <span className="text-xs text-ink-muted">{label}</span> : null}
@@ -272,17 +372,7 @@ export function PlantPicker({
         }
         className={`${inputClass} w-auto min-w-[12rem]`}
       >
-        {allowAll ? <option value="">All Plants</option> : null}
-        {plants.length === 0 ? (
-          <option value="" disabled>
-            No Plants assigned
-          </option>
-        ) : null}
-        {plants.map((plant) => (
-          <option key={plant.id} value={plant.id}>
-            {plant.code} — {plant.name}
-          </option>
-        ))}
+        {options}
       </select>
     </label>
   );

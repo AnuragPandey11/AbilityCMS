@@ -201,8 +201,8 @@ export function DeviceBindingsAdmin(): JSX.Element {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold text-ink">Device bindings</h1>
-        <p className="text-xs text-ink-muted">
+        <h1 className="page-title">Device bindings</h1>
+        <p className="mt-1.5 text-sm text-ink-muted">
           A binding decides how every future Reading from this Device is
           decoded.
         </p>

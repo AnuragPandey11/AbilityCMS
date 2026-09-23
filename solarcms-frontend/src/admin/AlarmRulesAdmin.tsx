@@ -260,8 +260,8 @@ export function AlarmRulesAdmin(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">Alarm Rules</h1>
-          <p className="text-xs text-ink-muted">
+          <h1 className="page-title">Alarm Rules</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
             The most specific matching rule wins: device → plant → device type →
             global.
           </p>

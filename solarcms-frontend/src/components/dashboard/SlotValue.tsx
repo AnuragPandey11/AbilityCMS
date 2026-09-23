@@ -26,6 +26,7 @@ import type { ComponentType } from "react";
 import type { IconProps } from "@/components/icons";
 import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "@/components/charts/FittedFigure";
+import { RailTile, type RailTone } from "@/components/charts/RailTile";
 
 /** Why a slot is blank, in words an operator can act on. */
 export function undefinedExplanation(slot: ResolvedSlot): string {
@@ -110,7 +111,7 @@ export function SlotTile({ slot }: { slot: ResolvedSlot }): JSX.Element {
   const text = headline ? headline.text : slotText(slot);
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
-      <div className="flex items-center text-xs uppercase tracking-wide text-ink-muted">
+      <div className="tile-label flex items-center">
         {slot.label}
         {slot.override_note ? (
           <InfoHint text={`Source overridden for this Plant: ${slot.override_note}`} />
@@ -120,7 +121,7 @@ export function SlotTile({ slot }: { slot: ResolvedSlot }): JSX.Element {
         <FittedFigure
           value={text}
           unit={isUndefined ? null : slot.unit}
-          className={`font-mono text-2xl ${isUndefined ? "text-ink-faint" : "text-ink"}`}
+          className={`figure text-2xl ${isUndefined ? "text-ink-faint" : "text-ink"}`}
           title={isUndefined ? explanation : String(slot.value)}
         />
       </div>
@@ -142,7 +143,7 @@ export function SlotRow({ slot }: { slot: ResolvedSlot }): JSX.Element {
       <span className="flex shrink-0 flex-wrap items-baseline justify-end gap-x-2">
         <Provenance slot={slot} />
         <span
-          className={`whitespace-nowrap font-mono ${isUndefined ? "text-ink-faint" : "text-ink"}`}
+          className={`figure whitespace-nowrap font-medium ${isUndefined ? "text-ink-faint" : "text-ink"}`}
           title={isUndefined ? undefinedExplanation(slot) : undefined}
         >
           {slotText(slot)}
@@ -152,6 +153,55 @@ export function SlotRow({ slot }: { slot: ResolvedSlot }): JSX.Element {
         </span>
       </span>
     </div>
+  );
+}
+
+/**
+ * A headline slot as a `RailTile`: the icon well, a large figure, and — kept,
+ * never dropped — where the figure came from.
+ *
+ * The figure is only ever ink or faint here, because a slot carries no
+ * judgement of its own; the well is the brand accent like every tile's.
+ */
+export function SlotRailTile({
+  slot,
+  icon,
+  tone,
+}: {
+  slot: ResolvedSlot;
+  icon: ComponentType<IconProps>;
+  /** Accepted for callers that still pass one; `RailTile` renders every tone alike. */
+  tone?: RailTone;
+}): JSX.Element {
+  const isUndefined = slot.value === null;
+  const explanation = undefinedExplanation(slot);
+  const headline =
+    slot.unit === "ratio" ? null : formatHeadline(slot.value, { digits: digitsForUnit(slot.unit) });
+  const text = headline ? headline.text : slotText(slot);
+  return (
+    <RailTile
+      tone={tone}
+      icon={icon}
+      label={slot.label}
+      hint={slot.override_note ? `Source overridden for this Plant: ${slot.override_note}` : undefined}
+      footnote={isUndefined ? explanation : <Provenance slot={slot} />}
+    >
+      <FittedFigure
+        value={text}
+        unit={isUndefined ? null : slot.unit}
+        className={`figure text-[1.9rem] font-semibold leading-none tracking-tight ${
+          isUndefined ? "text-ink-faint" : "text-ink"
+        }`}
+        unitClassName="ml-1.5 text-sm font-medium text-ink-muted"
+        title={
+          isUndefined
+            ? explanation
+            : headline?.compacted
+              ? `${headline.exact}${slot.unit ? ` ${slot.unit}` : ""}`
+              : String(slot.value)
+        }
+      />
+    </RailTile>
   );
 }
 
@@ -200,7 +250,7 @@ export function SlotStat({
             <Icon size={11} />
           </span>
         ) : null}
-        <span className="truncate text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+        <span className="truncate text-xs font-medium text-ink-muted">
           {slot.label}
         </span>
         {slot.override_note ? (

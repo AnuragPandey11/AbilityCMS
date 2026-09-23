@@ -33,6 +33,7 @@ async def list_definitions(
 async def request_run(
     definition_id: int, period_start: datetime, period_end: datetime,
     session: SessionDep,
+    client_id: int | None = None,
     user: CurrentUser = Depends(require_permission("report.generate")),
 ) -> dict[str, Any]:
     """Queue a Report. Async — the scheduler renders it.
@@ -42,11 +43,36 @@ async def request_run(
     settlement instrument and only it has commercial standing. Refusing is the
     correct failure — producing an invoice figure from an operational meter is
     the incorrect one.
+
+    `report_runs.client_id` is NOT NULL, and a Super Admin is a member of no
+    Client, so `app_client_id()` alone is not enough to file the run — the same
+    gap `POST /plants` had (I-9). A Client Admin's own Client is used and any
+    `client_id` they send is ignored; a Super Admin must name one.
     """
+    if user.is_platform_admin and user.client_id is None:
+        if client_id is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "choose the Client this Report belongs to. A platform "
+                "administrator is a member of no Client, so it cannot be "
+                "inferred from the session.")
+        owner = (await session.execute(
+            text("SELECT id FROM clients WHERE id = :id"),
+            {"id": client_id})).first()
+        if owner is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"no Client with id {client_id}")
+        resolved_client_id = owner.id
+    elif user.client_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "a Client context is required to request a Report")
+    else:
+        resolved_client_id = user.client_id
+
     definition = (await session.execute(text("""
         SELECT id, is_financial, code FROM report_definitions
-         WHERE id = :id AND (client_id IS NULL OR client_id = app_client_id())
-    """), {"id": definition_id})).first()
+         WHERE id = :id AND (client_id IS NULL OR client_id = :client_id)
+    """), {"id": definition_id, "client_id": resolved_client_id})).first()
     if definition is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "report definition not found")
 
@@ -56,7 +82,8 @@ async def request_run(
               JOIN device_models dm ON dm.id = d.device_model_id
               JOIN device_types dt  ON dt.id = dm.device_type_id
              WHERE dt.code = 'ABT_METER' AND d.status = 'active'
-        """))).scalar()
+               AND d.client_id = :client_id
+        """), {"client_id": resolved_client_id})).scalar()
         if not abt_meters:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -67,16 +94,17 @@ async def request_run(
     row = (await session.execute(text("""
         INSERT INTO report_runs (client_id, definition_id, requested_by, period_start,
                                  period_end, state)
-        VALUES (app_client_id(), :definition_id, :user_id, :start, :end, 'queued')
+        VALUES (:client_id, :definition_id, :user_id, :start, :end, 'queued')
         RETURNING id, state, created_at
-    """), {"definition_id": definition_id, "user_id": user.user_id,
-           "start": period_start, "end": period_end})).first()
+    """), {"client_id": resolved_client_id, "definition_id": definition_id,
+           "user_id": user.user_id, "start": period_start,
+           "end": period_end})).first()
     assert row is not None
     await session.execute(text("""
         INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
-        VALUES (app_client_id(), :user_id, 'report.request', 'report_runs', :id,
+        VALUES (:client_id, :user_id, 'report.request', 'report_runs', :id,
                 CAST(:after AS jsonb))
-    """), {"user_id": user.user_id, "id": row.id,
+    """), {"client_id": resolved_client_id, "user_id": user.user_id, "id": row.id,
            "after": json.dumps({"definition": definition.code,
                                 "period_start": period_start.isoformat(),
                                 "period_end": period_end.isoformat(),

@@ -11,55 +11,106 @@
  * wraps each one as `rgb(var(--c-x) / <alpha-value>)`. A hex here would silently
  * break every `/nn` opacity in the codebase.
  *
- * Light is the default ground and matches the client's mockups (Ability
- * Automation): a soft green-grey page, white cards, green brand. Dark is the
- * opt-in. `[data-theme]` on <html> wins in both directions so an explicit choice
- * always beats the OS preference.
+ * The theme follows the operating system unless the user picks one; an
+ * explicit `[data-theme]` on <html> wins in both directions.
+ *
+ * ── Where the palette comes from ───────────────────────────────────────────
+ * Ability Automation's logo (`brand/ability-logo-source.png`), sampled, not
+ * guessed: navy lettering #21263B, a teal swoosh #397E92, a cyan peak #62BCC8,
+ * an orange arrow #F09037, all on a cool light-grey plate #F2F3F5. Each maps to
+ * one job:
+ *
+ *   navy    the ink in light mode, and the hue every dark ground is built on.
+ *   plate   the light page.
+ *   teal    the light accent — one step deeper than the logo's, so accent
+ *           text clears 4.5:1 on every surface it sits on, including the tinted
+ *           active menu item (4.9:1).
+ *   cyan    the dark accent, exactly as drawn: 7.6:1 on a dark card.
+ *   orange  **nothing.** It stays in the logo.
+ *
+ * ⚠ The orange is excluded because it is the warning colour. OKLab ΔE
+ * between the brand orange and `--c-warn` is 3.5 in light and 4.4 in dark —
+ * below what anyone can tell apart — so an orange button or highlight would
+ * read as a warning on every screen it touched. Status owns green, amber and
+ * red on this platform (Guardrail 34).
+ *
+ * ⚠ The accent was green until 23 Sep 2026, and it was the *same RGB* as
+ * `--c-ok`: every selected tab, active menu item and headline-metric chip said
+ * "healthy" about something nobody had judged. Teal is 20 ΔE from `ok` in light
+ * and 16 in dark. `--c-info` moved bluer for the same reason — at its old value
+ * it sat 7–11 ΔE from the new accent, and "selected" and "for your
+ * information" must not look alike.
  *
  * Semantic names only — no colour is named after a Client or a Plant (F-14).
+ * Ability is the platform's own brand, not a Client's.
  */
 
 @layer base {
   :root {
     /* ── Grounds ─────────────────────────────────────────────────────────── */
-    --c-surface: 233 238 235; /* page */
-    --c-surface-raised: 255 255 255; /* cards, panels */
-    --c-surface-sunken: 243 247 244; /* sidebar, table headers */
+    /* Three distinct steps, none of them pure white. The page used to sit
+       ΔE 4.9 from a #FFFFFF card under a #FFFFFF header, so the whole screen
+       read as one glare of white with cards floating on it by shadow alone.
+       Now the page is a navy-tinted mist a clear step below the cards, the
+       cards are an off-white that does not glare, and a card's edge is its
+       border rather than a halo. */
+    --c-surface: 228 232 238; /* page */
+    --c-surface-raised: 252 252 253; /* cards, panels */
+    --c-surface-sunken: 239 242 246; /* tracks, table headers, wells */
 
     /* ── Lines ───────────────────────────────────────────────────────────── */
-    --c-line: 223 230 226;
-    --c-line-soft: 236 241 238;
+    --c-line: 218 223 231;
+    --c-line-soft: 231 235 240;
     /* A line that must read as a deliberate edge rather than a divider: the
        dashed Collector outlines and the SLD connectors. One step darker than
        `line`, never `ink` — an enclosure is context, not content. */
-    --c-line-strong: 202 212 205;
+    --c-line-strong: 196 203 214;
 
     /* ── Text ────────────────────────────────────────────────────────────── */
-    --c-ink: 16 26 21;
-    --c-ink-muted: 88 103 97;
-    --c-ink-faint: 141 152 143;
+    --c-ink: 33 38 59; /* the logo's navy: 15:1 on a card */
+    --c-ink-muted: 88 96 117;
+    --c-ink-faint: 122 130 150;
 
     /* ── Brand + status ──────────────────────────────────────────────────── */
-    --c-accent: 18 164 90;
-    --c-accent-strong: 10 122 65;
-    --c-accent-soft: 230 246 237;
+    --c-accent: 44 106 126;
+    --c-accent-strong: 33 84 101;
+    /* The logo's cyan at 25% over white: the ground of an icon well. */
+    --c-accent-soft: 216 238 241;
+    /* Text on an accent *fill*. White here, navy in dark: the dark accent is
+       light, and white on it would be 2.2:1. Never `text-white` on bg-accent. */
+    --c-on-accent: 255 255 255;
     --c-ok: 18 164 90;
     --c-warn: 224 152 42;
     --c-bad: 223 75 75;
-    --c-info: 47 127 209;
+    --c-info: 58 102 219;
+
+    /* ── Navigation ──────────────────────────────────────────────────────── */
+    /* The sidebar is navy in both themes — the one place the brand is a whole
+       surface rather than an accent, running from the logo's navy to its deep
+       navy. It has its own tokens because nothing from the page works on it:
+       the page's ink is navy, and the page's light accent (a deep teal) is
+       too dark on navy. The nav takes the logo's cyan, which is exactly the
+       pairing the logo itself makes. */
+    --c-nav: 33 38 59;
+    --c-nav-deep: 15 29 56;
+    --c-nav-ink: 238 240 245;
+    --c-nav-muted: 172 180 202;
+    --c-nav-faint: 128 138 166;
+    --c-nav-line: 52 59 86;
+    --c-nav-accent: 98 188 200;
 
     /* Quality codes 0..3 (§4.2). Bad quality must never look like data, so
        these are deliberately kept separate from the brand palette above. */
     --c-q0: 18 164 90;
     --c-q1: 224 152 42;
-    --c-q2: 141 152 143;
+    --c-q2: 122 130 150;
     --c-q3: 223 75 75;
 
     /* ── Chart chrome, read at runtime by ECharts and the SLD ─────────────── */
-    --c-chart-grid: 229 234 231;
-    --c-chart-axis: 141 152 143;
-    --c-chart-tooltip-bg: 255 255 255;
-    --c-chart-tooltip-border: 229 234 231;
+    --c-chart-grid: 231 235 240;
+    --c-chart-axis: 122 130 150;
+    --c-chart-tooltip-bg: 252 252 253;
+    --c-chart-tooltip-border: 218 223 231;
     /* Categorical series colours. Deliberately not semantic — a series identity
        must never be mistaken for a quality or a status.
 
@@ -69,8 +120,9 @@
        slots 1 and 2 were ΔE 0.8 apart under deuteranopia and 9.1 under normal
        vision, so on a chart of seventeen Inverters two of them were the same
        line to everybody and three of them were the same line to one reader in
-       twelve. Verified with the palette validator against this app's own
-       surfaces (#ffffff light, #161d26 dark): every check passes in both.
+       twelve. Re-verified with the palette validator on 23 Sep 2026 against the
+       brand surfaces (#ffffff light, #181d2d and #0b0e18 dark): every check
+       passes in both, and the brand change needed no series change.
 
        Light-mode aqua, yellow and magenta sit just under 3:1 against white,
        which is a documented relief case — it obliges every chart carrying them
@@ -83,7 +135,6 @@
     --c-series-6: 0 131 0; /* green */
     --c-series-7: 74 58 167; /* violet */
     --c-series-8: 227 73 72; /* red */
-
 
     /* ── Depth and ambience ──────────────────────────────────────────────── */
     /*
@@ -109,8 +160,8 @@
      */
     --c-edge-top: 255 255 255;
     --edge-top-alpha: 0.9;
-    --ambient-accent: 0.1;
-    --ambient-info: 0.07;
+    --ambient-accent: 0.05;
+    --ambient-info: 0.03;
 
     /* ── Equipment artwork ───────────────────────────────────────────────── */
     /* The two parts of a device drawing that must know what is behind it.
@@ -120,48 +171,67 @@
        the page, and they invert with it. */
     --art-rim: 255 255 255;
     --art-rim-alpha: 0.6;
-    --art-shadow: 15 30 25;
+    --art-shadow: 21 26 46;
     --art-shadow-alpha: 0.16;
 
-    --shadow-card: 0 1px 2px rgb(16 32 24 / 0.05), 0 2px 5px -2px rgb(16 32 24 / 0.06),
-      0 12px 28px -14px rgb(16 32 24 / 0.16);
-    --shadow-soft: 0 1px 2px rgb(16 32 24 / 0.06);
+    /* Shadows are navy, not black: a neutral shadow on a cool page reads as
+       dirt, one in the page's own hue reads as depth. And they are contact
+       shadows, a pixel or two, not a 28px halo: a card that floats half an
+       inch off the page is the look of a template, while one that sits on it
+       with a firm edge is the look of an instrument. */
+    --shadow-card: 0 1px 0 rgb(21 26 46 / 0.03), 0 1px 3px rgb(21 26 46 / 0.07);
+    --shadow-soft: 0 1px 2px rgb(21 26 46 / 0.06);
 
     color-scheme: light;
   }
 
-  /* System preference, only when the user has not chosen explicitly. */
+  /* System preference, only when the user has not chosen explicitly. The
+     grounds are built on the logo's navy — OKLCH hue 270 against its 273 —
+     where they used to be a neutral slate (257). */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --c-surface: 10 14 20;
-      --c-surface-raised: 23 30 40;
-      --c-surface-sunken: 14 19 26;
+      --c-surface: 11 14 24;
+      --c-surface-raised: 24 29 45;
+      --c-surface-sunken: 16 20 33;
 
-      --c-line: 40 51 66;
-      --c-line-soft: 31 40 53;
-      --c-line-strong: 69 87 110;
+      --c-line: 43 50 72;
+      --c-line-soft: 33 39 57;
+      --c-line-strong: 72 82 110;
 
-      --c-ink: 233 240 247;
-      --c-ink-muted: 148 162 180;
-      --c-ink-faint: 101 115 134;
+      /* The reversed logo's lettering, so the wordmark and the text match. */
+      --c-ink: 238 240 245;
+      --c-ink-muted: 155 163 184;
+      --c-ink-faint: 110 119 143;
 
-      --c-accent: 63 191 122;
-      --c-accent-strong: 94 207 138;
-      --c-accent-soft: 17 42 30;
+      /* The logo's cyan, exactly as drawn. */
+      --c-accent: 98 188 200;
+      --c-accent-strong: 134 207 217;
+      --c-accent-soft: 17 45 55;
+      --c-on-accent: 16 20 33;
       --c-ok: 34 197 94;
       --c-warn: 245 158 11;
       --c-bad: 239 68 68;
-      --c-info: 56 189 248;
+      --c-info: 120 145 250;
+
+      /* Navy on navy: the sidebar sits a step above the page, as it does in
+         light, so the two read as the same object in either theme. */
+      --c-nav: 19 23 38;
+      --c-nav-deep: 12 15 26;
+      --c-nav-ink: 238 240 245;
+      --c-nav-muted: 155 163 184;
+      --c-nav-faint: 112 121 146;
+      --c-nav-line: 33 39 57;
+      --c-nav-accent: 98 188 200;
 
       --c-q0: 34 197 94;
       --c-q1: 245 158 11;
-      --c-q2: 139 152 169;
+      --c-q2: 139 148 172;
       --c-q3: 239 68 68;
 
-      --c-chart-grid: 36 48 64;
-      --c-chart-axis: 139 152 169;
-      --c-chart-tooltip-bg: 22 29 38;
-      --c-chart-tooltip-border: 36 48 64;
+      --c-chart-grid: 38 45 66;
+      --c-chart-axis: 139 148 172;
+      --c-chart-tooltip-bg: 28 34 52;
+      --c-chart-tooltip-border: 43 50 72;
       --c-series-1: 57 135 229; /* blue */
       --c-series-2: 217 89 38; /* orange */
       --c-series-3: 25 158 112; /* aqua */
@@ -171,20 +241,20 @@
       --c-series-7: 144 133 233; /* violet */
       --c-series-8: 230 103 103; /* red */
 
-  
-    /* On a dark ground the top highlight is the *only* thing separating a
-       card's edge from the page — a shadow on near-black is invisible. */
-    --c-edge-top: 168 200 235;
-    --edge-top-alpha: 0.1;
-    --ambient-accent: 0.07;
-    --ambient-info: 0.06;
+      /* On a dark ground the top highlight is the *only* thing separating a
+         card's edge from the page — a shadow on near-black is invisible. */
+      --c-edge-top: 180 194 235;
+      --edge-top-alpha: 0.1;
+      --ambient-accent: 0.07;
+      --ambient-info: 0.05;
 
-    --art-rim: 226 240 255;
-    --art-rim-alpha: 0.24;
-    --art-shadow: 0 0 0;
-    --art-shadow-alpha: 0.45;
+      --art-rim: 226 232 250;
+      --art-rim-alpha: 0.24;
+      --art-shadow: 0 0 0;
+      --art-shadow-alpha: 0.45;
 
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5), 0 16px 32px -16px rgb(0 0 0 / 0.75);
+      --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5),
+        0 16px 32px -16px rgb(0 0 0 / 0.75);
       --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.42);
 
       color-scheme: dark;
@@ -194,35 +264,48 @@
   /* Explicit choice. Repeated rather than shared with the media query above so
      the toggle wins in both directions — light on a dark OS, dark on a light OS. */
   :root[data-theme="dark"] {
-    --c-surface: 10 14 20;
-    --c-surface-raised: 23 30 40;
-    --c-surface-sunken: 14 19 26;
+    --c-surface: 11 14 24;
+    --c-surface-raised: 24 29 45;
+    --c-surface-sunken: 16 20 33;
 
-    --c-line: 40 51 66;
-    --c-line-soft: 31 40 53;
-    --c-line-strong: 69 87 110;
+    --c-line: 43 50 72;
+    --c-line-soft: 33 39 57;
+    --c-line-strong: 72 82 110;
 
-    --c-ink: 233 240 247;
-    --c-ink-muted: 148 162 180;
-    --c-ink-faint: 101 115 134;
+    /* The reversed logo's lettering, so the wordmark and the text match. */
+    --c-ink: 238 240 245;
+    --c-ink-muted: 155 163 184;
+    --c-ink-faint: 110 119 143;
 
-    --c-accent: 63 191 122;
-    --c-accent-strong: 94 207 138;
-    --c-accent-soft: 17 42 30;
+    /* The logo's cyan, exactly as drawn. */
+    --c-accent: 98 188 200;
+    --c-accent-strong: 134 207 217;
+    --c-accent-soft: 17 45 55;
+    --c-on-accent: 16 20 33;
     --c-ok: 34 197 94;
     --c-warn: 245 158 11;
     --c-bad: 239 68 68;
-    --c-info: 56 189 248;
+    --c-info: 120 145 250;
+
+    /* Navy on navy: the sidebar sits a step above the page, as it does in
+       light, so the two read as the same object in either theme. */
+    --c-nav: 19 23 38;
+    --c-nav-deep: 12 15 26;
+    --c-nav-ink: 238 240 245;
+    --c-nav-muted: 155 163 184;
+    --c-nav-faint: 112 121 146;
+    --c-nav-line: 33 39 57;
+    --c-nav-accent: 98 188 200;
 
     --c-q0: 34 197 94;
     --c-q1: 245 158 11;
-    --c-q2: 139 152 169;
+    --c-q2: 139 148 172;
     --c-q3: 239 68 68;
 
-    --c-chart-grid: 36 48 64;
-    --c-chart-axis: 139 152 169;
-    --c-chart-tooltip-bg: 22 29 38;
-    --c-chart-tooltip-border: 36 48 64;
+    --c-chart-grid: 38 45 66;
+    --c-chart-axis: 139 148 172;
+    --c-chart-tooltip-bg: 28 34 52;
+    --c-chart-tooltip-border: 43 50 72;
     --c-series-1: 57 135 229; /* blue */
     --c-series-2: 217 89 38; /* orange */
     --c-series-3: 25 158 112; /* aqua */
@@ -232,20 +315,20 @@
     --c-series-7: 144 133 233; /* violet */
     --c-series-8: 230 103 103; /* red */
 
-
     /* On a dark ground the top highlight is the *only* thing separating a
        card's edge from the page — a shadow on near-black is invisible. */
-    --c-edge-top: 168 200 235;
+    --c-edge-top: 180 194 235;
     --edge-top-alpha: 0.1;
     --ambient-accent: 0.07;
-    --ambient-info: 0.06;
+    --ambient-info: 0.05;
 
-    --art-rim: 226 240 255;
+    --art-rim: 226 232 250;
     --art-rim-alpha: 0.24;
     --art-shadow: 0 0 0;
     --art-shadow-alpha: 0.45;
 
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5), 0 16px 32px -16px rgb(0 0 0 / 0.75);
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5),
+      0 16px 32px -16px rgb(0 0 0 / 0.75);
     --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.42);
 
     color-scheme: dark;
@@ -253,6 +336,21 @@
 
   body {
     @apply bg-surface text-ink antialiased;
+  }
+
+  /* Selected text takes the brand, faintly, rather than the OS blue. */
+  ::selection {
+    background-color: rgb(var(--c-accent) / 0.22);
+  }
+
+  /* One focus ring for the whole app, in the brand, shown only to keyboard
+     users. Without it every browser draws its own thick blue outline — the
+     heaviest line on the screen, around whatever was last clicked. A control
+     that sets its own ring (`focus:outline-none focus:ring-…`) still wins:
+     its selector is more specific. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 2px;
   }
 
   /* Native controls inherit the themed ground; a white select on a dark panel
@@ -284,6 +382,86 @@
  * halves from drifting apart across forty call sites.
  */
 @layer components {
+  /**
+   * The sidebar: navy from the logo's navy to its deep navy, in both themes.
+   *
+   * Everything inside takes the `nav-*` tokens, never the page's — on navy the
+   * page's ink is invisible and its light-mode accent too dark to read.
+   */
+  .app-nav {
+    background-color: rgb(var(--c-nav));
+    background-image: linear-gradient(180deg, rgb(var(--c-nav)) 0%, rgb(var(--c-nav-deep)) 100%);
+    color: rgb(var(--c-nav-ink));
+  }
+  .app-nav :focus-visible {
+    outline-color: rgb(var(--c-nav-accent));
+  }
+  .app-nav ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--c-nav-line));
+  }
+
+  /**
+   * The label that names a tile or a card — "Total capacity" above a figure.
+   *
+   * Sentence case in the interface face, never small caps. Every card on the
+   * platform used to open with an 11px uppercase label tracked out wide, which
+   * is the single most recognisable mark of a generated dashboard, and it
+   * wrapped "FLEET PERFORMANCE RATIO" onto three lines so that tile's figure
+   * sat lower than its neighbours'. Uppercase is kept where it is the
+   * convention: a table's column heads, the sidebar's group headings, a stage
+   * name in a diagram.
+   */
+  .tile-label {
+    @apply text-[13px] font-medium leading-snug text-ink-muted;
+  }
+
+  /**
+   * A smaller label over a value in a dense grid of them (a Plant card). Muted,
+   * not faint: faint is 3.6:1 on a card, under what 12px text needs.
+   */
+  .field-label {
+    @apply text-xs font-medium text-ink-muted;
+  }
+
+  /**
+   * A page's title. One size on every screen: the dashboards used a bold 3xl
+   * and every other screen a small semibold, so moving from Portfolio to
+   * Alarms the heading shrank by half and the page read as a lesser one.
+   */
+  .page-title {
+    @apply text-3xl font-bold tracking-tight text-ink;
+  }
+
+  /**
+   * The icon well: the square an identity icon sits in on every tile and card.
+   *
+   * One class so every well on the platform is the same object — the logo's
+   * pale cyan in light, a dark teal in dark, the accent for the glyph, and a
+   * hairline ring that keeps its edge on a white card. Status wells (an open
+   * Alarm count) are the caller's, in the status hue, and never this.
+   */
+  .icon-well {
+    background-color: rgb(var(--c-accent-soft));
+    color: rgb(var(--c-accent));
+    box-shadow: inset 0 0 0 1px rgb(var(--c-accent) / 0.14);
+  }
+
+  /**
+   * A headline figure: the interface's own face with tabular digits.
+   *
+   * Figures were set in monospace for digit alignment, and it made every
+   * number on the dashboard read like a terminal line beside sans labels.
+   * Tabular figures give the same alignment — every digit the same width, so
+   * a ticking value does not jitter — in the typeface the rest of the screen
+   * is set in. Codes (a Plant code, a topic) stay monospace; they are
+   * identifiers, not quantities.
+   */
+  .figure {
+    font-family: theme("fontFamily.sans");
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
   /**
    * The page behind the whole application.
    *

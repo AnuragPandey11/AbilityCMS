@@ -488,6 +488,50 @@ PLANT_POWER_SOURCE_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
     ("INVERTER", "AC_ACTIVE_POWER"),
 )
 
+# ── Energy over a period, from lifetime counters — ⚠ PROPOSED (OPEN-14).
+#
+# The same Device-Type order as `PLANT_ENERGY_SOURCE_PRECEDENCE` above, read from
+# each Type's *lifetime* register instead of its daily one, because a period
+# longer than a day (a month, a Report) cannot be answered from a register that
+# resets at midnight. The order must match — a KPI screen and a Report must not
+# prefer different meters — and `test_assumptions_integrity` asserts it.
+#
+# ⚠ Which meter is commercially binding is the client's to say (OPEN-14). The
+# ABT Meter first is the engineering default, not their answer. Financial
+# Reports are not governed by this list at all: I-11 restricts them to the ABT
+# Meter with no fallback.
+PLANT_ENERGY_COUNTER_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
+    ("ABT_METER", "ENERGY_EXPORT_TOTAL"),
+    ("MFM", "ENERGY_EXPORT_TOTAL"),
+    ("INVERTER", "ENERGY_TOTAL"),
+)
+
+# ── Counter plausibility — ⚠ ASSUMED.
+#
+# A step in a lifetime energy counter is refused, and reported, when it goes
+# backwards (a rollover, a replaced meter or a reset — indistinguishable without
+# the rollover maximum OPEN-14 asks for, MASTER §5.4) or when it is larger than
+# the equipment could have produced in the time between the two readings:
+# nameplate AC capacity x elapsed hours x this margin. The margin allows for
+# modest overloading and for the rounding of a coarse aggregate bucket; it is
+# deliberately loose, because refusing real generation is its own kind of lie,
+# while the failures it exists to catch are orders of magnitude larger (a
+# 240 kWp rooftop "producing" 808,000 kWh in two minutes).
+COUNTER_JUMP_CAPACITY_MARGIN: Final = 1.5
+# Steps closer together than this are judged as though this far apart, so two
+# readings a second apart cannot make a normal increment look impossible.
+COUNTER_STEP_MIN_ELAPSED_S: Final = 60.0
+
+# ── Irradiation — ⚠ ASSUMED physical ceiling.
+#
+# Global horizontal irradiance at the ground does not exceed ~1.2 kW/m² for
+# long; cloud-edge enhancement briefly reaches ~1.4 to 1.5. A cumulative
+# irradiation register climbing faster than this per hour is a fault, not sun.
+MAX_IRRADIATION_KWH_PER_M2_PER_HOUR: Final = 1.5
+# The daily cumulative irradiation Tags, which reset at local midnight by
+# design — so a backwards step in them is expected, not suspect.
+PLANT_IRRADIATION_SOURCE: Final[tuple[str, str]] = ("WMS", "GHI_CUMULATIVE")
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # Day-boundary rollover — SUPPLIED.

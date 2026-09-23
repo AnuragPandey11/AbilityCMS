@@ -15,10 +15,17 @@ import {
   useAllPlants,
   useAlarms,
   useDeviceHealth,
+  usePlantDashboardFanout,
   usePlantKpiFanout,
 } from "@/api/hooks";
-import type { KpiFigure, PlantListItem } from "@/api/schemas";
-import { KpiTile, StatTile } from "@/components/charts/KpiTile";
+import type {
+  Alarm,
+  DeviceHealth,
+  KpiFigure,
+  PlantDashboard,
+  PlantListItem,
+  ResolvedSlot,
+} from "@/api/schemas";
 import { Panel, SectionHeading, Badge } from "@/components/ui";
 import {EmptyState, ErrorState, SkeletonChart, SkeletonKpiRow, SkeletonTable} from "@/components/state";
 import {
@@ -28,25 +35,81 @@ import {
   SeverityBadge,
   isOnboarding,
 } from "@/components/domain";
+import { sourceLabel } from "@/components/dashboard/SlotValue";
 import { DataTable, type Column } from "@/components/tables/DataTable";
-import { formatCapacity, formatNumber } from "@/format/value";
+import {
+  UNDEFINED_DISPLAY,
+  formatCapacity,
+  formatHeadline,
+  formatNumber,
+  formatRatioAsPercent,
+  implausibleRatioReason,
+  ratioIsImplausible,
+  variantNote,
+} from "@/format/value";
 import { useSelection } from "@/state/selection";
 import { useNavigate } from "react-router-dom";
 import {
   IconAlarm,
   IconAvailability,
+  IconCalendar,
   IconCapacity,
-  IconEnergy,
+  IconClock,
   IconGauge,
   IconHealth,
   IconLeaf,
+  IconPower,
 } from "@/components/icons";
+import type { IconProps } from "@/components/icons";
+import type { ComponentType } from "react";
 import {
   fleetTotal,
   instrumentedSplit,
   weightedRatio,
 } from "./fleet/aggregate";
+import {
+  conditionCounts,
+  fleetStatusWord,
+  plantCondition,
+  sumLivePower,
+} from "./fleet/condition";
 import { FleetComparison, buildFleetRows } from "./fleet/FleetComparison";
+import {
+  FleetCard,
+  FleetTile,
+  GenerationBars,
+  HeaderCell,
+  PlantStatusRing,
+  StatusWord,
+  SummaryRow,
+  TileFigure,
+  type GenerationRow,
+  type TileTone,
+} from "./fleet/PortfolioParts";
+
+/** A slot by code, wherever the catalogue placed it. `null` once resolved and absent. */
+function slotFor(
+  dashboard: PlantDashboard | undefined,
+  code: string,
+): ResolvedSlot | null | undefined {
+  if (dashboard === undefined) return undefined;
+  for (const slots of Object.values(dashboard.panels)) {
+    const slot = slots.find((candidate) => candidate.slot_code === code);
+    if (slot) return slot;
+  }
+  return null;
+}
+
+function groupByPlant<T extends { plant_id: number | null }>(rows: T[]): Map<number, T[]> {
+  const grouped = new Map<number, T[]>();
+  for (const row of rows) {
+    if (row.plant_id === null) continue;
+    const bucket = grouped.get(row.plant_id);
+    if (bucket) bucket.push(row);
+    else grouped.set(row.plant_id, [row]);
+  }
+  return grouped;
+}
 
 export function PortfolioDashboard(): JSX.Element {
   const navigate = useNavigate();
@@ -68,11 +131,14 @@ export function PortfolioDashboard(): JSX.Element {
   // Every figure on this screen was therefore fixed at page load: on a wall
   // display it never moved again, which reads as a plant that has stopped.
   const { kpis, isLoading: kpisLoading } = usePlantKpiFanout(counted, period);
+  // Live generation is each Plant's own resolved Current Power, summed — so
+  // every contribution keeps the provenance its Plant screen shows.
+  const { dashboards } = usePlantDashboardFanout(counted);
 
   if (plantsQuery.isLoading) {
     return (
       <div className="space-y-6">
-        <SkeletonKpiRow tiles={6} />
+        <SkeletonKpiRow tiles={8} />
         <SkeletonChart />
         <SkeletonTable rows={6} columns={5} />
       </div>
@@ -135,6 +201,62 @@ export function PortfolioDashboard(): JSX.Element {
     severity,
     count: alarms.filter((alarm) => alarm.severity === severity).length,
   }));
+  const severeAlarms = alarms.filter((a) => a.severity === "critical" || a.severity === "high").length;
+  const alarmTone: TileTone = alarms.length === 0 ? "ok" : severeAlarms > 0 ? "bad" : "warn";
+
+  // Condition reads open Alarms and Device communication — never a KPI.
+  const healthByPlant = groupByPlant<DeviceHealth>(healthQuery.data ?? []);
+  const alarmsByPlant = groupByPlant<Alarm>(alarms);
+  const counts = conditionCounts(
+    counted.map((plant) =>
+      plantCondition({
+        health: healthByPlant.get(plant.id) ?? [],
+        alarms: alarmsByPlant.get(plant.id) ?? [],
+      }),
+    ),
+  );
+  const fleetStatus = fleetStatusWord(counts, counted.length);
+  const countedDevices = counted.flatMap((plant) => healthByPlant.get(plant.id) ?? []);
+  const devicesOnline = countedDevices.filter((d) => d.comm_status === "online").length;
+
+  const powerSlots = counted.map((_, index) => slotFor(dashboards[index], "kpi.current_power"));
+  const live = sumLivePower(powerSlots);
+  const liveLoading = powerSlots.some((slot) => slot === undefined);
+  const liveFooter = liveLoading
+    ? "Resolving each Plant…"
+    : live.mixedUnits
+      ? "Plants report power in different units; not summed."
+      : live.value === null
+        ? "No Plant has a current-power figure."
+        : `Σ ${live.contributing} of ${live.total} Plant${live.total === 1 ? "" : "s"}${
+            live.contributing < live.total ? " · partial" : ""
+          }`;
+
+  // Largest first. A Plant with no Current Power position draws a dash, never
+  // a zero bar. The track is the Plant's DC capacity only where the power is
+  // in kW — a unit is never converted to make a bar fit.
+  const generationRows: GenerationRow[] = counted
+    .map((plant, index) => {
+      const slot = powerSlots[index];
+      return {
+        key: plant.id,
+        label: plant.name,
+        value: slot?.value ?? null,
+        max: slot?.unit === "kW" ? plant.dc_capacity_kwp : null,
+        hint:
+          slot === undefined
+            ? "Resolving…"
+            : slot === null
+              ? "No Current Power position on this Plant's dashboard."
+              : slot.value === null
+                ? "The source is registered and reporting nothing."
+                : `${formatNumber(slot.value)} ${slot.unit ?? ""} · ${sourceLabel(slot.source)}${
+                    slot.source?.tag_code ? ` · ${slot.source.tag_code}` : ""
+                  }`,
+      };
+    })
+    .sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
+  const generationUnit = live.unit ?? "kW";
 
   const openPlant = (plantId: number) => {
     setPlantId(plantId);
@@ -176,14 +298,61 @@ export function PortfolioDashboard(): JSX.Element {
     },
   ];
 
+  const ratioTile = (
+    label: string,
+    icon: ComponentType<IconProps>,
+    iconTone: TileTone,
+    figure: KpiFigure,
+    footer: string,
+    hint?: string,
+    showHint = false,
+  ) => {
+    // A ratio outside its physical range is a fault in the inputs, not a
+    // result: shown unaltered, flagged, and pointed at the coverage.
+    const implausible = ratioIsImplausible(figure.value);
+    return (
+      <FleetTile
+        className="xl:col-span-4"
+        icon={icon}
+        iconTone={iconTone}
+        frame={implausible ? "warn" : "neutral"}
+        label={label}
+        hint={hint}
+        showHint={showHint}
+        footer={
+          figure.value === null
+            ? figure.undefined_reason
+            : implausible
+              ? "Outside its physical range — check each Plant's coverage"
+              : footer
+        }
+        footerTone={implausible ? "warn" : "faint"}
+      >
+        <TileFigure
+          value={figure.value === null ? null : formatRatioAsPercent(figure.value)}
+          tone={implausible ? "warn" : "ink"}
+          loading={kpisLoading}
+          title={
+            figure.value === null
+              ? (figure.undefined_reason ?? undefined)
+              : implausible
+                ? implausibleRatioReason(figure.value, label)
+                : undefined
+          }
+        />
+      </FleetTile>
+    );
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-ink">Portfolio</h1>
-          <p className="text-xs text-ink-muted">
-            Computed across {counted.length} active Plant(s). Portfolio is never
-            stored — these figures are summed from each Plant.
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 max-w-[34rem]">
+          <h1 className="page-title">Portfolio</h1>
+          <p className="mt-1.5 text-sm leading-snug text-ink-muted">
+            All Plants overview · computed across {counted.length} active Plant
+            {counted.length === 1 ? "" : "s"}. Never stored — every figure is summed from
+            each Plant&apos;s own.
           </p>
           {/*
             Which Plants actually contributed to the averages. A fleet ratio
@@ -192,7 +361,7 @@ export function PortfolioDashboard(): JSX.Element {
             unless it is said.
           */}
           {split.notInstrumented > 0 ? (
-            <p className="mt-0.5 text-[11px] text-warn">
+            <p className="mt-1 text-xs text-warn">
               {split.notInstrumented} of {counted.length} active Plant(s) have no Devices
               bound, so nothing was expected of them. They are excluded from the averages
               below — counting their zeros would report a fleet that is not under-performing
@@ -200,81 +369,231 @@ export function PortfolioDashboard(): JSX.Element {
             </p>
           ) : null}
         </div>
-        <PeriodPicker value={period} onChange={setPeriod} />
+        <div className="flex flex-wrap items-stretch gap-3 lg:shrink-0 lg:justify-end">
+          <HeaderCell
+            label="Plants online"
+            title="Active Plants whose every Device is reporting with no Alarm open."
+          >
+            <span className={counts.online === counted.length ? "text-ok" : "text-ink"}>
+              {counts.online} / {counted.length}
+            </span>
+          </HeaderCell>
+          <HeaderCell label="Fleet status" title={fleetStatus.detail}>
+            <StatusWord word={fleetStatus.word} tone={fleetStatus.tone} />
+          </HeaderCell>
+          <div className="flex items-center">
+            <PeriodPicker value={period} onChange={setPeriod} size="lg" />
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
-        <StatTile
-          label="Total DC capacity"
+      {/*
+        Two rows that each mean one thing: what the fleet *produces* (capacity,
+        power, energy, CO₂) and how it is *performing* (PR, CUF, availability,
+        Alarms, Devices). On a wide screen that is 4 over 5, on a 20-column grid
+        so both rows fill edge to edge. Narrower, it is 3 × 3 — CO₂ drops to
+        the last row beside the two status tiles, so each row still reads as
+        one group — and 2 across below that.
+      */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[repeat(20,minmax(0,1fr))]">
+        <FleetTile
+          className="xl:col-span-5"
           icon={IconCapacity}
-          numeric={totalDcCapacity}
-          unit="kWp"
-          footnote={`AC ${formatCapacity(totalAcCapacity, "kW")}`}
+          iconTone="accent"
+          label="Total capacity"
+          footer={`AC ${formatCapacity(totalAcCapacity, "kW")} · active Plants only`}
           hint="Sums active Plants only. Draft and commissioning Plants are excluded."
-        />
-        <StatTile
-          label={`Energy (${period})`}
-          icon={IconEnergy}
-          {...(kpisLoading ? { value: "…" } : { numeric: totalEnergy, unit: "kWh" })}
+        >
+          <TileFigure value={totalDcCapacity} unit="kWp" />
+        </FleetTile>
+        <FleetTile
+          className="xl:col-span-5"
+          icon={IconPower}
+          iconTone="accent"
+          label="Live generation"
+          footer={liveFooter}
+          showHint
+          hint="The sum of each Plant's resolved Current Power. Provenance per Plant is on Generation by Plant — hover a bar."
+        >
+          <TileFigure value={live.value} unit={live.unit} loading={liveLoading} />
+        </FleetTile>
+        <FleetTile
+          className="xl:col-span-5"
+          icon={IconCalendar}
+          iconTone="accent"
+          label={`Energy · ${period}`}
+          footer="From hourly aggregates, never raw Readings"
+          showHint
           hint="Summed from each Plant's export counter endpoints, read from hourly aggregates rather than raw Readings."
-        />
-        <KpiTile
-          label="Fleet performance ratio"
-          icon={IconGauge}
-          figure={fleetPr}
-          kind="ratio"
-          hint="Capacity-weighted across active Plants. Plants with an undefined PR are excluded from the weighting, never counted as zero."
-        />
-        <KpiTile
-          label="Fleet availability"
-          icon={IconAvailability}
-          figure={fleetAvailability}
-          kind="ratio"
-          hint="Capacity-weighted. Communication loss and equipment downtime are distinguished at the Device level."
-        />
-        <KpiTile
-          label="Fleet CUF"
-          icon={IconGauge}
-          figure={fleetCuf}
-          kind="ratio"
-          hint="Capacity utilisation factor, capacity-weighted."
-        />
-        <StatTile
-          label="CO₂ avoided"
+        >
+          <TileFigure value={totalEnergy} unit="kWh" loading={kpisLoading} />
+        </FleetTile>
+        <FleetTile
+          className="lg:order-1 xl:order-none xl:col-span-5"
           icon={IconLeaf}
-          {...(kpisLoading ? { value: "…" } : { numeric: totalCo2, unit: "kg" })}
+          iconTone="accent"
+          label={`CO₂ avoided · ${period}`}
+          footer="Each Region's grid factor · provisional (OPEN-16)"
           hint="Uses each region's grid emission factor. Provisional pending OPEN-16."
-        />
-        <StatTile
-          label="Active alarms"
+        >
+          <TileFigure value={totalCo2} unit="kg" loading={kpisLoading} />
+        </FleetTile>
+        {ratioTile(
+          "Fleet performance ratio",
+          IconGauge,
+          "accent",
+          fleetPr,
+          `Capacity-weighted · ${variantNote(fleetPr.variant)}`,
+          "Capacity-weighted across active Plants. Plants with an undefined PR are excluded from the weighting, never counted as zero.",
+          true,
+        )}
+        {ratioTile(
+          "Fleet CUF",
+          IconClock,
+          "accent",
+          fleetCuf,
+          "Capacity-weighted",
+          "Capacity utilisation factor, capacity-weighted.",
+        )}
+        {ratioTile(
+          "Fleet availability",
+          IconAvailability,
+          "accent",
+          fleetAvailability,
+          "Communication status, capacity-weighted",
+          "Capacity-weighted. Communication loss and equipment downtime are distinguished at the Device level.",
+        )}
+        <FleetTile
+          className="lg:order-1 xl:order-none xl:col-span-4"
           icon={IconAlarm}
-          numeric={alarms.length}
-          digits={0}
-          tone={alarms.length > 0 ? "warn" : "default"}
-          footnote={
-            <span className="flex flex-wrap gap-1">
-              {bySeverity
-                .filter((entry) => entry.count > 0)
-                .map((entry) => (
-                  <span key={entry.severity} className="inline-flex items-center gap-1">
-                    <SeverityBadge severity={entry.severity} />
-                    {entry.count}
-                  </span>
-                ))}
-              {alarms.length === 0 ? "None open" : null}
-            </span>
+          iconTone={alarmTone}
+          frame={alarmTone}
+          label="Active alarms"
+          footer={
+            alarms.length === 0 ? (
+              "None open across the fleet"
+            ) : (
+              <span className="flex flex-wrap gap-1">
+                {bySeverity
+                  .filter((entry) => entry.count > 0)
+                  .map((entry) => (
+                    <span key={entry.severity} className="inline-flex items-center gap-1">
+                      <SeverityBadge severity={entry.severity} />
+                      {entry.count}
+                    </span>
+                  ))}
+              </span>
+            )
           }
-        />
-        <StatTile
-          label="Device health"
+        >
+          <TileFigure value={alarms.length} digits={0} tone={alarmTone} />
+        </FleetTile>
+        <FleetTile
+          className="sm:col-span-2 lg:order-1 lg:col-span-1 xl:order-none xl:col-span-4"
           icon={IconHealth}
-          value={
-            <span className="text-base">
-              <DeviceHealthStrip health={healthQuery.data} />
-            </span>
+          iconTone="accent"
+          frame={
+            countedDevices.length > 0 && devicesOnline < countedDevices.length ? "warn" : "neutral"
           }
-          hint="Across every visible Plant."
-        />
+          label="Devices reporting"
+          hint="Registered Devices within their expected interval, across active Plants."
+          footer={
+            countedDevices.length === 0 ? (
+              "No Devices registered"
+            ) : devicesOnline === countedDevices.length ? (
+              "All within their expected interval"
+            ) : (
+              <DeviceHealthStrip health={countedDevices} />
+            )
+          }
+        >
+          <TileFigure
+            value={
+              countedDevices.length === 0 ? null : `${devicesOnline} / ${countedDevices.length}`
+            }
+            tone={devicesOnline < countedDevices.length ? "warn" : "ink"}
+          />
+        </FleetTile>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+        <FleetCard
+          className="xl:col-span-5"
+          title="Generation by Plant"
+          subtitle={`Current power against registered capacity (${generationUnit} on kWp). Each Plant's own source; hover for provenance.`}
+        >
+          {generationRows.length === 0 ? (
+            <EmptyState title="No active Plants" detail="Nothing to rank yet." />
+          ) : (
+            <GenerationBars rows={generationRows} onSelect={openPlant} />
+          )}
+        </FleetCard>
+
+        <FleetCard
+          className="xl:col-span-3"
+          title="Plant Status"
+          subtitle="From open Alarms and Device communication — never from a KPI."
+        >
+          <PlantStatusRing counts={counts} total={counted.length} />
+        </FleetCard>
+
+        <FleetCard
+          className="xl:col-span-4"
+          title="Fleet Summary"
+          subtitle="What the whole estate is doing right now."
+        >
+          <div className="-mt-3 divide-y divide-line">
+            <SummaryRow
+              label="Plants online"
+              value={`${counts.online} / ${counted.length}`}
+              tone={counts.online === counted.length ? "ok" : "ink"}
+            />
+            <SummaryRow
+              label="Devices reporting"
+              value={
+                countedDevices.length === 0
+                  ? UNDEFINED_DISPLAY
+                  : `${devicesOnline} / ${countedDevices.length}`
+              }
+              tone={
+                countedDevices.length > 0 && devicesOnline < countedDevices.length ? "warn" : "ink"
+              }
+              hint="Registered Devices within their expected interval, across active Plants."
+            />
+            <SummaryRow
+              label="Live generation"
+              value={
+                liveLoading
+                  ? "…"
+                  : live.value === null
+                    ? UNDEFINED_DISPLAY
+                    : `${formatHeadline(live.value).text} ${live.unit ?? ""}`
+              }
+              hint={live.contributing < live.total ? liveFooter : undefined}
+            />
+            <SummaryRow
+              label={`Energy · ${period}`}
+              value={kpisLoading ? "…" : `${formatHeadline(totalEnergy).text} kWh`}
+            />
+            <SummaryRow
+              label={`CO₂ avoided · ${period}`}
+              value={kpisLoading ? "…" : `${formatHeadline(totalCo2).text} kg`}
+            />
+            <SummaryRow
+              label="Open alarms"
+              value={String(alarms.length)}
+              tone={alarmTone === "ok" ? "ok" : alarmTone === "bad" ? "bad" : "warn"}
+            />
+            {onboarding.length > 0 ? (
+              <SummaryRow
+                label="Onboarding"
+                value={`${onboarding.length} not counted`}
+                tone="faint"
+                hint="Draft and commissioning Plants are excluded from every total."
+              />
+            ) : null}
+          </div>
+        </FleetCard>
       </div>
 
       {/*

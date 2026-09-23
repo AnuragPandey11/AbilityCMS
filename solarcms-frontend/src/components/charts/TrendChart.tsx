@@ -57,7 +57,7 @@ export interface TrendChartProps {
   height?: number;
   /** `area` for a rate (power, irradiance); `bar` for a per-bucket total. */
   shape?: "area" | "bar";
-  /** Series colour. Defaults to categorical slot 1. */
+  /** Series colour. Defaults to the brand accent — this chart is one series. */
   colorToken?: "series" | "accent";
   /** Mark and label the maximum. Off for a chart where the peak means nothing. */
   markPeak?: boolean;
@@ -122,9 +122,11 @@ function axisGutter(points: TrendPoint[]): number {
 /**
  * The series colour, resolved at render so it follows the theme.
  *
- * Slot 1 of the categorical palette, never a hue picked here. The slot order is
- * the colourblind-safety mechanism (see `index.css`), so a chart that reaches
- * past it is outside what the validator checked.
+ * The brand accent by default. This chart always draws exactly one series, so
+ * its hue has nothing to be told apart from, and the categorical palette —
+ * whose slot order is the colourblind-safety mechanism (see `index.css`) — is
+ * for charts that do. `"series"` still selects slot 1 for a caller that sits a
+ * trend beside a multi-series chart and wants them to agree.
  */
 function seriesColor(which: "series" | "accent"): string {
   return which === "accent" ? token("accent") : (seriesPalette()[0] ?? token("accent"));
@@ -139,7 +141,7 @@ export function TrendChart({
   timezone = DEFAULT_TIMEZONE,
   height = 200,
   shape = "area",
-  colorToken = "series",
+  colorToken = "accent",
   markPeak = true,
   flaggedCount = 0,
   isLoading = false,

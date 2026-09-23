@@ -111,3 +111,17 @@ class TestUnknownsStayUnknown:
         # energy on the day one happens.
         assert a.COUNTER_ROLLOVER_MAXIMUM is None
         assert a.NEGATIVE_DELTA_IS_SUSPECT is True
+
+
+class TestEnergyPrecedence:
+    def test_the_counter_precedence_prefers_the_same_meters_as_the_daily_one(self) -> None:
+        # A KPI screen and a Report must not prefer different meters. The two
+        # lists read different registers (lifetime vs daily) but must rank the
+        # Device Types identically — OPEN-14 changes both or neither.
+        daily = [type_code for type_code, _tag in a.PLANT_ENERGY_SOURCE_PRECEDENCE]
+        lifetime = [type_code for type_code, _tag in a.PLANT_ENERGY_COUNTER_PRECEDENCE]
+        assert daily == lifetime
+
+    def test_every_counter_in_the_precedence_is_a_cumulative_tag(self) -> None:
+        for _type_code, tag_code in a.PLANT_ENERGY_COUNTER_PRECEDENCE:
+            assert a.TAG_SPECS[tag_code].cumulative, tag_code

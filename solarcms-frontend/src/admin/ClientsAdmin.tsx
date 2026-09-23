@@ -222,8 +222,8 @@ export function ClientsAdmin(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-ink">Clients</h1>
-          <p className="max-w-2xl text-xs leading-relaxed text-ink-muted">
+          <h1 className="page-title">Clients</h1>
+          <p className="max-w-2xl mt-1.5 text-sm leading-relaxed text-ink-muted">
             {mode === "new"
               ? "Register a new Client and the login that comes with it. Nothing here needs the broker."
               : "Change a Client's details, contract record or access, and see what it is publishing."}

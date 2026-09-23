@@ -68,62 +68,68 @@ export function SummaryCard({
       ? "border-bad/40 bg-bad/[0.05]"
       : accent === "warn"
         ? "border-warn/40 bg-warn/[0.05]"
-        : "surface-tile border-line";
+        : "surface-card border-line";
 
   const body = (
     <>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2.5">
+        {/*
+          One hue for every chip — the brand accent — unless the caller has
+          already made a judgement (open Alarms, Devices offline). A tint per
+          card would sit beside the figures and be read as a verdict on them.
+        */}
         <span
-          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-control ${
             accent === "bad"
-              ? "bg-bad/12 text-bad"
+              ? "bg-bad/15 text-bad"
               : accent === "warn"
-                ? "bg-warn/12 text-warn"
-                : "bg-accent/10 text-accent"
+                ? "bg-warn/15 text-warn"
+                : "icon-well"
           }`}
         >
-          <Icon size={12} />
+          <Icon size={17} />
         </span>
-        <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+        {/* Wraps rather than truncates: six across, "PERFORMA…" names nothing. */}
+        <span className="min-w-0 text-sm font-semibold leading-snug text-ink">
           {title}
         </span>
         {interactive ? (
-          <IconChevronRight size={13} className="ml-auto shrink-0 text-ink-faint" />
+          <IconChevronRight size={15} className="ml-auto shrink-0 text-ink-faint" />
         ) : null}
       </div>
 
       {unavailable ? (
-        <p className="mt-2 text-[10px] leading-snug text-ink-faint">{unavailable}</p>
+        <p className="mt-4 text-xs leading-snug text-ink-faint">{unavailable}</p>
       ) : (
         <>
-          <div className="mt-1.5 space-y-0.5">
+          <div className="mt-4 space-y-2.5 border-t border-line pt-3">
             {figures.map((figure) => (
-              <div key={figure.label} className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-[10px] text-ink-faint">{figure.label}</span>
+              <div key={figure.label} className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 text-sm leading-snug text-ink-muted" title={figure.label}>
+                  {figure.label}
+                </span>
                 <span
-                  className={`shrink-0 font-mono text-[12px] tabular-nums ${TONES[figure.tone ?? "default"]}`}
+                  className={`figure shrink-0 text-base font-semibold ${TONES[figure.tone ?? "default"]}`}
                   title={figure.title}
                 >
                   {figure.value}
                   {figure.unit ? (
-                    <span className="ml-0.5 text-[9px] text-ink-muted">{figure.unit}</span>
+                    <span className="ml-1 text-xs font-normal text-ink-muted">{figure.unit}</span>
                   ) : null}
                 </span>
               </div>
             ))}
           </div>
           {count ? (
-            <div className="mt-1.5 border-t border-line-soft pt-1 text-[9px] text-ink-faint">
-              {count}
-            </div>
+            <div className="mt-auto pt-4 text-xs text-ink-faint">{count}</div>
           ) : null}
         </>
       )}
     </>
   );
 
-  const className = `flex min-w-0 flex-col rounded-card border p-2.5 text-left ${frame} ${
-    interactive ? "surface-interactive cursor-pointer hover:border-accent/55" : ""
+  const className = `flex h-full min-w-0 flex-col rounded-card border p-4 text-left ${frame} ${
+    interactive ? "surface-interactive cursor-pointer transition hover:border-accent/55" : ""
   } ${unavailable ? "opacity-60" : ""}`;
 
   if (!interactive) return <div className={className}>{body}</div>;

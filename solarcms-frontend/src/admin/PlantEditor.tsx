@@ -292,8 +292,8 @@ export function PlantEditor(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-ink">Plants &amp; Devices</h1>
-          <p className="max-w-2xl text-xs leading-relaxed text-ink-muted">
+          <h1 className="page-title">Plants &amp; Devices</h1>
+          <p className="max-w-2xl mt-1.5 text-sm leading-relaxed text-ink-muted">
             {mode === "new"
               ? "Register a new Plant under a Client. Its Devices come next, added by topic."
               : "Change a Plant's details, and add or remove its Devices. Open a Device to see its topic, its Tags and its health in one place."}

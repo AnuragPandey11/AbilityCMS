@@ -16,8 +16,10 @@
  */
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useReportDefinitions, useReportRun } from "@/api/hooks";
+import { qk } from "@/api/queryKeys";
+import * as clientsApi from "@/api/endpoints/clients";
 import * as reportsApi from "@/api/endpoints/reports";
 import { artifactHref } from "@/api/client";
 import { isApiError } from "@/api/problem";
@@ -26,10 +28,21 @@ import { EmptyState, ErrorState, ForbiddenState, LoadingState } from "@/componen
 import { formatDateTime, toDateInput } from "@/format/datetime";
 import { formatNumber } from "@/format/value";
 import { usePermission } from "@/auth/usePermission";
+import { useAuth } from "@/auth/AuthProvider";
 
 export function ReportsDashboard(): JSX.Element {
   const canGenerate = usePermission("report.generate");
   const definitionsQuery = useReportDefinitions(canGenerate);
+  const { me } = useAuth();
+  // A Super Admin belongs to no Client, and every Report run is filed under one.
+  const needsClient = me?.platform_admin === true && me.client_id === null;
+  const clientsQuery = useQuery({
+    queryKey: qk.clients(),
+    queryFn: clientsApi.listClients,
+    enabled: needsClient,
+    retry: false,
+  });
+  const [clientId, setClientId] = useState<number | null>(null);
 
   const monthAgo = new Date(Date.now() - 30 * 86400_000);
   const [definitionId, setDefinitionId] = useState<number | null>(null);
@@ -47,6 +60,7 @@ export function ReportsDashboard(): JSX.Element {
         definitionId as number,
         new Date(`${periodStart}T00:00:00`).toISOString(),
         new Date(`${periodEnd}T23:59:59`).toISOString(),
+        needsClient ? clientId : null,
       ),
     onMutate: () => {
       setAbtRefusal(null);
@@ -88,8 +102,8 @@ export function ReportsDashboard(): JSX.Element {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold text-ink">Reports</h1>
-        <p className="text-xs text-ink-muted">
+        <h1 className="page-title">Reports</h1>
+        <p className="mt-1.5 text-sm text-ink-muted">
           Reports are rendered asynchronously by the scheduler and read from aggregate
           tiers, never from raw Readings.
         </p>
@@ -104,6 +118,28 @@ export function ReportsDashboard(): JSX.Element {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[20rem_1fr]">
           <Panel title="Request a Report">
             <div className="space-y-3">
+              {needsClient ? (
+                <Field label="Client" required>
+                  <select
+                    value={clientId ?? ""}
+                    onChange={(event) =>
+                      setClientId(event.target.value ? Number(event.target.value) : null)
+                    }
+                    className={inputClass}
+                    disabled={clientsQuery.isLoading}
+                  >
+                    <option value="">
+                      {clientsQuery.isLoading ? "Loading…" : "Choose…"}
+                    </option>
+                    {(clientsQuery.data ?? []).map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              ) : null}
+
               <Field label="Definition" required>
                 <select
                   value={definitionId ?? ""}
@@ -159,7 +195,11 @@ export function ReportsDashboard(): JSX.Element {
               <Button
                 variant="primary"
                 className="w-full"
-                disabled={definitionId === null || requestRun.isPending}
+                disabled={
+                  definitionId === null ||
+                  (needsClient && clientId === null) ||
+                  requestRun.isPending
+                }
                 onClick={() => requestRun.mutate()}
               >
                 {requestRun.isPending ? "Requesting…" : "Generate"}

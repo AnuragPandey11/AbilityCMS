@@ -36,6 +36,19 @@ export default {
           strong: token("accent-strong"),
           soft: token("accent-soft"),
         },
+        // Text on an accent fill: white in light, navy in dark, where the
+        // accent is light enough that white on it would be 2.2:1.
+        "on-accent": token("on-accent"),
+        // The sidebar's own palette — navy in both themes (see `index.css`).
+        nav: {
+          DEFAULT: token("nav"),
+          deep: token("nav-deep"),
+          ink: token("nav-ink"),
+          muted: token("nav-muted"),
+          faint: token("nav-faint"),
+          line: token("nav-line"),
+          accent: token("nav-accent"),
+        },
         ok: token("ok"),
         warn: token("warn"),
         bad: token("bad"),

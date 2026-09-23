@@ -41,3 +41,18 @@ class TestTierSelection:
         assert (estimated_points(span_start, span_end, Tier.AGG_1M)
                 > estimated_points(span_start, span_end, Tier.AGG_1H))
         assert estimated_points(span_start, span_end, Tier.AGG_1D) == 1
+
+
+class TestFinestTier:
+    def test_a_reader_that_may_not_see_fine_tiers_gets_the_finest_it_may(self) -> None:
+        # The scheduler may read agg_1h_v and agg_1d_v only. A one-day Report
+        # would otherwise be sent to agg_1m_v and fail on permissions.
+        from datetime import UTC, datetime, timedelta
+
+        from solarcms.domain.tiering import Tier, select_tier
+
+        now = datetime(2026, 9, 23, tzinfo=UTC)
+        assert select_tier(now - timedelta(days=1), now, now) == Tier.AGG_1M
+        assert select_tier(now - timedelta(days=1), now, now, finest=Tier.AGG_1H) == Tier.AGG_1H
+        assert select_tier(
+            now - timedelta(days=800), now, now, finest=Tier.AGG_1H) == Tier.AGG_1D

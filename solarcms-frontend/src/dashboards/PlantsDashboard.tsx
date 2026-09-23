@@ -28,7 +28,6 @@
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { KpiPeriod } from "@/api/schemas";
 import { Panel, SegmentedControl } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonTable } from "@/components/state";
 import {
@@ -39,12 +38,10 @@ import {
   isOnboarding,
 } from "@/components/domain";
 import { DataTable, type Column } from "@/components/tables/DataTable";
-import { StatTile } from "@/components/charts/KpiTile";
 import { CoverageBadge } from "@/components/dashboard/CoverageBadge";
 import {
   UNDEFINED_DISPLAY,
   formatCapacity,
-  formatHeadline,
   formatNumber,
   formatRatioAsPercent,
   variantNote,
@@ -57,12 +54,14 @@ import {
   IconCapacity,
   IconOverview,
   IconList as IconTable,
-  IconPlant,
+  IconPower,
 } from "@/components/icons";
 import { usePermission } from "@/auth/usePermission";
 import { useSelection } from "@/state/selection";
 import { usePlantFleet, type PlantFleetEntry } from "./usePlantFleet";
 import { fleetTotal } from "./fleet/aggregate";
+import { RailFigure, RailTile } from "@/components/charts/RailTile";
+import { PlantCard, RailLegend } from "./plants/PlantsParts";
 
 /**
  * How loudly a Plant asks to be looked at. Lower sorts first.
@@ -83,119 +82,6 @@ function attentionRank(entry: PlantFleetEntry): number {
   const degraded = entry.health.filter((row) => row.comm_status === "degraded").length;
   if (degraded > 0) return 6;
   return 7;
-}
-
-/** The left rail colour of a card: the worst thing true of that Plant. */
-function railClass(entry: PlantFleetEntry): string {
-  if (entry.worstSeverity === "critical" || entry.worstSeverity === "high") {
-    return "border-l-bad";
-  }
-  if (entry.worstSeverity) return "border-l-warn";
-  if (entry.health.some((row) => row.comm_status === "offline")) return "border-l-bad";
-  if (entry.health.some((row) => row.comm_status === "degraded")) return "border-l-warn";
-  return "border-l-ok";
-}
-
-function CardFigure({
-  label,
-  value,
-  unit,
-  title,
-  muted,
-}: {
-  label: string;
-  value: string;
-  unit?: string | null;
-  title?: string;
-  muted?: boolean;
-}): JSX.Element {
-  return (
-    <div className="min-w-0">
-      <div className="truncate text-[10px] uppercase tracking-wide text-ink-faint">{label}</div>
-      <div
-        className={`flex items-baseline gap-1 truncate text-sm ${muted ? "text-ink-faint" : "text-ink"}`}
-        title={title}
-      >
-        <span className="truncate font-medium">{value}</span>
-        {unit ? <span className="shrink-0 text-[10px] text-ink-muted">{unit}</span> : null}
-      </div>
-    </div>
-  );
-}
-
-function PlantCard({
-  entry,
-  period,
-  onOpen,
-}: {
-  entry: PlantFleetEntry;
-  period: KpiPeriod;
-  onOpen: () => void;
-}): JSX.Element {
-  const { plant, kpis, alarms, worstSeverity } = entry;
-  const pr = kpis?.performance_ratio;
-  const capacity = formatHeadline(plant.dc_capacity_kwp);
-  const energy = formatHeadline(kpis?.energy_kwh);
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={`surface-tile surface-interactive flex w-full flex-col gap-2.5 rounded-card border border-l-4 border-line ${railClass(entry)} p-3 text-left hover:border-accent/45 focus:outline-none focus:ring-2 focus:ring-accent/30`}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-ink">{plant.name}</div>
-          <div className="mt-0.5 truncate font-mono text-[10px] text-ink-muted">
-            {plant.code}
-            {plant.region_code ? ` · ${plant.region_code}` : ""}
-          </div>
-        </div>
-        <PlantStatusBadge status={plant.status} />
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        <CardFigure
-          label="Capacity"
-          value={capacity.text}
-          unit={plant.dc_capacity_kwp === null ? null : "kWp"}
-          title={capacity.compacted ? `${capacity.exact} kWp` : undefined}
-          muted={plant.dc_capacity_kwp === null}
-        />
-        <CardFigure
-          // Just "Energy": three figures share a card, and `Energy · lifetime`
-          // truncated to `ENERGY · LIF…` in every card at every width. The
-          // period is stated on the tile row above and on the tooltip, where
-          // there is room for it.
-          label="Energy"
-          value={energy.text}
-          unit={kpis ? "kWh" : null}
-          title={`Energy over ${period}${energy.compacted ? `: ${energy.exact} kWh` : ""}`}
-          muted={!kpis}
-        />
-        <CardFigure
-          label="PR"
-          value={pr?.value == null ? UNDEFINED_DISPLAY : formatRatioAsPercent(pr.value)}
-          title={pr?.undefined_reason ?? (pr?.variant ? variantNote(pr.variant) : undefined)}
-          muted={pr?.value == null}
-        />
-      </div>
-
-      <div className="flex items-center justify-between gap-2 border-t border-line-soft pt-2">
-        <DeviceHealthStrip health={entry.health} />
-        {alarms.length > 0 ? (
-          <span className="flex shrink-0 items-center gap-1">
-            {worstSeverity ? <SeverityBadge severity={worstSeverity} /> : null}
-            <span className="text-[10px] text-ink-muted">
-              {alarms.length} open
-            </span>
-          </span>
-        ) : (
-          <span className="shrink-0 text-[10px] text-ink-faint">No open Alarms</span>
-        )}
-      </div>
-    </button>
-  );
 }
 
 export function PlantsDashboard(): JSX.Element {
@@ -411,27 +297,27 @@ export function PlantsDashboard(): JSX.Element {
   }
 
   return (
-    <div className="flex flex-col gap-2.5">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-base font-semibold text-ink">Plants</h1>
-          <p className="text-[11px] text-ink-muted">
+          <h1 className="page-title">Plants</h1>
+          <p className="mt-1.5 text-sm leading-snug text-ink-muted">
             {live.length} live
             {onboarding.length > 0 ? `, ${onboarding.length} onboarding` : ""}. Cards are
             ordered by need for attention; the table sorts on any column.
           </p>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
           {clients.length > 1 ? (
-            <label className="flex items-center gap-1.5">
-              <span className="whitespace-nowrap text-[11px] text-ink-muted">Client</span>
+            <label className="flex items-center gap-2.5">
+              <span className="whitespace-nowrap text-sm font-medium text-ink-muted">Client</span>
               <select
                 value={clientFilter === "all" ? "" : String(clientFilter)}
                 onChange={(event) =>
                   setClientFilter(event.target.value === "" ? "all" : Number(event.target.value))
                 }
-                className="rounded-control border border-line bg-surface-raised px-2 py-1 text-xs text-ink"
+                className="surface-tile min-w-[12rem] rounded-control border border-line px-3 py-2 text-sm font-semibold text-ink"
               >
                 <option value="">All Clients</option>
                 {clients.map(([id, name]) => (
@@ -442,9 +328,10 @@ export function PlantsDashboard(): JSX.Element {
               </select>
             </label>
           ) : null}
-          <PeriodPicker value={period} onChange={setPeriod} />
+          <PeriodPicker value={period} onChange={setPeriod} size="lg" />
           <SegmentedControl
             label="View"
+            size="lg"
             value={view}
             onChange={setView}
             options={[
@@ -461,37 +348,39 @@ export function PlantsDashboard(): JSX.Element {
       {fleet.isLoading ? (
         <SkeletonKpiRow tiles={5} />
       ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-          <StatTile label="Live Plants" numeric={live.length} digits={0} icon={IconPlant} />
-          <StatTile
-            label="Need attention"
-            numeric={summary.needsAttention}
-            digits={0}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <RailTile tone="ok" icon={IconPower} label="Live Plants">
+            <RailFigure value={live.length} digits={0} />
+          </RailTile>
+          <RailTile
+            tone="warn"
             icon={IconAlarm}
-            tone={summary.needsAttention > 0 ? "warn" : "default"}
+            label="Need attention"
+            figureTone={summary.needsAttention > 0 ? "warn" : "ok"}
             footnote={summary.openAlarms > 0 ? `${summary.openAlarms} open Alarm(s)` : "Nothing open"}
-          />
-          <StatTile
-            label="With a Device offline"
-            numeric={summary.offline}
-            digits={0}
+          >
+            <RailFigure value={summary.needsAttention} digits={0} />
+          </RailTile>
+          <RailTile
+            tone="violet"
             icon={IconHealth}
-            tone={summary.offline > 0 ? "bad" : "default"}
+            label="With a Device offline"
+            figureTone={summary.offline > 0 ? "bad" : "ok"}
             footnote="Communication, never equipment condition."
-          />
-          <StatTile
-            label="DC capacity"
-            numeric={summary.capacity}
-            unit="kWp"
+          >
+            <RailFigure value={summary.offline} digits={0} />
+          </RailTile>
+          <RailTile
+            tone="info"
             icon={IconCapacity}
+            label="DC capacity"
             footnote="Live Plants only; onboarding is excluded."
-          />
-          <StatTile
-            label={`Energy · ${period}`}
-            numeric={summary.energy}
-            unit="kWh"
-            icon={IconEnergy}
-          />
+          >
+            <RailFigure value={summary.capacity} unit="kWp" />
+          </RailTile>
+          <RailTile tone="blue" icon={IconEnergy} label={`Energy · ${period}`}>
+            <RailFigure value={summary.energy} unit="kWh" />
+          </RailTile>
         </div>
       )}
 
@@ -499,20 +388,33 @@ export function PlantsDashboard(): JSX.Element {
         <SkeletonTable rows={6} columns={6} />
       ) : view === "cards" ? (
         <Panel
-          title="Live Plants"
-          subtitle="Worst first. Ordering follows open Alarms and communication health — never a KPI, which is undefined on every Plant at night."
+          padding="p-5"
+          tray
+          title={<span className="text-lg">Live Plants</span>}
+          subtitle={
+            <span className="text-sm">
+              Worst first. Ordering follows open Alarms and communication health — never a
+              KPI, which is undefined on every Plant at night.
+            </span>
+          }
+          actions={<RailLegend />}
         >
           {ranked.length === 0 ? (
             <p className="text-xs text-ink-faint">
               No live Plants{clientFilter === "all" ? "" : " for this Client"}.
             </p>
           ) : (
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] gap-5">
               {ranked.map((entry) => (
                 <PlantCard
                   key={entry.plant.id}
                   entry={entry}
                   period={period}
+                  capacityShare={
+                    entry.plant.dc_capacity_kwp === null || summary.capacity <= 0
+                      ? null
+                      : entry.plant.dc_capacity_kwp / summary.capacity
+                  }
                   onOpen={() => openPlant(entry.plant.id)}
                 />
               ))}

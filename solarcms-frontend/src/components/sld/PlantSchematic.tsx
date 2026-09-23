@@ -172,12 +172,11 @@ function StageBox({
         />
       </div>
 
-      {/* The artwork takes the leftover height and stays centred in it, so a
-          stage box stretched by a taller neighbour in the grid row distributes
-          the slack around the drawing rather than dropping it all into one gap
-          above the figures. */}
-      <div className="flex w-full flex-1 flex-col items-center justify-center py-1">
-        <DeviceArt typeCode={STAGE_ART[stage.code] ?? stage.code} size={compact ? 58 : 74} />
+      {/* The drawing sits directly under the title rather than floating in a
+          stretched box: a stage that took the chart panel's height beside it
+          was two thirds empty, and the empty part was what got read. */}
+      <div className="flex w-full flex-col items-center pb-2 pt-1.5">
+        <DeviceArt typeCode={STAGE_ART[stage.code] ?? stage.code} size={compact ? 50 : 66} />
         <div className="mt-1 text-[10px] text-ink-muted">
           {stage.instrumented ? (
             <span
@@ -192,10 +191,12 @@ function StageBox({
         </div>
       </div>
 
-      <dl className="w-full space-y-0.5 border-t border-line-soft pt-1.5">
+      <dl className="mt-auto w-full space-y-0.5 border-t border-line-soft pt-1.5">
         {stage.slots.map((slot) => (
-          <div key={slot.slot_code} className="flex items-baseline justify-between gap-1.5">
-            <dt className="truncate text-[10px] text-ink-muted">{slot.label}</dt>
+          <div key={slot.slot_code} className="flex min-w-0 items-baseline justify-between gap-1.5">
+            <dt className="min-w-0 truncate text-[10px] text-ink-muted" title={slot.label}>
+              {slot.label}
+            </dt>
             <dd
               className={`shrink-0 font-mono text-[11px] tabular-nums ${
                 slot.value === null ? "text-ink-faint" : "text-ink"
@@ -221,7 +222,7 @@ function StageBox({
   );
 
   const className =
-    `flex min-w-[8.5rem] flex-1 flex-col items-center rounded-card border px-2 py-2.5 text-left transition ` +
+    `flex min-w-0 flex-col items-center rounded-card border px-2.5 py-2.5 text-left transition ` +
     `${style.frame} ${selected ? "ring-2 ring-accent/40" : ""} ` +
     `${interactive ? "cursor-pointer hover:border-accent/50" : ""}`;
 
@@ -269,7 +270,7 @@ export function PlantSchematic({
     });
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div className="flex h-full min-w-0 flex-col justify-center">
       {/*
         Scrolls sideways when four stages will not fit legibly.
         
@@ -285,20 +286,39 @@ export function PlantSchematic({
         it is the same four boxes in the same order on every Plant, so an
         operator can compare two of them.
       */}
-      <div className="flex flex-1 items-stretch gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
-        {sld.stages.map((stage, index) => (
-          <div key={stage.code} className="flex flex-1 items-stretch gap-1">
-            <StageBox
-              stage={stage}
-              onSelect={onSelectStage}
-              selected={selectedStage === stage.code}
-              compact={compact}
-            />
-            {index < sld.stages.length - 1 ? (
-              <Connector tone={HEALTH[stage.health].rail} flowing={isFlowing(stage)} />
-            ) : null}
-          </div>
-        ))}
+      {/*
+        A grid, not a flex row, so the four stages are *identical* widths.
+        Flexed, each box grew to fit its longest figure label — "Winding Temp.
+        (WTI)" made the Transformer a third wider than the PV Array — and four
+        boxes of four widths read as four different kinds of thing, on the one
+        diagram whose point is that every Plant has the same four.
+      */}
+      <div
+        className="grid items-stretch gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]"
+        style={{
+          gridTemplateColumns: sld.stages
+            .map(() => "minmax(8.5rem, 1fr)")
+            .join(" auto "),
+        }}
+      >
+        {sld.stages.flatMap((stage, index) => [
+          <StageBox
+            key={stage.code}
+            stage={stage}
+            onSelect={onSelectStage}
+            selected={selectedStage === stage.code}
+            compact={compact}
+          />,
+          ...(index < sld.stages.length - 1
+            ? [
+                <Connector
+                  key={`${stage.code}-to-next`}
+                  tone={HEALTH[stage.health].rail}
+                  flowing={isFlowing(stage)}
+                />,
+              ]
+            : []),
+        ])}
       </div>
 
       {sld.unstaged.length > 0 ? (

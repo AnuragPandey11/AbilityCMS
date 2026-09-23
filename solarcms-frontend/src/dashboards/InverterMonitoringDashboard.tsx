@@ -36,24 +36,33 @@
  * prevent.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { useDeviceTableColumns, usePlant, usePlantDevices, useTagsById } from "@/api/hooks";
 import { useLatestValues } from "@/api/useLatestValues";
 import { qk } from "@/api/queryKeys";
 import * as devicesApi from "@/api/endpoints/devices";
 import type { DeviceDetail, DeviceListItem } from "@/api/schemas";
-import { Panel, Badge, InfoHint, inputClass } from "@/components/ui";
+import { Panel, InfoHint, SelectBox } from "@/components/ui";
 import {AwaitingDeviceDataState, EmptyState, ErrorState, SkeletonKpiRow, SkeletonTable} from "@/components/state";
 import { CommStatusBadge, LastSeen, PlantPicker } from "@/components/domain";
 import { DataTable, type Column } from "@/components/tables/DataTable";
-import { Carousel, CarouselItem } from "@/components/ui/Carousel";
-import { DeviceCard } from "@/components/devices/DeviceCard";
+import { useScrollPager } from "@/components/ui/Carousel";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { Drawer } from "@/components/ui";
 import { ComparisonBars, type ComparisonRow } from "@/components/charts/ComparisonBars";
-import { StatTile } from "@/components/charts/KpiTile";
+import { RailFigure, RailText, RailTile } from "@/components/charts/RailTile";
+import {
+  IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
+  IconInverter,
+  IconPortfolio,
+  IconPower,
+  IconSignal,
+} from "@/components/icons";
 import { UNDEFINED_DISPLAY, formatNumber, formatValue } from "@/format/value";
+import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
 import { usePlantScope } from "@/state/usePlantScope";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
@@ -91,6 +100,78 @@ const VARIANT_NOTE: Record<string, string> = {
   unspecified:
     "These Devices have no variant on their Device Model, so they cannot be ranked against either group. Set the variant to include them.",
 };
+
+/** INVERTER_2 before INVERTER_10: codes carry numbers, and people count. */
+const byCode = (a: RankedInverter, b: RankedInverter) =>
+  a.device.code.localeCompare(b.device.code, undefined, { numeric: true });
+
+/**
+ * A variant group's cards: two rows, paged sideways, with the paging buttons in
+ * the section header rather than over the cards.
+ *
+ * Column-major (`grid-flow-col`), so a page reads down then across and paging
+ * moves whole columns — never half a card. Columns per page follow the width
+ * the grid actually has: three when the cards have the full panel, two beside
+ * the chart on a mid-size screen, three again when that is wide.
+ */
+function CardPages({
+  title,
+  children,
+  count,
+}: {
+  title: string;
+  children: ReactNode;
+  count: number;
+}): JSX.Element {
+  const pager = useScrollPager<HTMLDivElement>(undefined, count);
+  const pageBy = (direction: -1 | 1) => {
+    const track = pager.ref.current;
+    if (!track) return;
+    // One full page: the visible width plus the gap that follows it.
+    track.scrollBy({ left: direction * (track.clientWidth + 16), behavior: "smooth" });
+  };
+  return (
+    <div className="min-w-0">
+      <div className="mb-3 flex min-h-9 items-center justify-between gap-3">
+        <span className="tile-label">
+          {title}
+        </span>
+        {pager.overflows ? (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => pageBy(-1)}
+              disabled={pager.atStart}
+              aria-label="Previous Inverters"
+              className="surface-tile flex h-9 w-9 items-center justify-center rounded-control border border-line text-ink-muted transition hover:text-ink disabled:opacity-40"
+            >
+              <IconChevronLeft size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={() => pageBy(1)}
+              disabled={pager.atEnd}
+              aria-label="Next Inverters"
+              className="surface-tile flex h-9 w-9 items-center justify-center rounded-control border border-line text-ink-muted transition hover:text-ink disabled:opacity-40"
+            >
+              <IconChevronRight size={15} />
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <div
+        ref={pager.ref}
+        role="group"
+        aria-label={title}
+        className={`grid snap-x snap-mandatory auto-cols-[100%] grid-flow-col gap-4 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:none] sm:auto-cols-[calc((100%-1rem)/2)] lg:auto-cols-[calc((100%-2rem)/3)] xl:auto-cols-[calc((100%-1rem)/2)] 2xl:auto-cols-[calc((100%-2rem)/3)] ${
+          count > 1 ? "grid-rows-2" : ""
+        }`}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export function InverterMonitoringDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
@@ -369,15 +450,15 @@ export function InverterMonitoringDashboard(): JSX.Element {
   const onlineCount = inverters.filter((device) => device.comm_status === "online").length;
 
   return (
-    <div className="flex flex-col gap-2.5">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-base font-semibold text-ink">Inverter Monitoring</h1>
-          <p className="text-[11px] text-ink-muted">
+          <h1 className="page-title">Inverter Monitoring</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
             Comparison and ranking, within each Inverter variant.
           </p>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
           {/*
             One filter row, above everything it scopes. The measure applies to
             every comparison chart on the screen at once — a per-chart picker
@@ -385,23 +466,23 @@ export function InverterMonitoringDashboard(): JSX.Element {
             still look like one ranking.
           */}
           {inverterColumns.length > 1 ? (
-            <label className="flex items-center gap-1.5">
-              <span className="whitespace-nowrap text-[11px] text-ink-muted">Compare on</span>
-              <select
-                value={metric?.tag_id ?? ""}
-                onChange={(event) => setMetricTagId(Number(event.target.value))}
-                className={`${inputClass} w-auto py-1 text-xs`}
-              >
-                {inverterColumns.map((column) => (
-                  <option key={column.tag_id} value={column.tag_id}>
-                    {column.name}
-                    {column.unit ? ` (${column.unit})` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SelectBox
+              label="Compare on"
+              value={String(metric?.tag_id ?? "")}
+              onChange={(next) => setMetricTagId(Number(next))}
+              display={
+                metric ? `${metric.name}${metric.unit ? ` (${metric.unit})` : ""}` : UNDEFINED_DISPLAY
+              }
+            >
+              {inverterColumns.map((column) => (
+                <option key={column.tag_id} value={column.tag_id}>
+                  {column.name}
+                  {column.unit ? ` (${column.unit})` : ""}
+                </option>
+              ))}
+            </SelectBox>
           ) : null}
-          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" />
+          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
         </div>
       </header>
 
@@ -412,110 +493,186 @@ export function InverterMonitoringDashboard(): JSX.Element {
         />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <StatTile label="Inverters" numeric={inverters.length} digits={0} />
-            <StatTile
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <RailTile tone="info" icon={IconInverter} label="Inverters">
+              <RailFigure value={inverters.length} digits={0} />
+            </RailTile>
+            <RailTile
+              tone="ok"
+              icon={IconSignal}
               label="Reporting"
-              numeric={onlineCount}
-              digits={0}
-              tone={onlineCount === inverters.length ? "ok" : "warn"}
+              figureTone={onlineCount === inverters.length ? "ok" : "warn"}
               footnote={
                 onlineCount === inverters.length
                   ? "All within their expected interval."
                   : `${inverters.length - onlineCount} late or silent. Communication, not equipment.`
               }
-            />
-            <StatTile
+            >
+              <RailFigure value={onlineCount} digits={0} />
+            </RailTile>
+            <RailTile
+              tone="violet"
+              icon={IconPortfolio}
               label="Variants"
-              numeric={grouped.length}
-              digits={0}
               footnote="Ranking happens inside a variant and nowhere else — the two have different Tag sets and different expected outputs."
-            />
-            <StatTile
+            >
+              <RailFigure value={grouped.length} digits={0} />
+            </RailTile>
+            <RailTile
+              tone="blue"
+              icon={IconPower}
               label="Comparing on"
-              value={metric?.name ?? "—"}
               footnote={
                 metric
                   ? `From the catalogue's columns for ${INVERTER_TYPE_CODE}.`
                   : "No summary columns are configured for this Device Type."
               }
-            />
+            >
+              <RailText value={metric?.name ?? UNDEFINED_DISPLAY} />
+            </RailTile>
           </div>
 
-          {grouped.map(([variant, rows]) => (
-            <Panel
-              key={variant}
-              title={
-                <span className="flex items-center gap-2">
-                  {VARIANT_LABEL[variant] ?? `Inverters — ${variant}`}
-                  <Badge tone={variant === "unspecified" ? "warn" : "accent"}>{variant}</Badge>
-                  <InfoHint text={VARIANT_NOTE[variant] ?? VARIANT_NOTE.central} />
-                </span>
-              }
-              subtitle={`${rows.length} Device(s). ${VARIANT_NOTE[variant] ?? VARIANT_NOTE.central}`}
-            >
-              <div className="grid gap-4 xl:grid-cols-12">
-                {/* ⚠ One chart per variant group, never one across all of them:
-                    a single sorted bar chart of central and string Inverters
-                    together ranks across the two by implication, which is the
-                    thing the grouping exists to prevent (Guardrail 9). */}
-                <div className="min-w-0 xl:col-span-5">
-                  {metric ? (
-                    <ComparisonBars
-                      rows={barsFor(rows)}
-                      unit={metric.unit}
-                      metricLabel={metric.name}
-                      height={Math.max(150, Math.min(rows.length * 22 + 30, 330))}
+          {grouped.map(([variant, rows]) => {
+            const unspecified = variant === "unspecified";
+            const bars = barsFor(rows);
+            const reported = bars.filter(
+              (bar): bar is ComparisonRow & { value: number } => bar.value !== null,
+            );
+            const mean =
+              reported.length > 0
+                ? reported.reduce((sum, bar) => sum + bar.value, 0) / reported.length
+                : null;
+            // The card's "#n" is its place on the chart beside it — the same
+            // order, never a second ranking with rules of its own.
+            const position = new Map(
+              [...reported]
+                .sort((x, y) => y.value - x.value)
+                .map((bar, index) => [bar.id, index + 1] as const),
+            );
+            const groupOnline = rows.filter((row) => row.device.comm_status === "online").length;
+            const metricName = metric?.name ?? "the measure";
+            return (
+              <Panel
+                key={variant}
+                padding="p-5"
+                tray
+                title={
+                  <span className="flex items-center gap-3 text-lg">
+                    {VARIANT_LABEL[variant] ?? `Inverters — ${variant}`}
+                    <span
+                      className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${
+                        unspecified
+                          ? "border-warn/50 bg-warn/10 text-warn"
+                          : "border-accent/50 bg-accent/10 text-accent"
+                      }`}
+                    >
+                      {variant}
+                    </span>
+                    <InfoHint text={VARIANT_NOTE[variant] ?? VARIANT_NOTE.central} />
+                  </span>
+                }
+                subtitle={
+                  <span className="text-sm">
+                    {rows.length} Device(s). {VARIANT_NOTE[variant] ?? VARIANT_NOTE.central}
+                  </span>
+                }
+              >
+                <div className="grid gap-6 xl:grid-cols-12">
+                  {/* ⚠ One chart per variant group, never one across all of
+                      them: a single sorted chart of central and string
+                      Inverters together ranks across the two by implication,
+                      which is the thing the grouping exists to prevent
+                      (Guardrail 9). */}
+                  <div className="min-w-0 xl:col-span-5">
+                    <div className="mb-3 flex min-h-9 items-center justify-between gap-3">
+                      <span className="tile-label">
+                        {/* "Sorted", not "Ranked", where the variant is unknown:
+                            the order is real, the like-for-like claim is not. */}
+                        {unspecified ? "Sorted" : "Ranked"} · {metricName}
+                      </span>
+                      {mean !== null && metric ? (
+                        <span
+                          className="text-xs text-ink-muted"
+                          title="The mean of the Inverters in this group that reported, on this measure — the dashed line. A reference, not a target."
+                        >
+                          Group avg{" "}
+                          <span className="font-mono text-ink">{formatNumber(mean)}</span>{" "}
+                          <span className="font-mono">{metric.unit ?? ""}</span>
+                        </span>
+                      ) : null}
+                    </div>
+                    {metric ? (
+                      <ComparisonBars
+                        rows={bars}
+                        unit={metric.unit}
+                        metricLabel={metric.name}
+                        appearance="gradient"
+                        mean={mean}
+                        height={Math.max(160, Math.min(rows.length * 34 + 40, 460))}
+                      />
+                    ) : (
+                      <p className="text-xs text-ink-faint">
+                        No summary columns are configured for {INVERTER_TYPE_CODE}, so there
+                        is nothing to compare on.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 xl:col-span-7">
+                    <CardPages
+                      title={`Devices · ${groupOnline} online`}
+                      count={rows.length}
+                    >
+                      {[...rows].sort(byCode).map((row) => {
+                        const place = position.get(row.device.id) ?? null;
+                        return (
+                          <div key={row.device.id} className="min-w-0 snap-start">
+                            <DeviceFigureCard
+                              device={row.device}
+                              columns={inverterColumns}
+                              values={valuesFor(row.device.id)}
+                              highlightTagId={metric?.tag_id}
+                              position={place}
+                              positionNote={
+                                place === null
+                                  ? `No value for ${metricName}, so it has no place in the order. Not a reading of zero.`
+                                  : `${place} of ${reported.length} on ${metricName} in this group${
+                                      unspecified
+                                        ? " — an ordering, not a like-for-like rank: these Inverters have no variant recorded."
+                                        : "."
+                                    }`
+                              }
+                              onSelect={setInspecting}
+                              selected={inspecting?.id === row.device.id}
+                            />
+                          </div>
+                        );
+                      })}
+                    </CardPages>
+                  </div>
+                </div>
+
+                {/* The systematic pass. Collapsed, because it answers a
+                    different question from the two views above it — "work
+                    through every one" rather than "which one is behind". */}
+                <details className="group mt-6 border-t border-line pt-4">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-ink-muted hover:text-ink">
+                    Ranked table — rank, live output, rated capacity, output ÷ rated
+                    <IconChevronDown size={16} className="shrink-0 transition group-open:rotate-180" />
+                  </summary>
+                  <div className="mt-3">
+                    <DataTable
+                      rows={rows}
+                      columns={columns(variant)}
+                      rowKey={(row) => row.device.id}
+                      filterPlaceholder="Filter Inverters…"
+                      onRowClick={(row) => setInspecting(row.device)}
                     />
-                  ) : (
-                    <p className="text-xs text-ink-faint">
-                      No summary columns are configured for {INVERTER_TYPE_CODE}, so there is
-                      nothing to compare on.
-                    </p>
-                  )}
-                </div>
-
-                {/* The reference dashboard's own form: a card per machine,
-                    across rather than down, so seventeen of them cost one row
-                    of screen instead of seventeen. */}
-                <div className="min-w-0 xl:col-span-7">
-                  <Carousel ariaLabel={`${VARIANT_LABEL[variant] ?? variant} cards`}>
-                    {rows.map((row) => (
-                      <CarouselItem key={row.device.id}>
-                        <DeviceCard
-                          device={row.device}
-                          columns={inverterColumns}
-                          values={valuesFor(row.device.id)}
-                          maxFigures={6}
-                          onSelect={setInspecting}
-                          selected={inspecting?.id === row.device.id}
-                        />
-                      </CarouselItem>
-                    ))}
-                  </Carousel>
-                </div>
-              </div>
-
-              {/* The systematic pass. Collapsed, because it answers a different
-                  question from the two views above it — "work through every
-                  one" rather than "which one is behind" — and costs no
-                  vertical space until somebody asks. */}
-              <details className="mt-3 border-t border-line pt-3">
-                <summary className="cursor-pointer list-none text-[11px] font-medium text-ink-muted hover:text-ink">
-                  Ranked table — rank, live output, rated capacity, output ÷ rated
-                </summary>
-                <div className="mt-2">
-                  <DataTable
-                    rows={rows}
-                    columns={columns(variant)}
-                    rowKey={(row) => row.device.id}
-                    filterPlaceholder="Filter Inverters…"
-                    onRowClick={(row) => setInspecting(row.device)}
-                  />
-                </div>
-              </details>
-            </Panel>
-          ))}
+                  </div>
+                </details>
+              </Panel>
+            );
+          })}
         </>
       )}
 

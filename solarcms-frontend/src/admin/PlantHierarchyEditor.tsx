@@ -459,8 +459,8 @@ export function PlantHierarchyEditor(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">Plant hierarchy</h1>
-          <p className="max-w-3xl text-xs leading-relaxed text-ink-muted">
+          <h1 className="page-title">Plant hierarchy</h1>
+          <p className="max-w-3xl mt-1.5 text-sm leading-relaxed text-ink-muted">
             Say what each Device feeds into — drag it onto its parent, or pick the
             parent from the row. The diagram is not a saved drawing; it is rebuilt
             from these connections every time it is opened, so it can never

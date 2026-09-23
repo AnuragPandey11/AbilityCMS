@@ -132,8 +132,8 @@ export function SldDashboard(): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-ink">Single Line Diagram</h1>
-          <p className="text-xs text-ink-muted">
+          <h1 className="page-title">Single Line Diagram</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
             The electrical path — what each Device is wired into. {sld.device_count}{" "}
             Device(s) in the power path
             {sld.collectors.length > 0
@@ -210,36 +210,6 @@ export function SldDashboard(): JSX.Element {
         </Panel>
 
         <div className="space-y-4">
-          {/*
-            A hint, not a panel that grows.
-
-            The full inspector used to render *here*, in a 20rem column beside a
-            460px diagram. A Device with eighteen Tags and a chart made that
-            column two and a half times the height of the thing it sat next to,
-            so selecting a Device stretched the page, shifted everything below
-            it and left a long narrow ribbon to scroll — on the one screen whose
-            job is a diagram you are pointing at. The detail now opens in the
-            same drawer every other screen uses, so the page never moves and the
-            Device looks identical wherever it was clicked.
-          */}
-          <Panel title="Device detail">
-            <p className="text-xs leading-snug text-ink-faint">
-              Tap any box in either diagram. Everything recorded about that Device — its
-              wiring, its collector, its topic, its health and every Tag it is bound to —
-              opens beside the page without moving it.
-            </p>
-            {selectedDevice ? (
-              <button
-                type="button"
-                onClick={() => setSelected(selectedDevice.id)}
-                className="mt-2 flex w-full items-center justify-between gap-2 rounded-control border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-left text-[11px] font-medium text-accent transition hover:bg-accent/15"
-              >
-                Reopen {selectedDevice.code}
-                <IconChevronRight size={13} />
-              </button>
-            ) : null}
-          </Panel>
-
           {sld.collectors.length > 0 ? (
             <Panel
               title="Collectors"

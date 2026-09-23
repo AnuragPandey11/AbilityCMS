@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .env
+.env.*backup*
+.artifacts/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

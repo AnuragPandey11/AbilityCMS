@@ -185,8 +185,8 @@ export function SystemAdmin(): JSX.Element {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold text-ink">System</h1>
-        <p className="text-xs text-ink-muted">
+        <h1 className="page-title">System</h1>
+        <p className="mt-1.5 text-sm text-ink-muted">
           Platform health, Clients, and the immutable audit trail.
         </p>
       </div>

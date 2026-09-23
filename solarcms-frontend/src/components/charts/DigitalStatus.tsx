@@ -38,7 +38,7 @@ export function StatusIndicator({
   const dot = unknown
     ? "bg-ink-faint"
     : on
-      ? "bg-ok shadow-[0_0_6px_rgba(34,197,94,.6)]"
+      ? "lamp-ok bg-ok"
       : "bg-ink-faint";
 
   return (

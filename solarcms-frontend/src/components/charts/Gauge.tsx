@@ -90,7 +90,7 @@ export function Gauge({
         className="flex flex-col items-center justify-center rounded-lg border border-dashed border-line text-center"
         style={{ height }}
       >
-        <span className="font-mono text-xl text-ink-faint">—</span>
+        <span className="figure text-xl text-ink-faint">—</span>
         <span className="mt-1 text-xs text-ink-muted">{label}</span>
         <span className="mt-1 max-w-[14rem] px-2 text-[11px] leading-snug text-ink-faint">
           {figure?.undefined_reason ?? "Not defined for this period."}
@@ -115,7 +115,7 @@ export function Gauge({
         style={{ height }}
         title={implausibleRatioReason(value, label)}
       >
-        <span className="font-mono text-lg text-warn">{formatRatioAsPercent(value)}</span>
+        <span className="figure text-lg text-warn">{formatRatioAsPercent(value)}</span>
         <span className="mt-1 text-xs text-ink-muted">{label}</span>
         <span className="mt-1 max-w-[15rem] px-2 text-[10px] leading-snug text-ink-faint">
           Outside the range this quantity can take — the numerator and denominator cover

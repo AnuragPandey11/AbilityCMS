@@ -1,6 +1,7 @@
 /** Small presentational primitives. No data access, no branching on identity. */
 
 import { useState, type InputHTMLAttributes, type ReactNode } from "react";
+import { IconChevronDown } from "@/components/icons";
 
 export function Panel({
   title,
@@ -10,6 +11,7 @@ export function Panel({
   className = "",
   fill = false,
   padding = "p-4",
+  tray = false,
 }: {
   title?: ReactNode;
   subtitle?: ReactNode;
@@ -29,6 +31,13 @@ export function Panel({
   fill?: boolean;
   /** For a body that manages its own padding — a table, a full-bleed chart. */
   padding?: string;
+  /**
+   * The body is a tray a step below the card, for a panel whose content is
+   * itself cards — the Plant cards, the Inverter cards. Card on card in the
+   * same colour reads as one flat sheet with hairlines ruled across it; on a
+   * tray the inner cards sit on something and read as objects you can pick up.
+   */
+  tray?: boolean;
 }): JSX.Element {
   return (
     <section
@@ -47,7 +56,15 @@ export function Panel({
           {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
         </header>
       )}
-      <div className={`${padding} ${fill ? "min-h-0 flex-1" : ""}`}>{children}</div>
+      <div
+        className={`${padding} ${fill ? "min-h-0 flex-1" : ""} ${
+          // Rounded to the card's own corners: the bottom two under a header,
+          // all four when the tray is the whole card.
+          tray ? `bg-surface-sunken/80 ${title || actions ? "rounded-b-card" : "rounded-card"}` : ""
+        }`}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -100,7 +117,7 @@ export function Button({
   className?: string;
 }): JSX.Element {
   const variants: Record<string, string> = {
-    primary: "bg-accent text-white hover:bg-accent-strong border-accent shadow-soft",
+    primary: "bg-accent text-on-accent hover:bg-accent-strong border-accent shadow-soft",
     secondary: "border-line bg-surface-raised text-ink hover:bg-surface-sunken",
     danger: "border-bad/40 bg-bad/10 text-bad hover:bg-bad/20",
     ghost: "border-transparent text-ink-muted hover:text-ink",
@@ -136,18 +153,23 @@ export function SegmentedControl<T extends string>({
   onChange,
   options,
   label,
+  size = "sm",
 }: {
   value: T;
   onChange: (value: T) => void;
   options: { value: T; label: ReactNode; hint?: string }[];
   /** Names the group for a screen reader — the visible heading rarely does. */
   label: string;
+  /** `lg` for a page's title band, beside a large `PeriodPicker`. */
+  size?: "sm" | "lg";
 }): JSX.Element {
   return (
     <div
       role="radiogroup"
       aria-label={label}
-      className="inline-flex rounded-control border border-line bg-surface-sunken p-0.5"
+      className={`inline-flex rounded-control border border-line bg-surface-sunken ${
+        size === "lg" ? "gap-1 p-1" : "p-0.5"
+      }`}
     >
       {options.map((option) => {
         const active = option.value === value;
@@ -159,9 +181,11 @@ export function SegmentedControl<T extends string>({
             aria-checked={active}
             title={option.hint}
             onClick={() => onChange(option.value)}
-            className={`rounded-control px-3 py-1.5 text-xs font-medium transition ${
+            className={`rounded-control transition ${
+              size === "lg" ? "px-4 py-1.5 text-sm font-semibold" : "px-3 py-1.5 text-xs font-medium"
+            } ${
               active
-                ? "bg-surface-raised text-ink shadow-soft"
+                ? "bg-surface-raised text-accent shadow-soft"
                 : "text-ink-muted hover:text-ink"
             }`}
           >
@@ -170,6 +194,55 @@ export function SegmentedControl<T extends string>({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A native `<select>` wearing a styled face — for a page's title band, where
+ * the control sits beside large pickers and should look like one of them.
+ *
+ * The select is still the real control: it is laid transparently over the
+ * face, so the browser's own list, keyboard handling and screen-reader
+ * semantics are untouched. What the face adds is only what a native closed
+ * select cannot render — mixed styling inside the chosen value (a Plant's code
+ * in mono beside its name).
+ */
+export function SelectBox({
+  label,
+  display,
+  value,
+  onChange,
+  children,
+  className = "",
+}: {
+  label?: ReactNode;
+  /** What the closed control shows — the chosen option, styled. */
+  display: ReactNode;
+  value: string;
+  onChange: (value: string) => void;
+  /** `<option>` elements. */
+  children: ReactNode;
+  className?: string;
+}): JSX.Element {
+  return (
+    <label className="inline-flex items-center gap-2.5">
+      {label ? (
+        <span className="whitespace-nowrap text-sm font-medium text-ink-muted">{label}</span>
+      ) : null}
+      <span
+        className={`surface-tile relative inline-flex min-w-[13rem] items-center justify-between gap-3 rounded-control border border-line px-3.5 py-2 text-sm transition focus-within:ring-2 focus-within:ring-accent/40 hover:border-line-strong ${className}`}
+      >
+        <span className="min-w-0 truncate font-semibold text-ink">{display}</span>
+        <IconChevronDown size={14} className="shrink-0 text-ink-muted" />
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0"
+        >
+          {children}
+        </select>
+      </span>
+    </label>
   );
 }
 

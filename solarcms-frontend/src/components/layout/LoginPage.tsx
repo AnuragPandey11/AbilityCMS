@@ -57,7 +57,7 @@ export function LoginPage(): JSX.Element {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-surface px-4 py-10">
+    <div className="app-ground relative flex min-h-screen items-center justify-center px-4 py-10">
       <div className="absolute right-4 top-4">
         <ThemeToggle />
       </div>
@@ -66,7 +66,7 @@ export function LoginPage(): JSX.Element {
         onSubmit={submit}
         className="w-full max-w-sm rounded-card border border-line bg-surface-raised p-6 shadow-card"
       >
-        <BrandMark />
+        <BrandMark height={54} />
         <h1 className="mt-5 text-lg font-semibold text-ink">Sign in</h1>
         <p className="mt-1 text-xs text-ink-muted">
           Plant monitoring platform. Use your work account.

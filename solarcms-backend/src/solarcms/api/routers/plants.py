@@ -14,8 +14,14 @@ from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.api.patching import patch_assignments
 from solarcms.cache import live
 from solarcms.domain.absence import assess_coverage
+from solarcms.domain.assumptions import (
+    PLANT_ENERGY_COUNTER_PRECEDENCE,
+    PLANT_IRRADIATION_SOURCE,
+)
+from solarcms.domain.counters import plant_energy, plant_irradiation
 from solarcms.domain.decoding import TopicPattern, parse_topic
 from solarcms.domain.formulas import (
+    FormulaResult,
     availability,
     co2_avoided_kg,
     cuf,
@@ -39,6 +45,12 @@ from solarcms.schemas.assets import (
     PlantUpdate,
 )
 from solarcms.services import dashboard
+from solarcms.services.energy import (
+    counter_anomalies_payload,
+    energy_source_payload,
+    read_counter_series,
+    split_by_pair,
+)
 
 router = APIRouter(prefix="/plants", tags=["plants"])
 # Block routes addressed by their own id sit at /blocks/{id}, not under
@@ -269,42 +281,46 @@ async def plant_kpis(
     # reaching for the bare name here would fail — which is the design working.
     relation = f"{tier.value}_v"
 
-    # Energy from the export counter's endpoints, and irradiation from the WMS.
-    # Aggregates, never raw readings (MASTER §6.6).
+    # Energy from each meter's own counter, and irradiation from the weather
+    # stations — aggregates, never raw readings (MASTER §6.6).
     #
-    # The relation name is interpolated rather than bound: it is a table name,
-    # which no driver can parameterise, and it comes from the `Tier` enum rather
-    # than from anything a caller can influence.
-    energy = (await session.execute(text(f"""
-        SELECT max(last_value) - min(last_value) AS delta
-          FROM {relation} a JOIN tags t ON t.id = a.tag_id
-          JOIN devices d ON d.id = a.device_id
-         WHERE d.plant_id = :plant_id AND t.code = 'ENERGY_EXPORT_TOTAL'
-           AND a.bucket >= :start
-    """), {"plant_id": plant_id, "start": start})).scalar()
+    # ⚠ This used to be `max(last_value) - min(last_value)` across every Device
+    # at the Plant. That subtracted the MFM's reading from the ABT Meter's on a
+    # Plant with both (56,602 kWh in four minutes), and counted every counter
+    # reset as generation (a 240 kWp rooftop at 1.6 GWh "today"). Each Device is
+    # now integrated step by step, one Device Type answers by precedence, and a
+    # step that goes backwards or exceeds what the Plant could produce is
+    # refused and reported in `counter_anomalies` — see `domain/counters`.
+    series = (await read_counter_series(
+        session, tier=tier, plant_ids=[plant_id], start=start,
+        pairs=[*PLANT_ENERGY_COUNTER_PRECEDENCE, PLANT_IRRADIATION_SOURCE],
+    )).get(plant_id, [])
+    stations, meters = split_by_pair(series, PLANT_IRRADIATION_SOURCE)
 
-    irradiation = (await session.execute(text(f"""
-        SELECT max(last_value) AS total
-          FROM {relation} a JOIN tags t ON t.id = a.tag_id
-          JOIN devices d ON d.id = a.device_id
-         WHERE d.plant_id = :plant_id AND t.code = 'GHI_CUMULATIVE'
-           AND a.bucket >= :start
-    """), {"plant_id": plant_id, "start": start})).scalar()
-
-    energy_kwh = float(energy or 0.0)
     dc_kwp = float(plant.dc_capacity_kwp or 0.0)
     ac_kw = float(plant.ac_capacity_kw or 0.0)
     hours = PERIODS[period].total_seconds() / 3600.0
+    grid_factor = float(plant.grid_factor) if plant.grid_factor is not None else None
 
+    energy_result = plant_energy(
+        meters, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac_kw or None)
+    irradiation = plant_irradiation(stations)
     # GHI_CUMULATIVE is kWh/m2; performance_ratio wants Wh/m2 over the period.
-    irradiation_wh = float(irradiation or 0.0) * 1000.0
+    irradiation_wh = (irradiation.value or 0.0) * 1000.0
 
-    pr = performance_ratio(energy_kwh, irradiation_wh, dc_kwp)
-    cuf_result = cuf(energy_kwh, ac_kw, hours)
-    co2 = co2_avoided_kg(
-        energy_kwh,
-        float(plant.grid_factor) if plant.grid_factor is not None else None,
-    )
+    if energy_result.value is None:
+        # Nothing to read is not "made nothing": every figure built on energy
+        # is undefined, with the reason, rather than a confident zero.
+        reason = energy_result.undefined_reason
+        energy_kwh = 0.0
+        pr = FormulaResult(None, performance_ratio(0.0, 0.0, 0.0).variant, reason)
+        cuf_result = FormulaResult(None, cuf(0.0, 0.0, 0.0).variant, reason)
+        co2 = FormulaResult(None, co2_avoided_kg(0.0, grid_factor).variant, reason)
+    else:
+        energy_kwh = energy_result.value
+        pr = performance_ratio(energy_kwh, irradiation_wh, dc_kwp)
+        cuf_result = cuf(energy_kwh, ac_kw, hours)
+        co2 = co2_avoided_kg(energy_kwh, grid_factor)
 
     uptime = (await session.execute(text("""
         SELECT count(*) FILTER (WHERE comm_status = 'online')::float
@@ -380,6 +396,17 @@ async def plant_kpis(
         # claims, and "the number looks stale" is otherwise unanswerable.
         "source_tier": tier.value,
         "energy_kwh": energy_kwh,
+        # Which meter the energy came from (OPEN-14 decides the order; until
+        # then it is `PLANT_ENERGY_COUNTER_PRECEDENCE`), and the steps refused
+        # as generation. ⚠ A non-empty `counter_anomalies` means the energy —
+        # and PR, CUF and CO2 with it — is short by an amount nobody can know.
+        "energy_source": energy_source_payload(energy_result),
+        "counter_anomalies": counter_anomalies_payload(energy_result),
+        "irradiation_kwh_m2": {
+            "value": irradiation.value,
+            "station_count": len(irradiation.stations),
+            "undefined_reason": irradiation.undefined_reason,
+        },
         "performance_ratio": render(pr),
         "cuf": render(cuf_result),
         "availability": render(avail),
@@ -1281,20 +1308,33 @@ async def block_kpis(
 
     now = datetime.now(UTC)
     start = now - PERIODS[period]
-    energy = (await session.execute(text("""
-        SELECT max(a.last_value) - min(a.last_value)
-          FROM agg_1h_v a JOIN tags t ON t.id = a.tag_id
-          JOIN devices d ON d.id = a.device_id
-         WHERE d.block_id = :block_id AND t.code = 'ENERGY_EXPORT_TOTAL'
-           AND a.bucket >= :start
-    """), {"block_id": block_id, "start": start})).scalar()
+    # The same step-by-step integration as the Plant endpoint, over the Devices
+    # in this Block — which are usually Inverters, since a meter sees a whole
+    # Plant rather than a zone. The Block's own capacity is the ceiling where a
+    # Device has no rating of its own. ⚠ It was `max - min` over the hourly tier
+    # across every Device in the Block, with the same failures.
+    tier = select_tier(start, now, now)
+    series = (await read_counter_series(
+        session, tier=tier, block_id=block_id, start=start,
+        pairs=PLANT_ENERGY_COUNTER_PRECEDENCE,
+    )).get(block.plant_id, [])
+    energy_result = plant_energy(
+        series, PLANT_ENERGY_COUNTER_PRECEDENCE,
+        plant_ac_capacity_kw=float(block.capacity_kwp) or None)
 
-    energy_kwh = float(energy or 0.0)
-    yield_result = specific_yield(energy_kwh, float(block.capacity_kwp))
+    energy_kwh = energy_result.value or 0.0
+    yield_result = (
+        specific_yield(energy_kwh, float(block.capacity_kwp))
+        if energy_result.value is not None
+        else FormulaResult(None, "specific_yield", energy_result.undefined_reason)
+    )
     return {
         "block_id": block_id, "period": period,
         "capacity_kwp": float(block.capacity_kwp),
         "energy_kwh": energy_kwh,
+        "source_tier": tier.value,
+        "energy_source": energy_source_payload(energy_result),
+        "counter_anomalies": counter_anomalies_payload(energy_result),
         "specific_yield": {"value": yield_result.value, "variant": yield_result.variant,
                            "undefined_reason": yield_result.undefined_reason},
         "assumptions_note": "Provisional pending OPEN-16.",
