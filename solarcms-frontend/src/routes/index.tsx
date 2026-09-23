@@ -15,6 +15,7 @@ import { LoginPage } from "@/components/layout/LoginPage";
 import { useAuth } from "@/auth/AuthProvider";
 import { useDashboards } from "@/auth/useDashboard";
 import { EmptyState, LoadingState } from "@/components/state";
+import { PlantFilterBar } from "@/components/layout/PlantFilterBar";
 
 import { PortfolioDashboard } from "@/dashboards/PortfolioDashboard";
 import { PlantsDashboard } from "@/dashboards/PlantsDashboard";
@@ -54,9 +55,17 @@ const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
   reports: ReportsDashboard,
 };
 
+/**
+ * The screens about one Plant at a time (and Alarms, filtered by Plant), which
+ * a platform administrator narrows by Client and search. The bar is rendered
+ * here, outside the page, so it survives the page's own loading states.
+ */
+const PLANT_FILTERED_DASHBOARDS = new Set(["single_plant", "sld", "inverter_monitoring", "alarms"]);
+
 function DashboardRoute(): JSX.Element {
   const { code = "" } = useParams();
   const dashboards = useDashboards();
+  const { me } = useAuth();
 
   // A-3 is checked here as well as in the navigation: a pasted URL must not
   // reach a dashboard the User was not granted. The server enforces the data
@@ -77,6 +86,14 @@ function DashboardRoute(): JSX.Element {
         title={`No component for "${code}"`}
         detail="This dashboard exists in the database but has no component yet. Adding one is a component plus an entry in the dashboard map."
       />
+    );
+  }
+  if (me?.platform_admin && PLANT_FILTERED_DASHBOARDS.has(code)) {
+    return (
+      <div className="space-y-4">
+        <PlantFilterBar />
+        <Component />
+      </div>
     );
   }
   return <Component />;

@@ -11,6 +11,7 @@
  * polluting the numbers.
  */
 
+import { useState } from "react";
 import {
   useAllPlants,
   useAlarms,
@@ -63,6 +64,7 @@ import {
 import type { IconProps } from "@/components/icons";
 import type { ComponentType } from "react";
 import {
+  co2FactorBasis,
   fleetTotal,
   instrumentedSplit,
   weightedRatio,
@@ -74,6 +76,7 @@ import {
   sumLivePower,
 } from "./fleet/condition";
 import { FleetComparison, buildFleetRows } from "./fleet/FleetComparison";
+import { PlantDonut, plantMarks, type MarkKey } from "./fleet/HeadlineCharts";
 import {
   FleetCard,
   FleetTile,
@@ -134,6 +137,9 @@ export function PortfolioDashboard(): JSX.Element {
   // Live generation is each Plant's own resolved Current Power, summed — so
   // every contribution keeps the provenance its Plant screen shows.
   const { dashboards } = usePlantDashboardFanout(counted);
+  // The Plant under the pointer in any of the headline donuts, so the same
+  // Plant lights up in all of them.
+  const [highlight, setHighlight] = useState<MarkKey | null>(null);
 
   if (plantsQuery.isLoading) {
     return (
@@ -174,6 +180,26 @@ export function PortfolioDashboard(): JSX.Element {
   const totalEnergy = fleetTotal(kpis.map((kpi) => kpi?.energy_kwh));
   const totalCo2 = fleetTotal(kpis.map((kpi) => kpi?.co2_avoided_kg.value));
 
+  // Say which factor the CO₂ figure actually used. With no Region factor
+  // anywhere, CO₂ is energy × one constant and its donut is the energy donut
+  // again — which reads as a bug unless the tile says why.
+  const co2Basis = co2FactorBasis(
+    counted.map((plant, index) => ({ code: plant.code, figure: kpis[index]?.co2_avoided_kg })),
+  );
+  const co2Fallbacks = co2Basis.fallback.length;
+  const co2Footer =
+    co2Fallbacks === 0
+      ? "Each Region's grid factor · provisional (OPEN-16)"
+      : co2Basis.regional === 0
+        ? "National default factor · no Region factor set"
+        : `National default factor for ${co2Fallbacks} of ${co2Fallbacks + co2Basis.regional} Plants`;
+  const co2Hint =
+    co2Fallbacks === 0
+      ? "Uses each region's grid emission factor. Provisional pending OPEN-16. The donut splits the total by Plant."
+      : `${co2Basis.fallback.join(", ")} ${co2Fallbacks === 1 ? "has" : "have"} no Region grid factor, so ${co2Fallbacks === 1 ? "it uses" : "they use"} the national default${
+          co2Basis.regional === 0 ? ", and the donut repeats the energy split" : ""
+        }. Assign a Region with a factor in Plant Setup. Provisional pending OPEN-16.`;
+
   /*
     ⚠ Every ratio carries each Plant's coverage, and that is load-bearing.
     A Plant with no Devices answers `availability: 0.0` — a real number, not a
@@ -195,6 +221,15 @@ export function PortfolioDashboard(): JSX.Element {
   const fleetCuf = weightedRatio(ratioEntries((kpi) => kpi?.cuf));
   const split = instrumentedSplit(kpis);
   const fleetRows = buildFleetRows(counted, kpis);
+
+  // One Plant order for every headline donut — by DC capacity — so a Plant is
+  // the same colour in all of them whatever its share of each.
+  const kpiByPlant = new Map(counted.map((plant, index) => [plant.id, kpis[index]]));
+  const capacityByPlant = new Map(counted.map((plant) => [plant.id, plant.dc_capacity_kwp]));
+  const donutPlants = [...counted].sort(
+    (a, b) =>
+      (b.dc_capacity_kwp ?? 0) - (a.dc_capacity_kwp ?? 0) || a.name.localeCompare(b.name),
+  );
 
   const alarms = alarmsQuery.data ?? [];
   const bySeverity = (["critical", "high", "medium", "low"] as const).map((severity) => ({
@@ -221,6 +256,19 @@ export function PortfolioDashboard(): JSX.Element {
 
   const powerSlots = counted.map((_, index) => slotFor(dashboards[index], "kpi.current_power"));
   const live = sumLivePower(powerSlots);
+  const liveByPlant = new Map(counted.map((plant, index) => [plant.id, powerSlots[index]?.value]));
+  // What the live figure is laid against: the AC capacity of exactly the
+  // Plants in the sum. Only in kW — a unit is never converted to make a ring
+  // fit — and only if every one of them has an AC capacity recorded, since a
+  // denominator missing a Plant overstates how hard the rest are working.
+  const reporting = counted.filter((_, index) => powerSlots[index]?.value != null);
+  const liveCapacity =
+    live.unit === "kW" &&
+    !live.mixedUnits &&
+    reporting.length > 0 &&
+    reporting.every((plant) => plant.ac_capacity_kw !== null && plant.ac_capacity_kw > 0)
+      ? reporting.reduce((sum, plant) => sum + (plant.ac_capacity_kw ?? 0), 0)
+      : null;
   const liveLoading = powerSlots.some((slot) => slot === undefined);
   const liveFooter = liveLoading
     ? "Resolving each Plant…"
@@ -312,7 +360,7 @@ export function PortfolioDashboard(): JSX.Element {
     const implausible = ratioIsImplausible(figure.value);
     return (
       <FleetTile
-        className="xl:col-span-4"
+        className="lg:col-span-2 xl:col-span-1"
         icon={icon}
         iconTone={iconTone}
         frame={implausible ? "warn" : "neutral"}
@@ -390,130 +438,183 @@ export function PortfolioDashboard(): JSX.Element {
       {/*
         Two rows that each mean one thing: what the fleet *produces* (capacity,
         power, energy, CO₂) and how it is *performing* (PR, CUF, availability,
-        Alarms, Devices). On a wide screen that is 4 over 5, on a 20-column grid
-        so both rows fill edge to edge. Narrower, it is 3 × 3 — CO₂ drops to
-        the last row beside the two status tiles, so each row still reads as
-        one group — and 2 across below that.
+        Alarms, Devices). They are separate grids because they are different
+        heights — the first row carries a graphic under every figure — and a
+        graphic tile in a row of plain ones stretches them into cards with a
+        hole in the middle. Wide, that is 4 over 5, both rows edge to edge.
+        Narrower, the graphics go 2 × 2 and the five go 3 then 2 (a 6-column
+        track, so the pair fills the row rather than leaving a hole); 2 across
+        below that.
       */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[repeat(20,minmax(0,1fr))]">
-        <FleetTile
-          className="xl:col-span-5"
-          icon={IconCapacity}
-          iconTone="accent"
-          label="Total capacity"
-          footer={`AC ${formatCapacity(totalAcCapacity, "kW")} · active Plants only`}
-          hint="Sums active Plants only. Draft and commissioning Plants are excluded."
-        >
-          <TileFigure value={totalDcCapacity} unit="kWp" />
-        </FleetTile>
-        <FleetTile
-          className="xl:col-span-5"
-          icon={IconPower}
-          iconTone="accent"
-          label="Live generation"
-          footer={liveFooter}
-          showHint
-          hint="The sum of each Plant's resolved Current Power. Provenance per Plant is on Generation by Plant — hover a bar."
-        >
-          <TileFigure value={live.value} unit={live.unit} loading={liveLoading} />
-        </FleetTile>
-        <FleetTile
-          className="xl:col-span-5"
-          icon={IconCalendar}
-          iconTone="accent"
-          label={`Energy · ${period}`}
-          footer="From hourly aggregates, never raw Readings"
-          showHint
-          hint="Summed from each Plant's export counter endpoints, read from hourly aggregates rather than raw Readings."
-        >
-          <TileFigure value={totalEnergy} unit="kWh" loading={kpisLoading} />
-        </FleetTile>
-        <FleetTile
-          className="lg:order-1 xl:order-none xl:col-span-5"
-          icon={IconLeaf}
-          iconTone="accent"
-          label={`CO₂ avoided · ${period}`}
-          footer="Each Region's grid factor · provisional (OPEN-16)"
-          hint="Uses each region's grid emission factor. Provisional pending OPEN-16."
-        >
-          <TileFigure value={totalCo2} unit="kg" loading={kpisLoading} />
-        </FleetTile>
-        {ratioTile(
-          "Fleet performance ratio",
-          IconGauge,
-          "accent",
-          fleetPr,
-          `Capacity-weighted · ${variantNote(fleetPr.variant)}`,
-          "Capacity-weighted across active Plants. Plants with an undefined PR are excluded from the weighting, never counted as zero.",
-          true,
-        )}
-        {ratioTile(
-          "Fleet CUF",
-          IconClock,
-          "accent",
-          fleetCuf,
-          "Capacity-weighted",
-          "Capacity utilisation factor, capacity-weighted.",
-        )}
-        {ratioTile(
-          "Fleet availability",
-          IconAvailability,
-          "accent",
-          fleetAvailability,
-          "Communication status, capacity-weighted",
-          "Capacity-weighted. Communication loss and equipment downtime are distinguished at the Device level.",
-        )}
-        <FleetTile
-          className="lg:order-1 xl:order-none xl:col-span-4"
-          icon={IconAlarm}
-          iconTone={alarmTone}
-          frame={alarmTone}
-          label="Active alarms"
-          footer={
-            alarms.length === 0 ? (
-              "None open across the fleet"
-            ) : (
-              <span className="flex flex-wrap gap-1">
-                {bySeverity
-                  .filter((entry) => entry.count > 0)
-                  .map((entry) => (
-                    <span key={entry.severity} className="inline-flex items-center gap-1">
-                      <SeverityBadge severity={entry.severity} />
-                      {entry.count}
-                    </span>
-                  ))}
-              </span>
-            )
-          }
-        >
-          <TileFigure value={alarms.length} digits={0} tone={alarmTone} />
-        </FleetTile>
-        <FleetTile
-          className="sm:col-span-2 lg:order-1 lg:col-span-1 xl:order-none xl:col-span-4"
-          icon={IconHealth}
-          iconTone="accent"
-          frame={
-            countedDevices.length > 0 && devicesOnline < countedDevices.length ? "warn" : "neutral"
-          }
-          label="Devices reporting"
-          hint="Registered Devices within their expected interval, across active Plants."
-          footer={
-            countedDevices.length === 0 ? (
-              "No Devices registered"
-            ) : devicesOnline === countedDevices.length ? (
-              "All within their expected interval"
-            ) : (
-              <DeviceHealthStrip health={countedDevices} />
-            )
-          }
-        >
-          <TileFigure
-            value={
-              countedDevices.length === 0 ? null : `${devicesOnline} / ${countedDevices.length}`
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <FleetTile
+            icon={IconCapacity}
+            iconTone="accent"
+            label="Total capacity"
+            footer={`AC ${formatCapacity(totalAcCapacity, "kW")} · active Plants only`}
+            hint="Sums active Plants only. Draft and commissioning Plants are excluded."
+          >
+            <TileFigure value={totalDcCapacity} unit="kWp" />
+            <div className="mt-3">
+              <PlantDonut
+                label="Total capacity"
+                marks={plantMarks(donutPlants, (id) => capacityByPlant.get(id))}
+                unit="kWp"
+                empty="No capacity recorded"
+                highlight={highlight}
+                onHighlight={setHighlight}
+                onSelect={openPlant}
+              />
+            </div>
+          </FleetTile>
+          <FleetTile
+            icon={IconPower}
+            iconTone="accent"
+            label="Live generation"
+            footer={liveFooter}
+            showHint
+            hint="The sum of each Plant's resolved Current Power. The ring is that output as a share of the AC capacity of the Plants reporting it, split by Plant. Provenance per Plant is on Generation by Plant — hover a bar."
+          >
+            <TileFigure value={live.value} unit={live.unit} loading={liveLoading} />
+            <div className="mt-3">
+              <PlantDonut
+                label="Live generation"
+                marks={plantMarks(donutPlants, (id) => liveByPlant.get(id))}
+                unit={live.unit ?? "kW"}
+                capacity={liveCapacity}
+                loading={liveLoading}
+                empty="No Plant is reporting power"
+                highlight={highlight}
+                onHighlight={setHighlight}
+                onSelect={openPlant}
+              />
+            </div>
+          </FleetTile>
+          <FleetTile
+            icon={IconCalendar}
+            iconTone="accent"
+            label={`Energy · ${period}`}
+            footer="From hourly aggregates, never raw Readings"
+            showHint
+            hint="Summed from each Plant's export counter endpoints, read from hourly aggregates rather than raw Readings. The donut splits the total by Plant."
+          >
+            <TileFigure value={totalEnergy} unit="kWh" loading={kpisLoading} />
+            <div className="mt-3">
+              <PlantDonut
+                label={`Energy · ${period}`}
+                marks={plantMarks(donutPlants, (id) => kpiByPlant.get(id)?.energy_kwh)}
+                unit="kWh"
+                loading={kpisLoading}
+                empty="Nothing generated yet"
+                highlight={highlight}
+                onHighlight={setHighlight}
+                onSelect={openPlant}
+              />
+            </div>
+          </FleetTile>
+          <FleetTile
+            icon={IconLeaf}
+            iconTone="accent"
+            label={`CO₂ avoided · ${period}`}
+            footer={co2Footer}
+            hint={co2Hint}
+            showHint={co2Fallbacks > 0}
+          >
+            <TileFigure value={totalCo2} unit="kg" loading={kpisLoading} />
+            <div className="mt-3">
+              <PlantDonut
+                label={`CO₂ avoided · ${period}`}
+                marks={plantMarks(donutPlants, (id) => kpiByPlant.get(id)?.co2_avoided_kg.value)}
+                unit="kg"
+                loading={kpisLoading}
+                empty="None avoided yet"
+                highlight={highlight}
+                onHighlight={setHighlight}
+                onSelect={openPlant}
+              />
+            </div>
+          </FleetTile>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6 xl:grid-cols-5">
+          {ratioTile(
+            "Fleet performance ratio",
+            IconGauge,
+            "accent",
+            fleetPr,
+            `Capacity-weighted · ${variantNote(fleetPr.variant)}`,
+            "Capacity-weighted across active Plants. Plants with an undefined PR are excluded from the weighting, never counted as zero.",
+            true,
+          )}
+          {ratioTile(
+            "Fleet CUF",
+            IconClock,
+            "accent",
+            fleetCuf,
+            "Capacity-weighted",
+            "Capacity utilisation factor, capacity-weighted.",
+          )}
+          {ratioTile(
+            "Fleet availability",
+            IconAvailability,
+            "accent",
+            fleetAvailability,
+            "Communication status, capacity-weighted",
+            "Capacity-weighted. Communication loss and equipment downtime are distinguished at the Device level.",
+          )}
+          <FleetTile
+            className="lg:col-span-3 xl:col-span-1"
+            icon={IconAlarm}
+            iconTone={alarmTone}
+            frame={alarmTone}
+            label="Active alarms"
+            footer={
+              alarms.length === 0 ? (
+                "None open across the fleet"
+              ) : (
+                <span className="flex flex-wrap gap-1">
+                  {bySeverity
+                    .filter((entry) => entry.count > 0)
+                    .map((entry) => (
+                      <span key={entry.severity} className="inline-flex items-center gap-1">
+                        <SeverityBadge severity={entry.severity} />
+                        {entry.count}
+                      </span>
+                    ))}
+                </span>
+              )
             }
-            tone={devicesOnline < countedDevices.length ? "warn" : "ink"}
-          />
-        </FleetTile>
+          >
+            <TileFigure value={alarms.length} digits={0} tone={alarmTone} />
+          </FleetTile>
+          <FleetTile
+            className="sm:col-span-2 lg:col-span-3 xl:col-span-1"
+            icon={IconHealth}
+            iconTone="accent"
+            frame={
+              countedDevices.length > 0 && devicesOnline < countedDevices.length ? "warn" : "neutral"
+            }
+            label="Devices reporting"
+            hint="Registered Devices within their expected interval, across active Plants."
+            footer={
+              countedDevices.length === 0 ? (
+                "No Devices registered"
+              ) : devicesOnline === countedDevices.length ? (
+                "All within their expected interval"
+              ) : (
+                <DeviceHealthStrip health={countedDevices} />
+              )
+            }
+          >
+            <TileFigure
+              value={
+                countedDevices.length === 0 ? null : `${devicesOnline} / ${countedDevices.length}`
+              }
+              tone={devicesOnline < countedDevices.length ? "warn" : "ink"}
+            />
+          </FleetTile>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">

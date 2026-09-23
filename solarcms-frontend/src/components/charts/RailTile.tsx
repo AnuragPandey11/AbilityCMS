@@ -43,6 +43,7 @@ export function RailTile({
   hint,
   footnote,
   figureTone = "ink",
+  visual,
   children,
 }: {
   /** Kept for existing callers; every tone renders the same (see `WELL`). */
@@ -52,8 +53,14 @@ export function RailTile({
   hint?: string;
   footnote?: ReactNode;
   figureTone?: keyof typeof FIGURE;
-  /** The figure — usually a `RailFigure`. */
-  children: ReactNode;
+  /**
+   * A drawing of the figure, below it. It takes the tile's spare height, so in
+   * a row of tiles with drawings of different sizes every footnote still sits
+   * on the same line.
+   */
+  visual?: ReactNode;
+  /** The figure — usually a `RailFigure`. Omitted when `visual` carries it. */
+  children?: ReactNode;
 }): JSX.Element {
   return (
     <div className="surface-card flex min-w-0 flex-col rounded-card border border-line p-5 xl:p-4 2xl:p-5">
@@ -68,9 +75,12 @@ export function RailTile({
         </span>
         {hint ? <InfoHint text={hint} /> : null}
       </div>
-      <div className={`mt-4 ${FIGURE[figureTone]}`}>{children}</div>
+      {children !== undefined && children !== null ? (
+        <div className={`mt-4 ${FIGURE[figureTone]}`}>{children}</div>
+      ) : null}
+      {visual ? <div className="mt-3 flex min-h-0 flex-1 flex-col justify-center">{visual}</div> : null}
       {footnote ? (
-        <p className="mt-2 text-xs leading-snug text-ink-faint">{footnote}</p>
+        <p className={`${visual ? "mt-3" : "mt-2"} text-xs leading-snug text-ink-faint`}>{footnote}</p>
       ) : null}
     </div>
   );

@@ -266,11 +266,19 @@ export function PeriodPicker({
   // and green here said "healthy" about a date range.
   if (size === "lg") {
     return (
-      <div className="inline-flex gap-1 rounded-control border border-line bg-surface-sunken p-1">
+      <div
+        role="radiogroup"
+        aria-label="Period"
+        className="inline-flex gap-1 rounded-control border border-line bg-surface-sunken p-1"
+      >
         {KPI_PERIODS.map((period) => (
           <button
             key={period}
             type="button"
+            // Announced like the Window control beside it: which one is
+            // chosen was otherwise visible and never said.
+            role="radio"
+            aria-checked={value === period}
             onClick={() => onChange(period)}
             className={`rounded-control px-3.5 py-1.5 text-sm font-semibold capitalize transition ${
               value === period
@@ -285,11 +293,17 @@ export function PeriodPicker({
     );
   }
   return (
-    <div className="inline-flex rounded-control border border-line bg-surface-sunken p-0.5">
+    <div
+      role="radiogroup"
+      aria-label="Period"
+      className="inline-flex rounded-control border border-line bg-surface-sunken p-0.5"
+    >
       {KPI_PERIODS.map((period) => (
         <button
           key={period}
           type="button"
+          role="radio"
+          aria-checked={value === period}
           onClick={() => onChange(period)}
           className={`rounded-control px-2.5 py-1 text-xs font-medium capitalize transition ${
             value === period

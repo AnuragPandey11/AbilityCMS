@@ -218,12 +218,13 @@ export function usePlants(params: plantsApi.ListPlantsParams = {}) {
 }
 
 /** Every visible Plant, paged through. Portfolio sums these (§6.1). */
-export function useAllPlants() {
+export function useAllPlants(enabled = true) {
   return useQuery({
     queryKey: qk.allPlants(),
     // Wrapped: react-query calls the fn with its own context object,
     // which `listAllPlants` would read as filter parameters.
     queryFn: () => plantsApi.listAllPlants(),
+    enabled,
     ...SIXTY_SECONDS,
   });
 }

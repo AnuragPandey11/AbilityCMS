@@ -38,6 +38,7 @@ import { useDashboards, dashboardLabel } from "@/auth/useDashboard";
 import { useAlarms } from "@/api/hooks";
 import { LiveIndicator } from "@/live/LiveIndicator";
 import { BrandMark } from "@/components/layout/BrandMark";
+import { HeaderSlotProvider } from "@/components/layout/HeaderSlot";
 import { ThemeToggle } from "@/theme/ThemeToggle";
 import { IconLogout, IconMenu } from "@/components/icons";
 import {
@@ -74,6 +75,9 @@ export function AppShell(): JSX.Element {
   // `has` is passed so the menu cannot offer a dashboard whose screen refuses.
   const groups = groupDashboards(dashboards, has);
   const [menuOpen, setMenuOpen] = useState(false);
+  // State rather than a ref, so the page re-renders into the slot once it
+  // exists. See `HeaderSlot` for why the first frame renders nothing.
+  const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null);
   const location = useLocation();
 
   // Only `active`. An acknowledged Alarm has already reached somebody, and a
@@ -197,7 +201,9 @@ export function AppShell(): JSX.Element {
           >
             <IconMenu size={16} />
           </button>
-          <div className="ml-auto flex items-center gap-3">
+          {/* Filled by the page, if it has an identity worth pinning. */}
+          <div ref={setHeaderSlot} className="flex min-w-0 flex-1 items-center" />
+          <div className="ml-auto flex shrink-0 items-center gap-3">
             <LiveIndicator />
             {/* Hidden on a phone: the count is context, and the header there
                 has room for the live state and the theme toggle, not both. */}
@@ -208,7 +214,9 @@ export function AppShell(): JSX.Element {
           </div>
         </header>
         <main className="min-w-0 flex-1 overflow-x-hidden p-4 sm:p-5">
-          <Outlet />
+          <HeaderSlotProvider value={headerSlot}>
+            <Outlet />
+          </HeaderSlotProvider>
         </main>
       </div>
     </div>

@@ -90,8 +90,18 @@ export function CoverageBadge({
 /**
  * The same fact as a bar, for the detail panel where there is room to show the
  * shortfall rather than only name it.
+ *
+ * `compact` keeps the bar and trades the sentence for its one actionable part —
+ * how much is missing — with the full sentence on hover. For a tile that sits
+ * beside the gauges it qualifies, at their height.
  */
-export function CoverageBar({ coverage }: { coverage: KpiCoverage | null | undefined }): JSX.Element {
+export function CoverageBar({
+  coverage,
+  compact = false,
+}: {
+  coverage: KpiCoverage | null | undefined;
+  compact?: boolean;
+}): JSX.Element {
   if (!coverage) {
     return (
       <p className="text-[11px] leading-snug text-ink-faint">
@@ -111,6 +121,38 @@ export function CoverageBar({ coverage }: { coverage: KpiCoverage | null | undef
   const percent = Math.max(0, Math.min(1, coverage.ratio)) * 100;
   const tone = coverage.complete || percent >= 98 ? "bg-ok" : percent >= 80 ? "bg-warn" : "bg-bad";
 
+  const sentence =
+    `${coverage.received_samples.toLocaleString()} of ` +
+    `${coverage.expected_samples.toLocaleString()} expected samples` +
+    (coverage.missing_seconds > 0 ? `, about ${duration(coverage.missing_seconds)} missing` : "") +
+    (coverage.excluded_seconds > 0
+      ? `, ${duration(coverage.excluded_seconds)} excluded as planned maintenance`
+      : "") +
+    ". Figures are never corrected for a gap — that would be inventing data.";
+
+  if (compact) {
+    return (
+      <div title={sentence}>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-sm text-ink-muted">Period coverage</span>
+          <span className="figure text-base font-semibold text-ink">{percent.toFixed(1)}%</span>
+        </div>
+        <div
+          className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-sunken"
+          role="img"
+          aria-label={`${percent.toFixed(1)} percent of the period has data`}
+        >
+          <div className={`h-full rounded-full ${tone}`} style={{ width: `${percent}%` }} />
+        </div>
+        <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">
+          {coverage.missing_seconds > 0
+            ? `About ${duration(coverage.missing_seconds)} of the period missing`
+            : "Nothing missing"}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2 text-[11px]">
@@ -124,15 +166,7 @@ export function CoverageBar({ coverage }: { coverage: KpiCoverage | null | undef
       >
         <div className={`h-full rounded-full ${tone}`} style={{ width: `${percent}%` }} />
       </div>
-      <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
-        {coverage.received_samples.toLocaleString()} of{" "}
-        {coverage.expected_samples.toLocaleString()} expected samples
-        {coverage.missing_seconds > 0 ? `, about ${duration(coverage.missing_seconds)} missing` : ""}
-        {coverage.excluded_seconds > 0
-          ? `, ${duration(coverage.excluded_seconds)} excluded as planned maintenance`
-          : ""}
-        . Figures are never corrected for a gap — that would be inventing data.
-      </p>
+      <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">{sentence}</p>
     </div>
   );
 }

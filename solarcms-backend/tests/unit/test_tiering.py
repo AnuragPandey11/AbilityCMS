@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from solarcms.domain.tiering import Tier, estimated_points, select_tier, value_column
+from solarcms.domain.tiering import (
+    Tier,
+    bucket_start,
+    estimated_points,
+    select_tier,
+    value_column,
+)
 
 NOW = datetime(2026, 9, 11, 12, tzinfo=UTC)
 
@@ -56,3 +62,22 @@ class TestFinestTier:
         assert select_tier(now - timedelta(days=1), now, now, finest=Tier.AGG_1H) == Tier.AGG_1H
         assert select_tier(
             now - timedelta(days=800), now, now, finest=Tier.AGG_1H) == Tier.AGG_1D
+
+
+class TestBucketStart:
+    """The aggregates bucket in UTC, so a floor lands on their boundaries."""
+
+    AT = datetime(2026, 9, 21, 16, 26, 41, tzinfo=UTC)
+
+    def test_minute(self) -> None:
+        assert bucket_start(self.AT, Tier.AGG_1M) == datetime(2026, 9, 21, 16, 26, tzinfo=UTC)
+
+    def test_hour(self) -> None:
+        assert bucket_start(self.AT, Tier.AGG_1H) == datetime(2026, 9, 21, 16, tzinfo=UTC)
+
+    def test_day_is_utc_midnight_not_the_plants(self) -> None:
+        assert bucket_start(self.AT, Tier.AGG_1D) == datetime(2026, 9, 21, tzinfo=UTC)
+
+    def test_a_boundary_is_its_own_bucket(self) -> None:
+        on = datetime(2026, 9, 21, 16, tzinfo=UTC)
+        assert bucket_start(on, Tier.AGG_15M) == on

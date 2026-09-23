@@ -976,6 +976,12 @@ PR_VARIANT: Final = "poa_uncorrected"  # not temperature-corrected
 CUF_VARIANT: Final = "ac_capacity_calendar_hours"  # no exclusions
 AVAILABILITY_VARIANT: Final = "time_based_excluding_comms"
 
+# The month a KPI "year" begins in, in the Plant's own calendar. Decided
+# 23 Sep 2026 by the development team: the calendar year, January to December —
+# not the Indian financial year (April to March), which the client may yet ask
+# for. One constant, so that answer is a one-line change (`domain/periods`).
+KPI_YEAR_START_MONTH: Final = 1
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # §12.3 Alarm thresholds — ⚠ ASSUMED. Seed data only; closes on OPEN-14.

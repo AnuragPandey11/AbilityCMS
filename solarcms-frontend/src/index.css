@@ -564,4 +564,58 @@
       transform: none;
     }
   }
+
+  /**
+   * Entry motion for the Portfolio's headline graphics: a donut turns into
+   * place, a curve fades up, and the latest reading breathes. Once each, on
+   * mount. The curve fades rather than wiping in from the left: a wipe starts
+   * fully clipped, so any moment it replays — a remount, a capture — shows an
+   * empty chart, which is the one thing a chart must never look like by
+   * accident.
+   */
+  .chart-spin-in {
+    transform-origin: center;
+    animation: chart-spin-in 750ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .chart-fade-in {
+    animation: chart-fade-in 600ms ease-out;
+  }
+  .chart-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: chart-pulse 2.4s ease-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chart-spin-in,
+    .chart-fade-in {
+      animation: none;
+    }
+    .chart-pulse {
+      animation: none;
+      opacity: 0;
+    }
+  }
+}
+
+@keyframes chart-spin-in {
+  from {
+    opacity: 0;
+    transform: rotate(-70deg) scale(0.9);
+  }
+}
+@keyframes chart-fade-in {
+  from {
+    opacity: 0.25;
+    transform: translateY(4px);
+  }
+}
+@keyframes chart-pulse {
+  0% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(3.2);
+  }
 }

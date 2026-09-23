@@ -21,7 +21,12 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solarcms.domain.counters import CounterSample, DeviceSeries, PlantEnergy
+from solarcms.domain.counters import (
+    CounterBucket,
+    DeviceSeries,
+    PlantEnergy,
+    samples_from_buckets,
+)
 from solarcms.domain.tiering import TIERS, Tier
 
 
@@ -63,7 +68,7 @@ async def read_counter_series(
     rows = (await session.execute(text(f"""
         SELECT d.plant_id, d.id AS device_id, d.code AS device_code,
                dt.code AS type_code, t.code AS tag_code, d.rated_capacity_kw,
-               a.bucket, a.last_value
+               a.bucket, a.min_value, a.last_value
           FROM {tier.value}_v a
           JOIN devices d        ON d.id = a.device_id
           JOIN device_models dm ON dm.id = d.device_model_id
@@ -80,8 +85,9 @@ async def read_counter_series(
     # A bucket's `last_value` is the last reading *in* it, taken near its end,
     # so the sample is stamped at the bucket's end. Stamping it at the start
     # would attribute every hour's energy to the hour before — and a Report's
-    # daily totals to the wrong local day around midnight.
-    # Capped at now: the bucket still filling has not reached its end.
+    # daily totals to the wrong local day around midnight. The first bucket's
+    # `min_value` is where the register stood when the series began; see
+    # `samples_from_buckets` for what was lost without it.
     resolution = next(spec.resolution for spec in TIERS if spec.tier == tier)
     now = datetime.now(UTC)
     grouped: dict[tuple[int, int, str], dict[str, Any]] = {}
@@ -92,17 +98,20 @@ async def read_counter_series(
             "device_code": row.device_code, "type_code": row.type_code,
             "tag_code": row.tag_code,
             "rated": float(row.rated_capacity_kw) if row.rated_capacity_kw else None,
-            "samples": [],
+            "buckets": [],
         })
-        entry["samples"].append(
-            CounterSample(min(row.bucket + resolution, now), float(row.last_value)))
+        entry["buckets"].append(CounterBucket(
+            row.bucket,
+            float(row.min_value) if row.min_value is not None else None,
+            float(row.last_value)))
 
     result: dict[int, list[DeviceSeries]] = {}
     for entry in grouped.values():
         result.setdefault(entry["plant_id"], []).append(DeviceSeries(
             device_id=entry["device_id"], device_code=entry["device_code"],
             device_type_code=entry["type_code"], tag_code=entry["tag_code"],
-            samples=tuple(entry["samples"]), rated_capacity_kw=entry["rated"],
+            samples=samples_from_buckets(entry["buckets"], resolution, now),
+            rated_capacity_kw=entry["rated"],
         ))
     return result
 

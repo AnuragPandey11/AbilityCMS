@@ -1,6 +1,14 @@
 /**
  * Period performance: PR, CUF, Availability, CO₂ — and what they are worth.
  *
+ * Two halves. `PerformanceBand` sits on the page under the headline strip and
+ * carries the three gauges, the period's coverage and CO₂ avoided — the part
+ * that is read at a glance, so it costs no click. `PerformancePanel` is the
+ * drawer behind it: each figure's variant spelled out, the energy the ratios
+ * were computed from, the tier and the assumptions. The gauges used to live
+ * only in the drawer, which hid the most visual reading of the Plant behind a
+ * card that summarised it in three lines of text.
+ *
  * Kept deliberately separate from the live headline strip, and not merged with
  * it however well they would fit together. The strip is *what the Plant is
  * doing now*, read from the equipment this second. These are computed over a
@@ -21,9 +29,12 @@
  *   figure that is low, plausible, and wrong in a way nothing else reveals.
  */
 
-import type { KpiFigure, PlantKpis } from "@/api/schemas";
+import type { KpiFigure, KpiPeriod, PlantKpis } from "@/api/schemas";
 import { Gauge } from "@/components/charts/Gauge";
 import { CoverageBar } from "@/components/dashboard/CoverageBadge";
+import { Panel } from "@/components/ui";
+import { ErrorState, Skeleton } from "@/components/state";
+import { IconChevronRight } from "@/components/icons";
 import {
   UNDEFINED_DISPLAY,
   formatNumber,
@@ -32,6 +43,28 @@ import {
   ratioIsImplausible,
   variantNote,
 } from "@/format/value";
+import { formatDate } from "@/format/datetime";
+
+/**
+ * Where the figures begin, in the Plant's own calendar — so "month" reads as
+ * "since the 1st" rather than leaving the reader to guess between that and the
+ * last thirty days. A Plant younger than the period says when it was first
+ * heard, because that, not the 1st, is where CUF's hours are counted from.
+ */
+export function periodSince(
+  kpis: PlantKpis | undefined,
+  period: string,
+  timeZone?: string,
+): string | null {
+  const start = kpis?.period_start;
+  if (!start) return null;
+  if (period === "lifetime") return `since the first reading, ${formatDate(start, timeZone)}`;
+  const since = period === "today" ? "since midnight" : `since ${formatDate(start, timeZone)}`;
+  const first = kpis?.measured_since;
+  return first && Date.parse(first) > Date.parse(start)
+    ? `${since} (first reading ${formatDate(first, timeZone)})`
+    : since;
+}
 
 function FigureRow({
   label,
@@ -87,6 +120,127 @@ function FigureRow({
   );
 }
 
+/** Every tile in the band is this tall, so the row reads as one strip. */
+const BAND_TILE_HEIGHT = 168;
+
+/**
+ * The on-page half: three gauges and what qualifies them, in one row.
+ *
+ * Its own panel, titled with the period and the OPEN-16 caveat, rather than
+ * more tiles in the headline strip above it — see the module note. It sits
+ * directly under that strip because both answer "how is the Plant doing"
+ * before the schematic and charts answer "why", and because the Period
+ * control that scopes it is in the header just above.
+ */
+export function PerformanceBand({
+  kpis,
+  period,
+  isLoading,
+  error,
+  retry,
+  onOpen,
+  timeZone,
+}: {
+  kpis: PlantKpis | undefined;
+  period: KpiPeriod;
+  /** The Plant's zone, for the date the period began. */
+  timeZone?: string;
+  isLoading: boolean;
+  error: unknown;
+  retry: () => void;
+  /** Opens the drawer with every figure's variant, the energy and the tier. */
+  onOpen: () => void;
+}): JSX.Element {
+  let body: JSX.Element;
+  if (isLoading) {
+    // Tiles at their final height, so the page does not move when data lands.
+    body = (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-4" aria-hidden="true">
+        {Array.from({ length: 4 }, (_, index) => (
+          <Skeleton key={index} className="rounded-lg" style={{ height: BAND_TILE_HEIGHT }} />
+        ))}
+      </div>
+    );
+  } else if (!kpis) {
+    // Never three "not defined" gauges: that would state a fact about the
+    // period when the truth is that the request failed.
+    body = <ErrorState error={error} retry={retry} />;
+  } else {
+    body = (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-4">
+        {/* The three bounded ratios, as gauges. A gauge is the right form only
+            because these genuinely have a fixed 0..100% range — a gauge around
+            an unbounded quantity invents a maximum. */}
+        <Gauge figure={kpis.performance_ratio} label="Performance ratio" height={BAND_TILE_HEIGHT} />
+        <Gauge figure={kpis.cuf} label="CUF" height={BAND_TILE_HEIGHT} banded={false} />
+        <Gauge figure={kpis.availability} label="Availability" height={BAND_TILE_HEIGHT} />
+
+        {/* Coverage beside the gauges, not under a click (Guardrail 18): a
+            ratio over a period with a hole in it is low, plausible and wrong,
+            and nothing on the gauge itself says so. */}
+        <div
+          className="flex flex-col justify-between rounded-lg border border-line bg-surface-raised p-4 md:col-span-3 xl:col-span-1"
+          style={{ minHeight: BAND_TILE_HEIGHT }}
+        >
+          <CoverageBar coverage={kpis.coverage} compact />
+          <div
+            className="mt-3 flex items-baseline justify-between gap-3 border-t border-line pt-3"
+            title={
+              kpis.co2_avoided_kg.value === null
+                ? (kpis.co2_avoided_kg.undefined_reason ??
+                  "No grid emission factor is recorded for this Region.")
+                : "Uses the Region's grid emission factor."
+            }
+          >
+            <span className="text-sm text-ink-muted">CO₂ avoided</span>
+            {kpis.co2_avoided_kg.value === null ? (
+              <span className="figure text-base text-ink-faint">{UNDEFINED_DISPLAY}</span>
+            ) : (
+              <span className="figure text-base font-semibold text-ink">
+                {formatNumber(kpis.co2_avoided_kg.value)}
+                <span className="ml-1 text-xs font-normal text-ink-muted">kg</span>
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Panel
+      title={
+        <span className="text-lg">
+          Performance <span className="font-normal capitalize text-ink-muted">— {period}</span>
+        </span>
+      }
+      subtitle={
+        <span className="text-sm">
+          Computed {periodSince(kpis, period, timeZone) ?? "over the selected period"}, in the
+          Plant's time, from aggregates. Every formula is provisional pending OPEN-16.
+        </span>
+      }
+      actions={
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex items-center gap-1 rounded-control border border-line px-3 py-1.5 text-sm font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
+        >
+          Details
+          <IconChevronRight size={14} />
+        </button>
+      }
+    >
+      {body}
+    </Panel>
+  );
+}
+
+/**
+ * The drawer half. No gauges: they are on the page, and a second copy of the
+ * same three rings one click away would be the repetition the dashboard's
+ * layout exists to remove. What is here is what the gauges cannot say.
+ */
 export function PerformancePanel({
   kpis,
   period,
@@ -96,22 +250,13 @@ export function PerformancePanel({
 }): JSX.Element {
   return (
     <div className="space-y-4">
-      {/* The three bounded ratios, as gauges. A gauge is the right form only
-          because these genuinely have a fixed 0..100% range — a gauge around an
-          unbounded quantity invents a maximum. */}
-      <div className="grid grid-cols-3 gap-2">
-        <Gauge figure={kpis?.performance_ratio} label="Performance ratio" />
-        <Gauge figure={kpis?.cuf} label="CUF" />
-        <Gauge figure={kpis?.availability} label="Availability" />
-      </div>
-
       <div>
         <FigureRow
           label={`Energy (${period})`}
           figure={{ value: kpis?.energy_kwh ?? null, variant: null, undefined_reason: null }}
           kind="quantity"
           unit="kWh"
-          note="From hourly aggregates — Reports and KPIs never query raw Readings."
+          note="From aggregates (the tier is named below) — Reports and KPIs never query raw Readings."
         />
         <FigureRow label="Performance ratio" figure={kpis?.performance_ratio} kind="ratio" />
         <FigureRow label="CUF" figure={kpis?.cuf} kind="ratio" />
@@ -119,7 +264,7 @@ export function PerformancePanel({
           label="Availability"
           figure={kpis?.availability}
           kind="ratio"
-          note="Derived from Device communication status. A Collector failure is communication loss, not generation downtime."
+          note="Time-weighted over the period from each Device's recorded communication status. A Collector failure is communication loss, not generation downtime."
         />
         <FigureRow
           label="CO₂ avoided"

@@ -63,7 +63,7 @@ import {
 } from "@/components/icons";
 import { UNDEFINED_DISPLAY, formatNumber, formatValue } from "@/format/value";
 import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
-import { usePlantScope } from "@/state/usePlantScope";
+import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
@@ -174,7 +174,7 @@ function CardPages({
 }
 
 export function InverterMonitoringDashboard(): JSX.Element {
-  const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
+  const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   const devicesQuery = usePlantDevices(plantId);
   const tagsById = useTagsById();
   const { devices: liveDevices } = useLiveSocket();

@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  co2FactorBasis,
   couldAnswer,
   fleetTotal,
   instrumentedSplit,
@@ -128,5 +129,58 @@ describe("instrumentedSplit", () => {
       undefined,
     ]);
     expect(split).toEqual({ instrumented: 1, notInstrumented: 1, pending: 1 });
+  });
+});
+
+describe("co2FactorBasis", () => {
+  const co2 = (value: number | null, variant: string | null): KpiFigure => ({
+    value,
+    variant,
+    undefined_reason: value === null ? "no energy in period" : null,
+  });
+
+  it("names every Plant on the national default", () => {
+    // The fabricated fleet before it had Regions: every figure was energy ×
+    // 0.82, so the CO₂ donut was the energy donut and nothing said why.
+    expect(
+      co2FactorBasis([
+        { code: "SF_NORTH", figure: co2(7514, "co2_default_factor") },
+        { code: "WH2", figure: co2(229, "co2_default_factor") },
+      ]),
+    ).toEqual({ regional: 0, fallback: ["SF_NORTH", "WH2"] });
+  });
+
+  it("separates regional factors from fallbacks", () => {
+    expect(
+      co2FactorBasis([
+        { code: "SF_NORTH", figure: co2(7514, "co2_region_factor") },
+        { code: "WH2", figure: co2(229, "co2_default_factor") },
+      ]),
+    ).toEqual({ regional: 1, fallback: ["WH2"] });
+  });
+
+  it("ignores Plants that are not in the total", () => {
+    // A null figure contributes nothing, so which factor it would have used is
+    // not a statement about the number on screen. A pending KPI likewise.
+    expect(
+      co2FactorBasis([
+        { code: "KULAR_NORTH", figure: co2(null, "co2_default_factor") },
+        { code: "PENDING", figure: undefined },
+        { code: "SF_NORTH", figure: co2(7514, "co2_region_factor") },
+      ]),
+    ).toEqual({ regional: 1, fallback: [] });
+  });
+
+  it("counts a zero, which is in the total", () => {
+    // Night: the Plant answered, and answered 0.
+    expect(
+      co2FactorBasis([{ code: "WH1", figure: co2(0, "co2_default_factor") }]),
+    ).toEqual({ regional: 0, fallback: ["WH1"] });
+  });
+
+  it("makes no claim for a variant it does not know", () => {
+    expect(
+      co2FactorBasis([{ code: "OLD", figure: co2(100, null) }]),
+    ).toEqual({ regional: 0, fallback: [] });
   });
 });

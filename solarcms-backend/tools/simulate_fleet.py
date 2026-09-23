@@ -49,6 +49,14 @@ ROOFCO    (rooftop, Asia/Dubai — a different day boundary)
             cycle. The smallest Plant that can exist; liveness against a
             fixed clock would call it late.
 
+Regions differ on purpose too, because CO₂ avoided is energy times the Region's
+grid factor: with one factor everywhere its per-Plant split *is* the energy
+split, and the fleet's CO₂ donut can never show anything the energy donut does
+not. SF_NORTH, SF_SOUTH and WH1 each sit in a different Region; WH2 has none
+and falls back to the national default, so the tile's "no Region factor"
+wording has a case to render. The factors are invented — chosen only to differ
+from each other and from that default, not a statement about any real grid.
+
 Plant codes are distinct across Clients on purpose; `services/onboarding`
 matches a Plant under its Client now, but a fleet that would only work
 because of that fix is a poor test of anything else.
@@ -98,6 +106,14 @@ class DeviceSpec:
 
 
 @dataclass(frozen=True)
+class RegionSpec:
+    code: str                       # ISO 3166-2, as RegionSelect expects
+    name: str
+    country: str                    # ISO 3166-1 alpha-2
+    grid_factor: float              # kg CO₂ / kWh — invented, see the docstring
+
+
+@dataclass(frozen=True)
 class PlantSpec:
     code: str
     name: str
@@ -107,6 +123,7 @@ class PlantSpec:
     interval_s: float
     topic_root: str                 # "scms/v1" or "SCMS/V1"
     devices: tuple[DeviceSpec, ...]
+    region: RegionSpec | None = None  # None = the national default factor
 
     @property
     def inverters(self) -> tuple[DeviceSpec, ...]:
@@ -128,6 +145,13 @@ def _inverters(n: int, kw: float, collector: str | None, start: int = 1,
             for i in range(start, start + n)]
 
 
+# "(demo)" in the name because `regions` is shared by every Client and has no
+# `is_demo` of its own, and these factors must never be mistaken for sourced ones.
+_RAJASTHAN = RegionSpec("IN-RJ", "Rajasthan (demo)", "IN", 0.91)
+_KARNATAKA = RegionSpec("IN-KA", "Karnataka (demo)", "IN", 0.64)
+_DUBAI = RegionSpec("AE-DU", "Dubai (demo)", "AE", 0.42)
+
+
 FLEET: tuple[ClientSpec, ...] = (
     ClientSpec("SUNFIELD", "Sunfield Energy", "sunfield@example.com", (
         PlantSpec("SF_NORTH", "Sunfield North", "Asia/Kolkata",
@@ -142,7 +166,7 @@ FLEET: tuple[ClientSpec, ...] = (
             DeviceSpec("VCB", "VCB"),
             DeviceSpec("WMS", "WMS"),
             DeviceSpec("PPC", "PPC"),
-        )),
+        ), region=_RAJASTHAN),
         PlantSpec("SF_SOUTH", "Sunfield South", "Asia/Kolkata",
                   2000.0, 2400.0, 60.0, "SCMS/V1", (
             *_inverters(4, 500.0, "ICR"),
@@ -150,7 +174,7 @@ FLEET: tuple[ClientSpec, ...] = (
             DeviceSpec("TRANSFORMER", "TRANSFORMER"),
             DeviceSpec("VCB", "VCB"),
             DeviceSpec("WMS", "WMS"),
-        )),
+        ), region=_KARNATAKA),
     )),
     ClientSpec("ROOFCO", "Roofco Logistics", "roofco@example.com", (
         PlantSpec("WH1", "Warehouse 1 Rooftop", "Asia/Dubai",
@@ -158,7 +182,7 @@ FLEET: tuple[ClientSpec, ...] = (
             *_inverters(3, 150.0, None),
             DeviceSpec("MFM", "MFM"),
             DeviceSpec("WMS", "WMS"),
-        )),
+        ), region=_DUBAI),
         PlantSpec("WH2", "Warehouse 2 Rooftop", "Asia/Dubai",
                   200.0, 240.0, 120.0, "scms/v1", (
             *_inverters(2, 100.0, None),

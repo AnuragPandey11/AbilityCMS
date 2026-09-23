@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import pairwise
 from typing import Literal
 
@@ -146,6 +146,44 @@ def integrate_counter(
         first=ordered[0] if ordered else None,
         last=ordered[-1] if ordered else None,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CounterBucket:
+    """One aggregate bucket of a register: when it began, and the lowest and
+    the last reading in it."""
+
+    start: datetime
+    lowest: float | None
+    last: float
+
+
+def samples_from_buckets(
+    buckets: Sequence[CounterBucket], width: timedelta, now: datetime,
+) -> tuple[CounterSample, ...]:
+    """A register's samples from its aggregate buckets, starting where it stood.
+
+    Each bucket gives its `last` reading, stamped at the bucket's end — the
+    time by which it had certainly been taken — and capped at `now`, since the
+    bucket still filling has not reached its end.
+
+    ⚠ The first bucket also gives its **lowest** reading, stamped at its start.
+    Without it the series began at the first bucket's last reading, so whatever
+    the register counted inside that bucket was never a step: up to a minute of
+    a day, an hour of a month, a whole day of a lifetime. On a Plant whose data
+    began inside the period that was its entire first hour, and "this month"
+    read 13 to 18% below "today". For a register that only climbs, the lowest
+    reading in a bucket is its first; for a daily register that restarted
+    inside the bucket, it is the restart, and what is counted is what accrued
+    after it — which is what the reset rule in `integrate_counter` counts too.
+    """
+    ordered = sorted(buckets, key=lambda bucket: bucket.start)
+    samples: list[CounterSample] = []
+    if ordered and ordered[0].lowest is not None and ordered[0].lowest <= ordered[0].last:
+        samples.append(CounterSample(ordered[0].start, ordered[0].lowest))
+    samples.extend(
+        CounterSample(min(bucket.start + width, now), bucket.last) for bucket in ordered)
+    return tuple(samples)
 
 
 # ── A Plant's energy: one Device Type, every Device of it ──────────────────

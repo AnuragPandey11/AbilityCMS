@@ -282,6 +282,12 @@ export const PlantKpisSchema = z.object({
   availability: KpiFigureSchema,
   co2_avoided_kg: KpiFigureSchema,
   coverage: KpiCoverageSchema.nullable().catch(null),
+  /** Where the period began, in the Plant's calendar: its midnight, the 1st,
+   *  1 January — or its first reading, for lifetime. */
+  period_start: z.string().nullable().optional().catch(null),
+  /** The later of that and the Plant's first reading: what CUF's hours count
+   *  from. Later than `period_start` only for a Plant younger than the period. */
+  measured_since: z.string().nullable().optional().catch(null),
   /** Which tier served these. A figure from `agg_1d` over "today" is a
    *  different resolution of claim than one from `agg_1m`. */
   source_tier: z.string().nullable().optional().catch(null),
@@ -292,6 +298,7 @@ export type PlantKpis = z.infer<typeof PlantKpisSchema>;
 export const BlockKpisSchema = z.object({
   block_id: z.number(),
   period: z.string(),
+  period_start: z.string().nullable().optional().catch(null),
   capacity_kwp: numeric(),
   energy_kwh: numeric(),
   specific_yield: KpiFigureSchema,

@@ -30,7 +30,7 @@ import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { Drawer } from "@/components/ui";
 import { IconChevronRight } from "@/components/icons";
 import { DeviceArt } from "@/components/devices/DeviceArt";
-import { usePlantScope } from "@/state/usePlantScope";
+import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
@@ -38,7 +38,7 @@ import { formatValue } from "@/format/value";
 import type { CommStatus } from "@/api/schemas";
 
 export function SldDashboard(): JSX.Element {
-  const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
+  const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   // Every timestamp in the inspector renders in the Plant's zone, never the
   // browser's (Guardrail 11).
   const plantQuery = usePlant(plantId);

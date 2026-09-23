@@ -22,7 +22,7 @@ import {
   formatHeadline,
   formatNumber,
 } from "@/format/value";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "@/components/icons";
 import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "@/components/charts/FittedFigure";
@@ -80,7 +80,8 @@ export function slotText(slot: ResolvedSlot): string {
   return formatNumber(slot.value, { digits: digitsForUnit(slot.unit) });
 }
 
-function Provenance({ slot }: { slot: ResolvedSlot }): JSX.Element | null {
+/** Where a slot's figure came from, amber when a fallback source answered. */
+export function Provenance({ slot }: { slot: ResolvedSlot }): JSX.Element | null {
   const label = sourceLabel(slot.source);
   if (!label) return null;
   return (
@@ -167,11 +168,20 @@ export function SlotRailTile({
   slot,
   icon,
   tone,
+  visual,
+  figure = true,
+  note,
 }: {
   slot: ResolvedSlot;
   icon: ComponentType<IconProps>;
   /** Accepted for callers that still pass one; `RailTile` renders every tone alike. */
   tone?: RailTone;
+  /** A drawing of the figure — under it, or in its place with `figure={false}`. */
+  visual?: ReactNode;
+  /** False when `visual` carries the figure itself: a dial's centre, an odometer. */
+  figure?: boolean;
+  /** Appended to the provenance line: what the drawing could not show, and why. */
+  note?: ReactNode;
 }): JSX.Element {
   const isUndefined = slot.value === null;
   const explanation = undefinedExplanation(slot);
@@ -184,23 +194,35 @@ export function SlotRailTile({
       icon={icon}
       label={slot.label}
       hint={slot.override_note ? `Source overridden for this Plant: ${slot.override_note}` : undefined}
-      footnote={isUndefined ? explanation : <Provenance slot={slot} />}
+      footnote={
+        isUndefined ? (
+          explanation
+        ) : (
+          <>
+            <Provenance slot={slot} />
+            {note ? <> · {note}</> : null}
+          </>
+        )
+      }
+      visual={visual}
     >
-      <FittedFigure
-        value={text}
-        unit={isUndefined ? null : slot.unit}
-        className={`figure text-[1.9rem] font-semibold leading-none tracking-tight ${
-          isUndefined ? "text-ink-faint" : "text-ink"
-        }`}
-        unitClassName="ml-1.5 text-sm font-medium text-ink-muted"
-        title={
-          isUndefined
-            ? explanation
-            : headline?.compacted
-              ? `${headline.exact}${slot.unit ? ` ${slot.unit}` : ""}`
-              : String(slot.value)
-        }
-      />
+      {figure ? (
+        <FittedFigure
+          value={text}
+          unit={isUndefined ? null : slot.unit}
+          className={`figure text-[1.9rem] font-semibold leading-none tracking-tight ${
+            isUndefined ? "text-ink-faint" : "text-ink"
+          }`}
+          unitClassName="ml-1.5 text-sm font-medium text-ink-muted"
+          title={
+            isUndefined
+              ? explanation
+              : headline?.compacted
+                ? `${headline.exact}${slot.unit ? ` ${slot.unit}` : ""}`
+                : String(slot.value)
+          }
+        />
+      ) : null}
     </RailTile>
   );
 }

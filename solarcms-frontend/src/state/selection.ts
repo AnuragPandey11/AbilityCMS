@@ -9,17 +9,35 @@
  * `useResolvedPlantId` validates it against the Plants the current token can see
  * before it is used — a stale id from before a Client switch must never be
  * requested.
+ *
+ * `clientId` and `plantSearch` narrow which Plants the pickers offer, for a
+ * platform administrator only (see `usePlantFilter`). They live here rather than
+ * in the filter bar so the page's own Plant picker, mounted separately, reads the
+ * same narrowing — and so moving between the Plant screens keeps it, as it keeps
+ * the Plant. `plantSearch` is written already debounced.
  */
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { KpiPeriod } from "@/api/schemas";
+import type { TrendRange } from "@/api/useSlotTrend";
 
 interface SelectionState {
   plantId: number | null;
   period: KpiPeriod;
+  clientId: number | null;
+  plantSearch: string;
+  /**
+   * The charts' window. Kept here beside `period` so both time controls
+   * survive leaving the screen alike — `period` was remembered and this was
+   * not, so returning to a Plant restored one and silently reset the other.
+   */
+  trendRange: TrendRange;
   setPlantId: (plantId: number | null) => void;
   setPeriod: (period: KpiPeriod) => void;
+  setClientId: (clientId: number | null) => void;
+  setPlantSearch: (plantSearch: string) => void;
+  setTrendRange: (trendRange: TrendRange) => void;
   reset: () => void;
 }
 
@@ -28,9 +46,16 @@ export const useSelection = create<SelectionState>()(
     (set) => ({
       plantId: null,
       period: "today",
+      clientId: null,
+      plantSearch: "",
+      trendRange: "today",
       setPlantId: (plantId) => set({ plantId }),
       setPeriod: (period) => set({ period }),
-      reset: () => set({ plantId: null, period: "today" }),
+      setClientId: (clientId) => set({ clientId }),
+      setPlantSearch: (plantSearch) => set({ plantSearch }),
+      setTrendRange: (trendRange) => set({ trendRange }),
+      reset: () =>
+        set({ plantId: null, period: "today", clientId: null, plantSearch: "", trendRange: "today" }),
     }),
     {
       name: "solarcms.selection",

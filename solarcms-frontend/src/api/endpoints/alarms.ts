@@ -14,6 +14,12 @@ export interface AlarmQuery {
   state?: AlarmState | null;
   severity?: AlarmSeverity | null;
   plantId?: number | null;
+  /**
+   * Narrows to one Client's Alarms. Only a platform administrator sees more
+   * than one Client; RLS still decides what anyone sees, so this can only
+   * narrow.
+   */
+  clientId?: number | null;
   since?: string | null;
   limit?: number;
 }
@@ -29,6 +35,7 @@ export async function listAlarms(query: AlarmQuery = {}): Promise<Alarm[]> {
       state: query.state ?? undefined,
       severity: query.severity ?? undefined,
       plant_id: query.plantId ?? undefined,
+      client_id: query.clientId ?? undefined,
       since: query.since ?? undefined,
       limit: query.limit ?? 100,
     },

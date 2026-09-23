@@ -12,9 +12,14 @@
  *   the filter does too.
  * - Acknowledging is gated on `alarm.acknowledge`, and `escalation_level` is
  *   shown: an Alarm at L2 has already woken somebody.
+ *
+ * A platform administrator also narrows by Client and search (`PlantFilterBar`,
+ * mounted by the route). The Client is sent to the server; the search is
+ * applied here, by Plant — which leaves out Alarms attached to no Plant while
+ * a search is in force, since there is nothing of theirs to match.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAlarms, usePlantDevices } from "@/api/hooks";
 import * as alarmsApi from "@/api/endpoints/alarms";
@@ -33,7 +38,8 @@ import {
 import { formatDateTime } from "@/format/datetime";
 import { formatNumber } from "@/format/value";
 import { usePermission } from "@/auth/usePermission";
-import { usePlantScope } from "@/state/usePlantScope";
+import { usePlantFilter } from "@/state/usePlantFilter";
+import { useAuth } from "@/auth/AuthProvider";
 import { isApiError } from "@/api/problem";
 
 const STATES: (AlarmState | "")[] = ["", "active", "acknowledged", "resolved"];
@@ -44,7 +50,9 @@ export function AlarmsDashboard(): JSX.Element {
   const queryClient = useQueryClient();
   const canAcknowledge = usePermission("alarm.acknowledge");
   const canExport = usePermission("data.export");
-  const { plants } = usePlantScope();
+  const { me } = useAuth();
+  const filter = usePlantFilter();
+  const plants = filter.matches;
 
   const [state, setState] = useState<AlarmState | "">("active");
   const [severity, setSeverity] = useState<AlarmSeverity | "">("");
@@ -53,10 +61,17 @@ export function AlarmsDashboard(): JSX.Element {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // A Plant the Client filter or search has since excluded falls back to "All"
+  // of what remains, rather than holding a choice the picker no longer lists.
+  useEffect(() => {
+    if (plantId !== null && !plants.some((plant) => plant.id === plantId)) setPlantId(null);
+  }, [plantId, plants]);
+
   const alarmsQuery = useAlarms({
     state: state || null,
     severity: severity || null,
     plantId,
+    clientId: filter.clientId,
     limit: 500,
   });
 
@@ -88,9 +103,41 @@ export function AlarmsDashboard(): JSX.Element {
     );
   };
 
-  const filtered = (alarmsQuery.data ?? []).filter((alarm) =>
-    classification ? alarm.classification === classification : true,
+  const plantsById = new Map((me?.plants ?? []).map((plant) => [plant.id, plant]));
+  const searchedPlantIds =
+    plantId === null && filter.search !== ""
+      ? new Set(plants.map((plant) => plant.id))
+      : null;
+  const filtered = (alarmsQuery.data ?? []).filter(
+    (alarm) =>
+      (classification ? alarm.classification === classification : true) &&
+      (searchedPlantIds ? alarm.plant_id !== null && searchedPlantIds.has(alarm.plant_id) : true),
   );
+
+  // Across Plants, a row must say which Plant it is from — and, for a platform
+  // administrator looking across Clients, whose.
+  const plantColumn: Column<Alarm> = {
+    key: "plant",
+    header: "Plant",
+    width: "150px",
+    render: (alarm) => {
+      const plant = alarm.plant_id !== null ? plantsById.get(alarm.plant_id) : undefined;
+      if (!plant) return <span className="text-ink-faint">—</span>;
+      const client = filter.enabled && filter.clientId === null ? filter.clientOf(plant.id) : undefined;
+      return (
+        <span className="flex flex-col leading-tight" title={plant.name}>
+          <span className="font-mono text-xs">{plant.code}</span>
+          {client ? <span className="text-[11px] text-ink-faint">{client.label}</span> : null}
+        </span>
+      );
+    },
+    sortValue: (alarm) =>
+      (alarm.plant_id !== null ? plantsById.get(alarm.plant_id)?.code : null) ?? null,
+    filterValue: (alarm) => {
+      const plant = alarm.plant_id !== null ? plantsById.get(alarm.plant_id) : undefined;
+      return plant ? `${plant.code} ${plant.name} ${filter.clientOf(plant.id)?.label ?? ""}` : "";
+    },
+  };
 
   const columns: Column<Alarm>[] = [
     {
@@ -123,6 +170,7 @@ export function AlarmsDashboard(): JSX.Element {
       ),
       sortValue: (alarm) => Date.parse(alarm.opened_at),
     },
+    ...(plantId === null && (me?.plants.length ?? 0) > 1 ? [plantColumn] : []),
     {
       key: "device",
       header: "Device",
@@ -278,9 +326,11 @@ export function AlarmsDashboard(): JSX.Element {
           <EmptyState
             title="No Alarms match"
             detail={
-              state === "active"
-                ? "Nothing is currently in alarm for the selected filters."
-                : "No Alarms match the selected filters."
+              filter.active && plants.length === 0
+                ? "No Plant matches the Client and search above."
+                : state === "active"
+                  ? "Nothing is currently in alarm for the selected filters."
+                  : "No Alarms match the selected filters."
             }
           />
         ) : (

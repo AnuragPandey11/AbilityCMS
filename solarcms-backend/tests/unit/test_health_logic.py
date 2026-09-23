@@ -13,9 +13,12 @@ Both shapes go through the same function, which is what these fix in place.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from solarcms.domain.health_logic import (
     HealthAssessment,
     correlate_collector_failures,
+    uptime_seconds_from_events,
 )
 
 
@@ -108,3 +111,40 @@ def test_a_device_named_as_its_own_collector_is_not_grouped() -> None:
         [silent(1), silent(2)], {1: 1, 2: 1},
     )
     assert correlations == []
+
+
+# ── Availability over a period, from recorded transitions ──────────────────
+#
+# The KPI endpoint used to take the share of Devices online *now* and call it
+# the period's availability, so it read 100% under "lifetime" for any Plant
+# that happened to be healthy when asked.
+
+T0 = datetime(2026, 9, 23, 0, 0, tzinfo=UTC)
+
+
+def at(minutes: int) -> datetime:
+    return T0 + timedelta(minutes=minutes)
+
+
+def test_offline_time_inside_the_period_is_not_uptime() -> None:
+    events = [(at(-60), "online"), (at(30), "offline"), (at(40), "online")]
+    uptime, excluded = uptime_seconds_from_events(events, at(0), at(60))
+    assert (uptime, excluded) == (50 * 60, 0.0)
+
+
+def test_the_status_carried_into_the_period_counts_from_its_start() -> None:
+    # Offline since before the period began: the whole first stretch is down.
+    events = [(at(-600), "offline"), (at(20), "online")]
+    uptime, _ = uptime_seconds_from_events(events, at(0), at(60))
+    assert uptime == 40 * 60
+
+
+def test_never_seen_time_is_excluded_not_counted_as_down() -> None:
+    events = [(at(-1), "unknown"), (at(15), "online")]
+    uptime, excluded = uptime_seconds_from_events(events, at(0), at(60))
+    assert (uptime, excluded) == (45 * 60, 15 * 60)
+
+
+def test_transitions_after_the_period_are_ignored() -> None:
+    events = [(at(-1), "online"), (at(90), "offline")]
+    assert uptime_seconds_from_events(events, at(0), at(60)) == (60 * 60, 0.0)

@@ -18,6 +18,7 @@ import { TrendChart, SmallMultiples } from "@/components/charts/TrendChart";
 import { ComparisonBars } from "@/components/charts/ComparisonBars";
 import { SharePie } from "@/components/charts/SharePie";
 import { Panel } from "@/components/ui";
+import { PlantDonut, plantMarks } from "@/dashboards/fleet/HeadlineCharts";
 
 const START = Date.parse("2026-09-22T00:00:00Z");
 
@@ -39,7 +40,71 @@ const CURVE = series(
   }),
 );
 
+/** A Portfolio headline graphic at the width of one tile in a row of four. */
+function Tile({ children }: { children: JSX.Element }): JSX.Element {
+  return <div className="max-w-[17rem] pt-6">{children}</div>;
+}
+
+const PLANTS = ["Sunfield North", "Sunfield South", "Warehouse 1", "Warehouse 2", "Hilltop", "Canal Bank", "Depot"].map(
+  (name, index) => ({ id: index + 1, name, code: `P${index + 1}` }),
+);
+const donut = (
+  values: (number | null)[],
+  { capacity = null, unit = "kWh", empty = "Nothing generated yet" }: {
+    capacity?: number | null;
+    unit?: string;
+    empty?: string;
+  } = {},
+) => (
+  <Tile>
+    <PlantDonut
+      label="Energy"
+      marks={plantMarks(PLANTS.slice(0, values.length), (id) => values[id - 1])}
+      unit={unit}
+      capacity={capacity}
+      empty={empty}
+      highlight={null}
+      onHighlight={() => undefined}
+    />
+  </Tile>
+);
+
 const CASES: { title: string; note: string; node: JSX.Element }[] = [
+  {
+    title: "Live ring — half the capacity in use",
+    note: "The whole ring is the AC capacity of the Plants reporting; the fill is their output, by Plant.",
+    node: donut([2_410, 1_020, 250, 137], { capacity: 7_450, unit: "kW" }),
+  },
+  {
+    title: "Live ring — night",
+    note: "Zero output against a capacity is a reading — 0% in use — not an absence of one.",
+    node: donut([0, 0, 0, 0], { capacity: 7_450, unit: "kW" }),
+  },
+  {
+    title: "Live ring — output past the capacity",
+    note: "Never drawn clamped at a full ring. The ratio is shown, flagged, with no fill (Guardrail 33).",
+    node: donut([5_200, 3_100], { capacity: 7_450, unit: "kW" }),
+  },
+  {
+    title: "Plant donut — four Plants",
+    note: "The total split by Plant; each Plant one colour on the whole row, named in the legend.",
+    node: donut([5_600, 1_850, 1_050, 440]),
+  },
+  {
+    title: "Plant donut — nothing produced",
+    note: "Before sunrise every Plant reports zero. A ring of equal slices would split nothing.",
+    node: donut([0, 0, 0]),
+  },
+  {
+    title: "Plant donut — seven Plants",
+    note: "Past five the tail folds into one grey Other, which is not a Plant and is not coloured as one.",
+    node: donut([900, 800, 700, 650, 500, 420, 300]),
+  },
+  {
+    title: "Plant donut — one Plant has no figure",
+    note: "A dash in the legend, never a zero-width segment that looks measured.",
+    node: donut([1200, null, 400]),
+  },
   {
     title: "Normal curve",
     note: "The happy path — 96 buckets, a clear peak. Everything else is judged against this.",

@@ -103,6 +103,38 @@ export function fleetTotal(values: (number | null | undefined)[]): number {
   return total;
 }
 
+/**
+ * Which grid factor stands behind the fleet's CO₂ figure.
+ *
+ * CO₂ avoided is energy × the Plant's Region factor, and a Plant with no Region
+ * — or a Region with no factor recorded — falls back to the national default.
+ * The API says which happened in `variant`, and the tile must repeat it: when
+ * every Plant falls back, CO₂ is energy times one constant, so its per-Plant
+ * split is the energy split exactly, and a footer claiming "each Region's
+ * factor" makes that look like a coincidence rather than a missing setting.
+ *
+ * Only Plants with a defined figure count, because only they are in the total.
+ * Fallbacks are named, since each is one Region assignment away from fixed.
+ */
+export interface Co2FactorBasis {
+  regional: number;
+  fallback: string[];
+}
+
+export function co2FactorBasis(
+  entries: { code: string; figure: KpiFigure | undefined }[],
+): Co2FactorBasis {
+  const basis: Co2FactorBasis = { regional: 0, fallback: [] };
+  for (const { code, figure } of entries) {
+    if (figure?.value === null || figure?.value === undefined) continue;
+    // Anything else — a null or unknown variant from an older API — makes no
+    // claim either way, so it counts as neither.
+    if (figure.variant === "co2_region_factor") basis.regional += 1;
+    else if (figure.variant === "co2_default_factor") basis.fallback.push(code);
+  }
+  return basis;
+}
+
 /** How many Plants were in a position to report, and how many were not. */
 export function instrumentedSplit(
   kpis: (PlantKpis | undefined)[],

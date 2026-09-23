@@ -152,6 +152,107 @@ export function ageSeconds(value: Timestamp | null | undefined): number | null {
   return (Date.now() - date.getTime()) / 1000;
 }
 
+/**
+ * The instant the Plant's calendar day containing `value` began, as epoch ms.
+ *
+ * "Today" is the Plant's day, not the browser's and not UTC's: an Asia/Kolkata
+ * day begins at 18:30 UTC the evening before, and framing a generation curve
+ * on the UTC day cuts the morning ramp in half.
+ *
+ * Found by reading the zone's wall clock rather than assuming an offset, and
+ * checked twice, so a day that begins or ends on a daylight-saving change
+ * still starts at its own midnight.
+ */
+export function startOfDayInZone(value: Timestamp, timeZone: string = DEFAULT_TIMEZONE): number {
+  const p = parts(value, timeZone);
+  if (!p) return Number.NaN;
+  const midnightAsUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day));
+  const offsetAt = (instant: number): number => {
+    const q = parts(instant, timeZone);
+    if (!q) return 0;
+    // `hour` can read "24" at midnight in some engines' en-GB output.
+    const wall = Date.UTC(
+      Number(q.year),
+      Number(q.month) - 1,
+      Number(q.day),
+      Number(q.hour) % 24,
+      Number(q.minute),
+      Number(q.second),
+    );
+    return wall - instant;
+  };
+  const first = midnightAsUtc - offsetAt(midnightAsUtc);
+  return midnightAsUtc - offsetAt(first);
+}
+
+/**
+ * The Plant's calendar day containing `value`: `[start, end)` in epoch ms.
+ *
+ * `end` is the *next* day's start rather than `start + 24h`, which is wrong on
+ * the two days a year a daylight-saving zone is 23 or 25 hours long.
+ */
+export function dayInZone(
+  value: Timestamp,
+  timeZone: string = DEFAULT_TIMEZONE,
+): { start: number; end: number } {
+  const start = startOfDayInZone(value, timeZone);
+  // 25h past a midnight is always inside the following day, whatever its length.
+  return { start, end: startOfDayInZone(start + 25 * 3_600_000, timeZone) };
+}
+
+/**
+ * The last `count` days of the Plant's calendar, oldest first, ending with the
+ * day containing `value` — each `[start, end)` in epoch ms.
+ *
+ * Stepped back from midnight to midnight, never by 24h, for the reason
+ * `dayInZone` gives.
+ */
+export function recentDaysInZone(
+  value: Timestamp,
+  count: number,
+  timeZone: string = DEFAULT_TIMEZONE,
+): { start: number; end: number }[] {
+  const days: { start: number; end: number }[] = [];
+  let cursor = dayInZone(value, timeZone);
+  for (let index = 0; index < count && Number.isFinite(cursor.start); index += 1) {
+    days.unshift(cursor);
+    // Noon of the day before: inside it whatever a daylight-saving hour does.
+    cursor = dayInZone(cursor.start - 12 * 3_600_000, timeZone);
+  }
+  return days;
+}
+
+/**
+ * Every day of the Plant's calendar month containing `value`, in order, each
+ * `[start, end)` in epoch ms with its day-of-month.
+ *
+ * Built day by day from `dayInZone` rather than as `start + n × 24h`, for the
+ * same reason `dayInZone` is: a month that crosses a daylight-saving change has
+ * one day that is not 24 hours long, and every day after it would be off by one
+ * hour — which, for a figure attributed to a day, is the difference between
+ * 23:30 and the next morning.
+ */
+export function daysOfMonthInZone(
+  value: Timestamp,
+  timeZone: string = DEFAULT_TIMEZONE,
+): { start: number; end: number; day: number }[] {
+  const p = parts(value, timeZone);
+  if (!p) return [];
+  const month = p.month;
+  // Noon on the 1st, stepped back from today's midnight: well inside day 1
+  // whatever the zone's offset or a daylight-saving hour does to it.
+  const today = startOfDayInZone(value, timeZone);
+  let cursor = dayInZone(today - (Number(p.day) - 1) * 86_400_000 + 12 * 3_600_000, timeZone);
+  const days: { start: number; end: number; day: number }[] = [];
+  for (;;) {
+    const q = parts(cursor.start + 12 * 3_600_000, timeZone);
+    if (!q || q.month !== month || days.length > 31) break;
+    days.push({ ...cursor, day: Number(q.day) });
+    cursor = dayInZone(cursor.end, timeZone);
+  }
+  return days;
+}
+
 /** ISO 8601 with offset — the only form ever sent to the API. */
 export function toApiInstant(value: Date): string {
   return value.toISOString();

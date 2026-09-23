@@ -42,7 +42,7 @@ import { formatCompact, formatNumber, formatValue } from "@/format/value";
 import { chartTheme, useEcharts } from "./useEcharts";
 import { seriesPalette, token, tokenAlpha, withAlpha } from "@/theme/tokens";
 import { useTheme } from "@/theme/ThemeProvider";
-import { Badge } from "@/components/ui";
+import { Badge, InfoHint } from "@/components/ui";
 import { IconList, IconGauge } from "@/components/icons";
 import { TIER_LABELS } from "./TimeSeriesChart";
 
@@ -76,6 +76,90 @@ export interface TrendChartProps {
    * question nobody has answered yet.
    */
   isLoading?: boolean;
+  /**
+   * Frame the x-axis on one Plant-local calendar day, midnight to midnight,
+   * with a tick every two hours. The data stops at now; the axis does not, so
+   * the rest of the day reads as not yet happened rather than as the morning
+   * stretched across the frame.
+   */
+  day?: DayFrame | null;
+  /**
+   * A legend above the plot. Omitted, the chart names its one series in the
+   * tooltip only, which is enough when the panel title already says what it is.
+   */
+  legend?: TrendLegendEntry[];
+  /**
+   * Replaces the tier badge when the points are not one tier's own buckets —
+   * a series built from finer ones says what it was built from, rather than
+   * naming a tier it was never read from (§9).
+   */
+  resolution?: { label: string; title: string };
+}
+
+/** One Plant-local calendar day, `[start, end)` in epoch ms. */
+export interface DayFrame {
+  start: number;
+  end: number;
+}
+
+export interface TrendLegendEntry {
+  label: string;
+  /** Solid for a measured series; dashed for a reference line such as an expectation. */
+  line: "solid" | "dashed";
+  /**
+   * Set when the series has nothing to draw, and why. The entry stays in the
+   * legend, visibly off, so the reason is on the screen — a line that is
+   * simply missing reads as a line somebody forgot, and a line drawn from a
+   * guess reads as a measurement.
+   */
+  unavailable?: { note: string; reason: string };
+}
+
+const TWO_HOURS = 2 * 3_600_000;
+
+/** A label every two hours across the day, midnight to midnight inclusive. */
+function dayTicks(day: DayFrame): number[] {
+  const ticks: number[] = [];
+  for (let at = day.start; at <= day.end; at += TWO_HOURS) ticks.push(at);
+  return ticks;
+}
+
+/**
+ * The time-axis label, with the day's closing midnight written `24:00`.
+ *
+ * Formatted as a clock it would read `00:00` at both ends of the axis, and the
+ * right-hand one would claim the start of a day the chart is not showing.
+ */
+function timeAxisLabel(
+  value: number,
+  tier: Tier | null | undefined,
+  timezone: string,
+  day: DayFrame | null | undefined,
+): string {
+  if (day && value >= day.end) return "24:00";
+  return formatAxisLabel(new Date(value), tier ?? "agg_1h", timezone);
+}
+
+/** The x-axis bounds and labels for a day frame; nothing when there is none. */
+function dayAxis(
+  day: DayFrame | null | undefined,
+): { min?: number; max?: number; customValues?: number[] } {
+  return day ? { min: day.start, max: day.end, customValues: dayTicks(day) } : {};
+}
+
+function LegendSwatch({ line, color }: { line: "solid" | "dashed"; color: string | null }): JSX.Element {
+  return line === "solid" ? (
+    <span
+      aria-hidden
+      className="h-0.5 w-4 shrink-0 rounded-full bg-ink-faint"
+      style={color ? { backgroundColor: color } : undefined}
+    />
+  ) : (
+    <span
+      aria-hidden
+      className={`w-4 shrink-0 border-t-2 border-dashed ${color ? "border-ink-muted" : "border-ink-faint"}`}
+    />
+  );
 }
 
 /**
@@ -145,6 +229,9 @@ export function TrendChart({
   markPeak = true,
   flaggedCount = 0,
   isLoading = false,
+  day = null,
+  legend,
+  resolution,
 }: TrendChartProps): JSX.Element {
   const [tableView, setTableView] = useState(false);
   const { version: themeVersion } = useTheme();
@@ -160,13 +247,20 @@ export function TrendChart({
         bestIndex = index;
       }
     });
+    const found = best as TrendPoint | null;
     return {
-      peak: best as TrendPoint | null,
-      // Where along the window the peak fell, 0..1 — used only to keep its
-      // label inside the plot.
-      peakPosition: points.length > 1 ? bestIndex / (points.length - 1) : 0.5,
+      peak: found,
+      // Where along the axis the peak fell, 0..1 — used only to keep its label
+      // inside the plot. Against the day when the axis is a day: the data
+      // stops at now, so the last point is not the right-hand edge.
+      peakPosition:
+        day && found
+          ? (Date.parse(found.at) - day.start) / (day.end - day.start)
+          : points.length > 1
+            ? bestIndex / (points.length - 1)
+            : 0.5,
     };
-  }, [points]);
+  }, [points, day]);
 
   const color = seriesColor(colorToken);
   const data = points.map((point) => [point.at, point.value] as [string, number | null]);
@@ -236,12 +330,14 @@ export function TrendChart({
         that looks like duplicated data rather than a tick spacing choice.
       */
       minInterval: tier === "agg_1d" ? 24 * 3600 * 1000 : undefined,
+      min: dayAxis(day).min,
+      max: dayAxis(day).max,
       axisLabel: {
         fontSize: 10,
         hideOverlap: true,
         color: token("ink-faint"),
-        formatter: (value: number) =>
-          formatAxisLabel(new Date(value), tier ?? "agg_1h", timezone),
+        customValues: dayAxis(day).customValues,
+        formatter: (value: number) => timeAxisLabel(value, tier, timezone, day),
       },
     },
     yAxis: {
@@ -384,18 +480,56 @@ export function TrendChart({
     }
   }
 
-  const ref = useEcharts(option, [points, unit, label, tier, timezone, shape, themeVersion, tableView]);
+  const ref = useEcharts(option, [
+    points,
+    unit,
+    label,
+    tier,
+    timezone,
+    shape,
+    themeVersion,
+    tableView,
+    day?.start,
+    day?.end,
+  ]);
 
   const rows = points.filter((point) => point.value !== null);
 
   return (
     <div>
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <div className="min-w-0 text-[11px] text-ink-faint">
+      <div className="mb-1.5 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          {legend && legend.length > 0 ? (
+            <div className="mb-0.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+              {legend.map((entry) => (
+                <span
+                  key={entry.label}
+                  className={`flex items-center gap-1.5 ${
+                    entry.unavailable ? "text-ink-faint" : "font-medium text-ink"
+                  }`}
+                >
+                  <LegendSwatch
+                    line={entry.line}
+                    color={entry.unavailable ? null : entry.line === "solid" ? color : token("ink-muted")}
+                  />
+                  {entry.label}
+                  {entry.unavailable ? (
+                    <span className="flex items-center font-normal">
+                      · {entry.unavailable.note}
+                      <InfoHint text={entry.unavailable.reason} />
+                    </span>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          ) : null}
           {provenance ? (
-            <span title="Which Device answered this figure. Resolved by the server against what this Plant is bound to.">
+            <div
+              className="text-[11px] text-ink-faint"
+              title="Which Device answered this figure. Resolved by the server against what this Plant is bound to."
+            >
               {provenance}
-            </span>
+            </div>
           ) : null}
         </div>
         <button
@@ -510,15 +644,18 @@ export function TrendChart({
         </p>
       ) : null}
 
-      {tier ? (
+      {tier || resolution ? (
         <div className="mt-1 flex flex-wrap items-center gap-2">
           {/* §9: say which tier served this, or a smoothed line reads as a
               measurement taken at that resolution. */}
           <Badge
             tone="neutral"
-            title="The coarsest tier that covers this range and still retains it. Every tier runs with real-time aggregation, so a coarser tier costs resolution, not freshness."
+            title={
+              resolution?.title ??
+              "The coarsest tier that covers this range and still retains it. Every tier runs with real-time aggregation, so a coarser tier costs resolution, not freshness."
+            }
           >
-            {TIER_LABELS[tier]}
+            {resolution?.label ?? (tier ? TIER_LABELS[tier] : null)}
           </Badge>
           <span className="text-[10px] text-ink-faint">scroll to zoom · drag to pan</span>
         </div>
@@ -541,6 +678,7 @@ export function SmallMultiples({
   series,
   timezone = DEFAULT_TIMEZONE,
   height = 190,
+  day = null,
 }: {
   series: {
     key: string;
@@ -552,6 +690,8 @@ export function SmallMultiples({
   }[];
   timezone?: string;
   height?: number;
+  /** As `TrendChart`'s: the same day frame, so stacked charts line up with it. */
+  day?: DayFrame | null;
 }): JSX.Element {
   const { version: themeVersion } = useTheme();
   const theme = chartTheme();
@@ -609,6 +749,8 @@ export function SmallMultiples({
       axisLine: { lineStyle: { color: token("chart-grid") } },
       axisTick: { show: false },
       splitLine: { show: false },
+      min: dayAxis(day).min,
+      max: dayAxis(day).max,
       // Only the bottom plot carries time labels. Repeating them under every
       // band triples the chrome and says the same thing three times.
       axisLabel: {
@@ -616,8 +758,8 @@ export function SmallMultiples({
         fontSize: 10,
         hideOverlap: true,
         color: token("ink-faint"),
-        formatter: (value: number) =>
-          formatAxisLabel(new Date(value), entry.tier ?? "agg_1h", timezone),
+        customValues: dayAxis(day).customValues,
+        formatter: (value: number) => timeAxisLabel(value, entry.tier, timezone, day),
       },
     })),
     yAxis: series.map((entry, index) => ({
@@ -656,7 +798,7 @@ export function SmallMultiples({
     })),
   };
 
-  const ref = useEcharts(option, [series, timezone, themeVersion]);
+  const ref = useEcharts(option, [series, timezone, themeVersion, day?.start, day?.end]);
 
   return (
     <div>

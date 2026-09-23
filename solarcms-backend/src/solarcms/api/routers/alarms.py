@@ -21,10 +21,14 @@ async def list_alarms(
     state: str | None = Query(None, pattern="^(active|acknowledged|resolved)$"),
     severity: str | None = Query(None, pattern="^(critical|high|medium|low)$"),
     plant_id: int | None = None,
+    client_id: int | None = None,
     since: datetime | None = None,
     limit: int = Query(100, ge=1, le=500),
     _: CurrentUser = Depends(require_permission("dashboard.view")),
 ) -> list[dict[str, Any]]:
+    # `client_id` is how a platform administrator narrows to one Client, in SQL
+    # rather than in the browser, where it would filter the `limit` rows that
+    # happened to come back. RLS still decides visibility; this only narrows.
     rows = (await session.execute(text("""
         SELECT a.id, a.state, a.severity, a.opened_at, a.acknowledged_at, a.resolved_at,
                a.message, a.trigger_value, a.classification, a.escalation_level,
@@ -35,10 +39,11 @@ async def list_alarms(
          WHERE (CAST(:state AS text) IS NULL OR a.state = :state)
            AND (CAST(:severity AS text) IS NULL OR a.severity = :severity)
            AND (CAST(:plant_id AS bigint) IS NULL OR a.plant_id = :plant_id)
+           AND (CAST(:client_id AS bigint) IS NULL OR a.client_id = :client_id)
            AND (CAST(:since AS timestamptz) IS NULL OR a.opened_at >= :since)
          ORDER BY a.opened_at DESC LIMIT :limit
     """), {"state": state, "severity": severity, "plant_id": plant_id,
-           "since": since, "limit": limit})).all()
+           "client_id": client_id, "since": since, "limit": limit})).all()
     return [dict(row._mapping) for row in rows]
 
 

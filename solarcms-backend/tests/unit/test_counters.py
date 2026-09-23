@@ -13,12 +13,14 @@ from datetime import UTC, datetime, timedelta
 
 from solarcms.domain import assumptions as a
 from solarcms.domain.counters import (
+    CounterBucket,
     CounterSample,
     DeviceSeries,
     bucket_steps,
     integrate_counter,
     plant_energy,
     plant_irradiation,
+    samples_from_buckets,
 )
 
 T0 = datetime(2026, 9, 22, 6, 0, tzinfo=UTC)
@@ -182,3 +184,47 @@ class TestBucketing:
         by_hour = bucket_steps(result.steps, lambda at: at.strftime("%H"))
         # Steps land at 06:30 (+1), 07:00 (+2) and 07:30 (+3).
         assert by_hour == {"06": 1.0, "07": 5.0}
+
+
+class TestSamplesFromBuckets:
+    """The series starts where the register stood, not at its first bucket's end."""
+
+    HOUR = timedelta(hours=1)
+    NOW = datetime(2026, 9, 23, 16, 0, tzinfo=UTC)
+
+    def test_the_first_buckets_own_climb_is_counted(self) -> None:
+        # SF_NORTH's settlement meter, hourly: its data began at 21:22 inside the
+        # 21:00 bucket, which read 1,470,930 then and 1,472,274.4 by its end.
+        # Without the first bucket's lowest reading "this month" was 8,234.9 kWh
+        # beside 9,579.3 for "today" — the whole first hour was never a step.
+        buckets = [
+            CounterBucket(datetime(2026, 9, 22, 21, tzinfo=UTC), 1_470_930.0, 1_472_274.4),
+            CounterBucket(datetime(2026, 9, 23, 15, tzinfo=UTC), 1_479_000.0, 1_480_509.3),
+        ]
+        samples = samples_from_buckets(buckets, self.HOUR, self.NOW)
+        total = integrate_counter(samples, max_rate_per_hour=None).total
+        assert abs(total - 9_579.3) < 1e-6
+
+    def test_the_opening_value_is_stamped_at_the_bucket_start(self) -> None:
+        start = datetime(2026, 9, 23, 10, tzinfo=UTC)
+        samples = samples_from_buckets([CounterBucket(start, 5.0, 8.0)], self.HOUR, self.NOW)
+        assert samples == (CounterSample(start, 5.0),
+                           CounterSample(start + self.HOUR, 8.0))
+
+    def test_the_bucket_still_filling_is_stamped_now(self) -> None:
+        start = datetime(2026, 9, 23, 15, 30, tzinfo=UTC)
+        samples = samples_from_buckets([CounterBucket(start, 1.0, 2.0)], self.HOUR, self.NOW)
+        assert samples[-1].at == self.NOW
+
+    def test_a_daily_register_that_restarted_counts_what_accrued_after(self) -> None:
+        # Irradiation restarts at the Plant's midnight. A first bucket holding the
+        # restart has its lowest reading after it, so the day starts from there.
+        start = datetime(2026, 9, 22, 18, tzinfo=UTC)
+        samples = samples_from_buckets(
+            [CounterBucket(start, 0.0, 0.02),
+             CounterBucket(start + self.HOUR, 0.02, 0.05)], self.HOUR, self.NOW)
+        total = integrate_counter(samples, max_rate_per_hour=None, resets_expected=True).total
+        assert abs(total - 0.05) < 1e-9
+
+    def test_no_buckets_is_no_samples(self) -> None:
+        assert samples_from_buckets([], self.HOUR, self.NOW) == ()

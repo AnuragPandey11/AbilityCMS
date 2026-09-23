@@ -13,6 +13,7 @@
  * reached sideways or in a drawer rather than downwards:
  *
  *   headline strip    the figures that never change position, always visible
+ *   performance       PR, CUF and availability as gauges, over the Period
  *   schematic         generation → grid, with the equipment drawn
  *   power + weather   two charts, one axis each, over a chosen window
  *   Inverters         a carousel — seventeen peers go across, not down
@@ -52,7 +53,8 @@ import {
   usePlantDevices,
   usePlantKpis,
 } from "@/api/hooks";
-import { useSlotTrend, TREND_RANGES, type TrendRange } from "@/api/useSlotTrend";
+import { useSlotTrend, TREND_RANGES, type TrendPoint, type TrendRange } from "@/api/useSlotTrend";
+import { useSlotSteps } from "@/api/useSlotSteps";
 import { useLatestValues } from "@/api/useLatestValues";
 import { useTypeColumns } from "@/api/useTypeColumns";
 import { qk } from "@/api/queryKeys";
@@ -65,16 +67,20 @@ import type {
 } from "@/api/schemas";
 import { Panel, SegmentedControl, Drawer } from "@/components/ui";
 import { useScrollPager } from "@/components/ui/Carousel";
-import { TrendChart, SmallMultiples } from "@/components/charts/TrendChart";
+import {
+  TrendChart,
+  SmallMultiples,
+  type TrendLegendEntry,
+} from "@/components/charts/TrendChart";
 import { ReadingsPanel } from "@/components/charts/ReadingsPanel";
 import { PlantSchematic } from "@/components/sld/PlantSchematic";
 import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
 import { DeviceArt } from "@/components/devices/DeviceArt";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { SummaryCard, type SummaryFigure } from "@/components/dashboard/SummaryCard";
-import { CoverageBadge } from "@/components/dashboard/CoverageBadge";
-import { SlotRailTile, SlotRow, slotText } from "@/components/dashboard/SlotValue";
-import { PerformancePanel } from "./single-plant/PerformancePanel";
+import { SlotRow, slotText } from "@/components/dashboard/SlotValue";
+import { PerformanceBand, PerformancePanel } from "./single-plant/PerformancePanel";
+import { PowerSummary } from "./single-plant/PowerSummary";
 import { fullyDuplicated } from "./single-plant/duplication";
 import {
   EmptyState,
@@ -84,6 +90,8 @@ import {
   SkeletonTable,
 } from "@/components/state";
 import { PlantStatusControl } from "@/admin/PlantStatusControl";
+import { HeaderContent } from "@/components/layout/HeaderSlot";
+import { HeadlineCard } from "@/dashboards/single-plant/HeadlineCards";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import {
   CommStatusBadge,
@@ -111,14 +119,11 @@ import {
   formatCapacity,
   formatNumber,
   formatValue,
-  implausibleRatioReason,
-  ratioIsImplausible,
   UNDEFINED_DISPLAY,
-  formatRatioAsPercent,
 } from "@/format/value";
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
 import { useSelection } from "@/state/selection";
-import { usePlantScope } from "@/state/usePlantScope";
+import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { usePermission } from "@/auth/usePermission";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { useLiveRefresh } from "@/live/useLiveRefresh";
@@ -143,7 +148,7 @@ const PANEL_TITLES: Record<string, { title: string; subtitle: string; icon: type
     icon: IconSignal,
   },
   power_summary: {
-    title: "Power",
+    title: "Power Summary",
     subtitle: "DC in, AC out, and what crossed the meter. Each gap is a real loss.",
     icon: IconPower,
   },
@@ -158,6 +163,50 @@ const PANEL_TITLES: Record<string, { title: string; subtitle: string; icon: type
     icon: IconIrradiance,
   },
 };
+
+/**
+ * Summary-row columns at desktop width, by how many cards there are.
+ *
+ * The count varies by Plant — panel cards drop out when the headline strip
+ * already answers them, and Blocks appears only where there are some — so a
+ * fixed column count left a row ending in a hole. Five fit one row; six split
+ * three and three until the widest screens; seven is prime, so four and three.
+ * Literal class names, so Tailwind's scanner emits every one.
+ */
+const SUMMARY_COLUMNS: Record<number, string> = {
+  2: "xl:grid-cols-2",
+  3: "xl:grid-cols-3",
+  4: "xl:grid-cols-4",
+  5: "xl:grid-cols-5",
+  6: "xl:grid-cols-3 2xl:grid-cols-6",
+  7: "xl:grid-cols-4",
+};
+
+/**
+ * The power trend's legend, as the reference draws it: actual solid, expected
+ * dashed.
+ *
+ * ⚠ Expected power is **not defined anywhere** — no forecast, no PVsyst or
+ * budget profile, no design PR — so its entry is present and visibly off, with
+ * the reason on hover, and nothing is drawn. A curve computed from a guessed
+ * design PR would sit under the measured one and invite the gap between them
+ * to be read as a loss. When the client names the basis, the series goes into
+ * this chart as a dashed line and the entry loses its `unavailable`.
+ */
+const POWER_TREND_LEGEND: TrendLegendEntry[] = [
+  { label: "Actual power", line: "solid" },
+  {
+    label: "Expected power",
+    line: "dashed",
+    unavailable: {
+      note: "not yet defined",
+      reason:
+        "No expected-power model is defined for this Plant. It needs the client's basis — " +
+        "irradiance × DC capacity × a design PR, a PVsyst or budget profile, or a weather " +
+        "forecast — and nothing is drawn until then rather than a guessed curve.",
+    },
+  },
+];
 
 /** Which drawer is open. `null` is the normal state. */
 type OpenPanel =
@@ -296,12 +345,59 @@ function DeviceStrip({
   );
 }
 
+/**
+ * How many of the Plant's days the Energy view shows for each chart window.
+ * A per-day chart cannot show "the last 24 hours", so each window becomes the
+ * calendar days it touches: 24h is yesterday and today.
+ */
+const ENERGY_DAYS: Record<TrendRange, number> = { today: 1, "24h": 2, "7d": 7, "30d": 30 };
+
+/**
+ * DC and AC nameplate, then the timezone every timestamp on the page is in.
+ * Rendered in the header from `xl` and at the head of the filter row below it.
+ */
+function PlantNameplate({
+  plant,
+  timezone,
+}: {
+  plant: { dc_capacity_kwp: number | null; ac_capacity_kw: number | null };
+  timezone: string;
+}): JSX.Element {
+  return (
+    <>
+      <span className="flex items-center gap-2 whitespace-nowrap text-sm text-ink-muted">
+        <span title="Nameplate DC capacity from the Plant record.">
+          DC{" "}
+          <span className="figure font-semibold text-ink">
+            {formatCapacity(plant.dc_capacity_kwp, "kWp")}
+          </span>
+        </span>
+        <span className="text-ink-faint">·</span>
+        <span title="Nameplate AC capacity from the Plant record.">
+          AC{" "}
+          <span className="figure font-semibold text-ink">
+            {formatCapacity(plant.ac_capacity_kw, "kW")}
+          </span>
+        </span>
+      </span>
+      <span
+        className="surface-tile whitespace-nowrap rounded-control border border-line px-2.5 py-1 text-xs text-ink-muted"
+        title="Every timestamp on this screen renders in the Plant's timezone, not the browser's."
+      >
+        {timezoneLabel(timezone)}
+      </span>
+    </>
+  );
+}
+
 export function SinglePlantDashboard(): JSX.Element {
   const navigate = useNavigate();
   const canManage = usePermission("plant.manage");
-  const { period, setPeriod } = useSelection();
-  const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
-  const [range, setRange] = useState<TrendRange>("24h");
+  // `range` is the Plant's day by default, framed 00:00–24:00: a generation
+  // curve is read for the shape of a day, and a rolling 24 hours splits that
+  // shape in two.
+  const { period, setPeriod, trendRange: range, setTrendRange: setRange } = useSelection();
+  const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   const [chartView, setChartView] = useState<"power" | "energy">("power");
   const [open, setOpen] = useState<OpenPanel>(null);
 
@@ -326,13 +422,33 @@ export function SinglePlantDashboard(): JSX.Element {
   // Tag, same aggregate (see `useSlotTrend`).
   const powerTrend = useSlotTrend(plantId, "kpi.current_power", range);
   /*
-    Energy per day, from the same slot the "Today's Energy" tile uses.
-    `ENERGY_TODAY` is a counter that resets at midnight, so it is read at the
-    daily tier where the roll-up's `last` is that day's total — at any finer
-    tier it draws the counter climbing, which is a true picture of a different
-    thing.
+    Energy per day, from the same slot the "Today's Energy" tile uses — built
+    from hourly readings and grouped by the Plant's own midnights.
+
+    ⚠ Not from the daily tier. `agg_1d` buckets are cut at UTC midnight, and
+    `ENERGY_TODAY` resets at the Plant's — for Kolkata 18:30 UTC, inside the
+    bucket — so the bucket's `last` was a reading taken after the reset, and
+    every finished day read as roughly nothing wherever equipment reports
+    overnight. The Month Energy card's columns come from the same code, so the
+    two cannot disagree about a day.
   */
-  const energyTrend = useSlotTrend(plantId, "kpi.energy_today", range, "agg_1d");
+  const energyDays = useSlotSteps(
+    plantId,
+    "kpi.energy_today",
+    { days: ENERGY_DAYS[range] },
+    // Fetched only while the Energy view is showing: a month of hourly buckets
+    // is not a cost to pay for a chart behind a toggle.
+    { enabled: chartView === "energy", resetsExpected: true },
+  );
+  const energyPoints = useMemo<TrendPoint[]>(
+    () =>
+      energyDays.periods.map((day) => ({
+        at: new Date(day.start).toISOString(),
+        value: day.energy,
+        contributors: day.contributors,
+      })),
+    [energyDays.periods],
+  );
   const irradianceTrend = useSlotTrend(plantId, "env.irradiance", range);
   const moduleTempTrend = useSlotTrend(plantId, "env.module_temperature", range);
 
@@ -457,6 +573,7 @@ export function SinglePlantDashboard(): JSX.Element {
       <div className="space-y-2.5">
         <SkeletonPanel lines={1} />
         <SkeletonKpiRow tiles={5} />
+        <SkeletonPanel lines={3} />
         <div className="grid gap-5 xl:grid-cols-12">
           <div className="xl:col-span-7"><SkeletonPanel lines={4} /></div>
           <div className="xl:col-span-5"><SkeletonPanel lines={4} /></div>
@@ -478,6 +595,8 @@ export function SinglePlantDashboard(): JSX.Element {
   const panelCards = ["plant_status", "power_summary", "energy_summary", "environment"]
     .map((code) => ({ code, slots: panel(code) }))
     .filter(({ slots }) => slots.length > 0 && !fullyDuplicated(slots, headline));
+  // Panel cards, Device Health, Alarms, and Blocks where the Plant has any.
+  const summaryCount = panelCards.length + 2 + (blocks.length > 0 ? 1 : 0);
 
   const drawerTitle = (() => {
     if (!open) return "";
@@ -616,11 +735,20 @@ export function SinglePlantDashboard(): JSX.Element {
 
   return (
     <div className="flex flex-col gap-5">
-      <header className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h1 className="flex min-w-0 items-baseline gap-3">
-            <span className="font-mono text-3xl font-bold tracking-tight text-ink">{plant.code}</span>
-            <span className="truncate text-2xl font-medium text-ink-muted">{plant.name}</span>
+      {/*
+        The Plant's identity rides in the application header, beside the live
+        state, so it stays in view as the page scrolls and the filters get the
+        top of the page to themselves. It is one line there, so the nameplate
+        and timezone step out of it below `xl`, and the status control below
+        `sm`, rather than wrap the bar or overlap the code — and reappear at the
+        end of the filter row, because the timezone says how to read every
+        timestamp on the page and cannot simply go missing.
+      */}
+      <HeaderContent>
+        <div className="flex min-w-0 items-center gap-x-3">
+          <h1 className="flex min-w-0 items-baseline gap-2">
+            <span className="shrink-0 font-mono text-xl font-bold tracking-tight text-ink">{plant.code}</span>
+            <span className="hidden truncate text-base font-medium text-ink-muted sm:inline">{plant.name}</span>
           </h1>
           {/*
             The control, not the badge beside it: `PlantStatusControl` already
@@ -633,68 +761,59 @@ export function SinglePlantDashboard(): JSX.Element {
             commissioning a week later could be activated only by walking back
             through a form built for creating one.
           */}
-          <PlantStatusControl plantId={plant.id} status={plant.status} />
-          <span className="flex items-center gap-2 text-base text-ink-muted">
-            <span title="Nameplate DC capacity from the Plant record.">
-              DC{" "}
-              <span className="figure font-semibold text-ink">
-                {formatCapacity(plant.dc_capacity_kwp, "kWp")}
-              </span>
-            </span>
-            <span className="text-ink-faint">·</span>
-            <span title="Nameplate AC capacity from the Plant record.">
-              AC{" "}
-              <span className="figure font-semibold text-ink">
-                {formatCapacity(plant.ac_capacity_kw, "kW")}
-              </span>
-            </span>
-          </span>
-          <span
-            className="surface-tile rounded-control border border-line px-3 py-1 text-sm text-ink-muted"
-            title="Every timestamp on this screen renders in the Plant's timezone, not the browser's."
-          >
-            {timezoneLabel(timezone)}
-          </span>
+          <div className="hidden sm:flex">
+            <PlantStatusControl plantId={plant.id} status={plant.status} />
+          </div>
+          <div className="hidden shrink-0 items-center gap-3 xl:flex">
+            <PlantNameplate plant={plant} timezone={timezone} />
+          </div>
         </div>
+      </HeaderContent>
 
-        {/*
-          One filter row, above everything it scopes. Two time controls rather
-          than one because they genuinely scope different things and merging
-          them would be a lie: `Period` drives the derived figures, computed
-          over a calendar period from aggregates; `Window` drives the charts,
-          which are a rolling span of readings. "Today" and "the last 24 hours"
-          are not the same range and must not share a control.
-        */}
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
-          <div className="flex items-center gap-2.5">
-            <span
-              className="text-sm font-medium text-ink-muted"
-              title="Scopes the derived figures — PR, CUF, availability — which are computed over a calendar period."
-            >
-              Period
-            </span>
-            <PeriodPicker value={period} onChange={setPeriod} size="lg" />
+      {/*
+        One filter row, above everything it scopes. Two time controls rather
+        than one because they genuinely scope different things and merging
+        them would be a lie: `Period` drives the derived figures, computed
+        over a calendar period from aggregates; `Window` drives the charts,
+        which are a rolling span of readings. "Today" and "the last 24 hours"
+        are not the same range and must not share a control.
+      */}
+      <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+        <div className="flex items-center gap-2.5">
+          <span
+            className="text-sm font-medium text-ink-muted"
+            title="Scopes the derived figures — PR, CUF, availability — which are computed over a calendar period."
+          >
+            Period
+          </span>
+          <PeriodPicker value={period} onChange={setPeriod} size="lg" />
+        </div>
+        <div className="flex items-center gap-2.5">
+          <span
+            className="text-sm font-medium text-ink-muted"
+            title="Scopes the charts, which show a rolling span of readings. Deliberately separate from Period: 'today' and 'the last 24 hours' are different ranges."
+          >
+            Window
+          </span>
+          <SegmentedControl
+            label="Chart window"
+            size="lg"
+            value={range}
+            onChange={setRange}
+            options={TREND_RANGES.map((option) => ({
+              value: option.value,
+              label: option.label,
+              hint: option.hint,
+            }))}
+          />
+        </div>
+        {/* What the header had no room for at this width. */}
+        <div className="flex flex-wrap items-center gap-3 xl:hidden">
+          <div className="sm:hidden">
+            <PlantStatusControl plantId={plant.id} status={plant.status} />
           </div>
-          <div className="flex items-center gap-2.5">
-            <span
-              className="text-sm font-medium text-ink-muted"
-              title="Scopes the charts, which show a rolling span of readings. Deliberately separate from Period: 'today' and 'the last 24 hours' are different ranges."
-            >
-              Window
-            </span>
-            <SegmentedControl
-              label="Chart window"
-              size="lg"
-              value={range}
-              onChange={setRange}
-              options={TREND_RANGES.map((option) => ({
-                value: option.value,
-                label: option.label,
-                hint: option.hint,
-              }))}
-            />
-          </div>
+          <PlantNameplate plant={plant} timezone={timezone} />
         </div>
       </header>
 
@@ -711,14 +830,33 @@ export function SinglePlantDashboard(): JSX.Element {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {headline.map((slot) => (
-            <SlotRailTile
+            <HeadlineCard
               key={slot.slot_code}
               slot={slot}
               icon={SLOT_ICONS[slot.slot_code] ?? IconGauge}
+              plantId={plant.id}
+              dcCapacityKwp={plant.dc_capacity_kwp}
+              acCapacityKw={plant.ac_capacity_kw}
             />
           ))}
         </div>
       )}
+
+      {/*
+        Period performance, on the page rather than behind a card. The strip
+        above is what the Plant is doing now; this is how well it did over the
+        Period — its own panel, with the provisional caveat on it, so the two
+        are never read as one row of the same kind of figure.
+      */}
+      <PerformanceBand
+        kpis={kpis}
+        period={period}
+        timeZone={timezone}
+        isLoading={kpisQuery.isLoading}
+        error={kpisQuery.error}
+        retry={() => void kpisQuery.refetch()}
+        onOpen={() => setOpen({ kind: "performance" })}
+      />
 
       <div className="grid gap-5 xl:grid-cols-12">
         {/*
@@ -761,11 +899,15 @@ export function SinglePlantDashboard(): JSX.Element {
           fill
           padding="p-5"
           className="xl:col-span-5"
-          title={heading(chartView === "power" ? powerTrend.label : "Energy per day")}
+          title={heading(
+            chartView === "power"
+              ? `Power trend${powerTrend.unit ? ` (${powerTrend.unit})` : ""}`
+              : "Energy per day",
+          )}
           subtitle={lede(
             chartView === "power"
-              ? "One measure, one axis. Gaps are drawn as gaps — a Plant that reported nothing was not producing zero."
-              : "One bar per day, from the daily tier — the counter's closing value, which is that day's total.",
+              ? `Actual output ${range === "today" ? "across the Plant's day" : "over the window"}. Gaps are drawn as gaps — a Plant that reported nothing was not producing zero.`
+              : "One bar per Plant day, midnight to midnight: what each Device's counter added that day. A day nothing measured is left empty, not drawn as zero.",
           )}
         >
           <div className="mb-3">
@@ -789,28 +931,38 @@ export function SinglePlantDashboard(): JSX.Element {
               <TrendChart
                 points={powerTrend.points}
                 unit={powerTrend.unit}
-                label={powerTrend.label}
+                label="Actual power"
                 tier={powerTrend.tier}
                 provenance={powerTrend.provenance}
                 flaggedCount={powerTrend.flaggedCount}
                 isLoading={powerTrend.isLoading}
                 timezone={timezone}
                 height={210}
+                day={powerTrend.day}
+                legend={POWER_TREND_LEGEND}
               />
             )
-          ) : energyTrend.unavailableReason ? (
+          ) : energyDays.unavailableReason || energyDays.isError ? (
             <p className="py-8 text-center text-xs text-ink-faint">
-              {energyTrend.unavailableReason}
+              {energyDays.unavailableReason ?? "The daily energy could not be loaded."}
             </p>
           ) : (
             <TrendChart
-              points={energyTrend.points}
-              unit={energyTrend.unit}
+              points={energyPoints}
+              unit={energyDays.unit}
               label="Energy"
-              tier={energyTrend.tier}
-              provenance={energyTrend.provenance}
-              flaggedCount={energyTrend.flaggedCount}
-              isLoading={energyTrend.isLoading}
+              // One point per Plant day, so dates format as days; the badge
+              // says where the days came from rather than naming this tier.
+              tier="agg_1d"
+              resolution={{
+                label: "Plant days, from hourly readings",
+                title:
+                  "Each bar is the energy every Device's counter added between two of the Plant's midnights, " +
+                  "summed. Built from hourly buckets because the daily tier is cut at UTC midnight, not the Plant's.",
+              }}
+              provenance={energyDays.provenance}
+              flaggedCount={energyDays.flaggedCount}
+              isLoading={energyDays.isLoading}
               timezone={timezone}
               height={210}
               shape="bar"
@@ -889,6 +1041,7 @@ export function SinglePlantDashboard(): JSX.Element {
             <SmallMultiples
               timezone={timezone}
               height={210}
+              day={irradianceTrend.day}
               series={[
                 {
                   key: "irradiance",
@@ -916,58 +1069,15 @@ export function SinglePlantDashboard(): JSX.Element {
         The summary row. Each card carries the figures somebody scans for and
         opens its full detail in a drawer — so depth costs a click, never the
         glance. A card whose section cannot be answered here renders inert with
-        the reason, rather than opening onto a list of dashes.
+        the reason, rather than opening onto a list of dashes. Performance is
+        not here: its gauges are the band under the headline strip, and a card
+        repeating PR and availability below them would be a second copy.
       */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-        <SummaryCard
-          icon={IconGauge}
-          title="Performance"
-          figures={[
-            {
-              label: "PR",
-              value:
-                kpis?.performance_ratio.value == null
-                  ? UNDEFINED_DISPLAY
-                  : formatRatioAsPercent(kpis.performance_ratio.value),
-              // Amber where the figure is outside what a ratio can be — the
-              // summary must not be the one place it looks settled.
-              tone:
-                kpis?.performance_ratio.value == null
-                  ? "muted"
-                  : ratioIsImplausible(kpis.performance_ratio.value)
-                    ? "warn"
-                    : "default",
-              title:
-                kpis?.performance_ratio.value != null &&
-                ratioIsImplausible(kpis.performance_ratio.value)
-                  ? implausibleRatioReason(kpis.performance_ratio.value, "Performance ratio")
-                  : (kpis?.performance_ratio.undefined_reason ??
-                    kpis?.performance_ratio.variant ??
-                    undefined),
-            },
-            {
-              label: "Availability",
-              value:
-                kpis?.availability.value == null
-                  ? UNDEFINED_DISPLAY
-                  : formatRatioAsPercent(kpis.availability.value),
-              tone: kpis?.availability.value == null ? "muted" : "default",
-            },
-            {
-              label: "Energy",
-              value: kpis ? formatNumber(kpis.energy_kwh) : "…",
-              unit: "kWh",
-            },
-          ]}
-          count={
-            <span className="flex items-center justify-between gap-2">
-              <span className="capitalize">{period}</span>
-              <CoverageBadge coverage={kpis?.coverage} />
-            </span>
-          }
-          onOpen={() => setOpen({ kind: "performance" })}
-        />
-
+      <div
+        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 ${
+          SUMMARY_COLUMNS[summaryCount] ?? ""
+        }`}
+      >
         {panelCards.map(({ code, slots }) => {
           const chrome = PANEL_TITLES[code] ?? {
             title: code,
@@ -1088,7 +1198,13 @@ export function SinglePlantDashboard(): JSX.Element {
           <PerformancePanel kpis={kpis} period={period} />
         ) : null}
 
-        {open?.kind === "panel" ? (
+        {open?.kind === "panel" && open.code === "power_summary" ? (
+          <PowerSummary
+            slots={panel("power_summary")}
+            currentPower={headline.find((slot) => slot.slot_code === "kpi.current_power")}
+            acCapacityKw={plant.ac_capacity_kw}
+          />
+        ) : open?.kind === "panel" ? (
           <div className="divide-y divide-line-soft">
             {byPosition(panel(open.code)).map((slot) => (
               <SlotRow key={slot.slot_code} slot={slot} />

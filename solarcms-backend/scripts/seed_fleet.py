@@ -23,6 +23,12 @@ is the opposite of a test. So:
 150 s because the slowest Plant publishes every 120 s and the probe must see
 each topic at least twice to measure its interval.
 
+── Why the Plants have different Regions ────────────────────────────────────
+CO₂ avoided is energy times the Region's grid factor, so one factor everywhere
+makes the fleet's CO₂ split identical to its energy split. `FLEET` gives three
+Plants three invented factors and leaves WH2 on the national default; the
+reasons are in that module's docstring.
+
 ── Why one Client Admin each, with every Plant ──────────────────────────────
 `app_can_see_plant` grants an `admin` every Plant of their own Client, so
 these logins keep working as Plants are added. Any other role starts with
@@ -52,6 +58,7 @@ from solarcms.services.onboarding import (  # noqa: E402
     ensure_plant_kpi_device,
     upsert_client,
     upsert_plant,
+    upsert_region,
 )
 from tools.simulate_fleet import FLEET  # noqa: E402
 
@@ -67,9 +74,21 @@ async def seed(password: str) -> int:
                 "UPDATE clients SET contact_email = :email WHERE id = :id"
             ), {"email": client.admin_email, "id": client_id})
             for plant in client.plants:
+                # A Region is shared by every Client, so an existing one keeps
+                # its own factor: `upsert_region` renames on conflict and never
+                # overwrites the factor, and a demo seed must not either.
+                region_id = None
+                if plant.region is not None:
+                    region_id = await upsert_region(
+                        session, plant.region.code, plant.region.name,
+                        country=plant.region.country,
+                        grid_factor=plant.region.grid_factor)
+                # `region_id` is written on conflict too, so a Plant FLEET gives
+                # no Region is set back to none — WH2's fallback is deliberate.
                 plant_id = await upsert_plant(
                     session, client_id, plant.code, plant.name,
                     status="active",
+                    region_id=region_id,
                     ac_capacity_kw=plant.ac_capacity_kw,
                     dc_capacity_kwp=plant.dc_capacity_kwp,
                     timezone=plant.timezone,
@@ -82,7 +101,8 @@ async def seed(password: str) -> int:
                 ), {"tz": plant.timezone, "id": plant_id})
                 await ensure_plant_kpi_device(session, client_id, plant_id, plant.code)
                 log.info("plant ready", client=client.code, plant=plant.code,
-                         plant_id=plant_id, timezone=plant.timezone)
+                         plant_id=plant_id, timezone=plant.timezone,
+                         region=plant.region.code if plant.region else None)
 
     # Separate transactions, after the Plants exist: `--all-plants` grants
     # whatever Plants the Client has *at that moment*.

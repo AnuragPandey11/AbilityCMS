@@ -7,7 +7,7 @@ points per Tag, which no chart can draw and no browser should receive.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Final, NamedTuple
 
@@ -73,6 +73,18 @@ def select_tier(
         if span <= spec.max_range and age <= spec.retention:
             return spec.tier
     return Tier.AGG_1D
+
+
+def bucket_start(at: datetime, tier: Tier) -> datetime:
+    """The start of the `tier` bucket that holds `at`.
+
+    The aggregates bucket with `time_bucket` and no timezone, so every tier is
+    aligned to UTC — a whole day to UTC midnight — and flooring against the
+    epoch lands on the same boundary.
+    """
+    step = next(spec.resolution for spec in TIERS if spec.tier == tier).total_seconds()
+    epoch = at.timestamp()
+    return datetime.fromtimestamp(epoch - epoch % step, tz=UTC)
 
 
 def value_column(rollup_method: str) -> str:
