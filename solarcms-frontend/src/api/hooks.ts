@@ -311,6 +311,23 @@ export function usePlantDashboard(plantId: number | null) {
   });
 }
 
+/**
+ * The Plant Status card's derived half. On the same cadence as the KPIs and
+ * refetched by `useLiveRefresh` when this Plant's readings arrive: a start is
+ * a fact about the last minute, and the card should not sit on it for thirty
+ * seconds.
+ */
+export function usePlantOperatingStatus(plantId: number | null) {
+  const { status } = useLiveSocket();
+  return useQuery({
+    queryKey: qk.plantOperatingStatus(plantId ?? 0),
+    queryFn: () => plantsApi.plantOperatingStatus(plantId as number),
+    enabled: plantId !== null,
+    ...(status === "open" ? LIVE_SOCKET_FALLBACK : LIVE_KPI),
+    ...ON_RETURN,
+  });
+}
+
 export function usePlantSld(plantId: number | null) {
   return useQuery({
     queryKey: qk.plantSld(plantId ?? 0),
@@ -338,6 +355,18 @@ export function useDevice(deviceId: number | null) {
     queryFn: () => devicesApi.getDevice(deviceId as number),
     enabled: deviceId !== null,
     ...SIXTY_SECONDS,
+  });
+}
+
+/** Whether one Device is generating, from its own output — see `domain/operating`. */
+export function useDeviceOperatingStatus(deviceId: number | null) {
+  return useQuery({
+    queryKey: qk.deviceOperatingStatus(deviceId ?? 0),
+    queryFn: () => devicesApi.getDeviceOperatingStatus(deviceId as number),
+    enabled: deviceId !== null,
+    retry: false,
+    ...LIVE_KPI,
+    ...ON_RETURN,
   });
 }
 

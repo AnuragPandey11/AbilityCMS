@@ -43,6 +43,12 @@ import * as echarts from "echarts";
 export function useEcharts(
   option: echarts.EChartsOption,
   deps: unknown[] = [],
+  /**
+   * Chart events to listen to — `datazoom`, say — by ECharts event name.
+   * Registered when the chart attaches; the latest handler always runs, so a
+   * caller may pass a fresh function every render.
+   */
+  events?: Record<string, (params: unknown) => void>,
 ): (node: HTMLDivElement | null) => void {
   const chartRef = useRef<echarts.ECharts | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
@@ -50,6 +56,8 @@ export function useEcharts(
   // between dependency changes still paints the current data.
   const optionRef = useRef(option);
   optionRef.current = option;
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
 
   const setContainer = useCallback((node: HTMLDivElement | null) => {
     // Tear down whatever was attached before — React calls a changed callback
@@ -68,6 +76,9 @@ export function useEcharts(
     // linger from the previous render — stale series are how a chart ends up
     // showing a Tag the Device is no longer bound to.
     chart.setOption(optionRef.current, { notMerge: true });
+    for (const name of Object.keys(eventsRef.current ?? {})) {
+      chart.on(name, (params: unknown) => eventsRef.current?.[name]?.(params));
+    }
 
     // A container inside a flex or grid panel is frequently 0×0 on the frame it
     // first attaches. ECharts sizes to the node it was given, so without this

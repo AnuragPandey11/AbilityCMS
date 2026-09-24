@@ -315,6 +315,12 @@ Start Time"*, and less than, the Stop Time. 0.1 MW is **100 kW** in the Tag's ow
 The implementation records the Start once per day (the first crossing) and lets the Stop be
 the *latest* fall below the threshold, so the evening shutdown ends up holding it.
 
+⚠ **Superseded in the implementation, 24 Sep 2026 — PROPOSED by the project, not by this sheet.**
+The platform now judges start and stop on the **Inverters'** summed AC active power with two
+thresholds: start above **0.5 kW**, stop at **0 kW** (MASTER §10, v3.2). The sheet's 0.1 MW rule
+above is kept as the record of what the client supplied; the two disagree until the client
+confirms one.
+
 #### 2.15.5 Inverter variants and the PV string group
 
 The Inverter is now scheduled twice — `STRING INVERTER` and `CENTRAL INVERTER` — with

@@ -49,6 +49,7 @@ import { CommStatusBadge, LastSeen, PlantPicker } from "@/components/domain";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { useScrollPager } from "@/components/ui/Carousel";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
+import { InverterHeadline, InverterView } from "@/components/devices/InverterView";
 import { Drawer } from "@/components/ui";
 import { ComparisonBars, type ComparisonRow } from "@/components/charts/ComparisonBars";
 import { RailFigure, RailText, RailTile } from "@/components/charts/RailTile";
@@ -195,7 +196,16 @@ export function InverterMonitoringDashboard(): JSX.Element {
    */
   const [metricTagId, setMetricTagId] = useState<number | null>(null);
   /** The Device whose full detail is open. A card is a glance; this is the rest. */
-  const [inspecting, setInspecting] = useState<DeviceListItem | null>(null);
+  const [inspecting, setInspectingState] = useState<DeviceListItem | null>(null);
+  /**
+   * The Inverter view by default; the generic inspector — every binding, the
+   * topic, the wiring — one press away for whoever needs to know *why*.
+   */
+  const [showInspector, setShowInspector] = useState(false);
+  const setInspecting = (device: DeviceListItem | null) => {
+    setInspectingState(device);
+    setShowInspector(false);
+  };
   const inverterColumns = columnsQuery.data?.[INVERTER_TYPE_CODE] ?? [];
   const metric =
     inverterColumns.find((column) => column.tag_id === metricTagId) ?? inverterColumns[0];
@@ -676,17 +686,66 @@ export function InverterMonitoringDashboard(): JSX.Element {
         </>
       )}
 
+      {/*
+        One Inverter in full — the reference screen, in a wide drawer so the
+        comparison behind it is unchanged and Escape returns to it. The generic
+        inspector is still here, behind the footer, because the answer to
+        "why is this blank" is usually a binding, and that lives there.
+      */}
       <Drawer
         open={inspecting !== null}
         onClose={() => setInspecting(null)}
-        title={inspecting ? `${inspecting.code} — ${inspecting.name}` : ""}
+        size={showInspector ? "narrow" : "wide"}
+        title={
+          inspecting ? (
+            <>
+              <span className="font-mono">{inspecting.code}</span>
+              {inspecting.name && inspecting.name !== inspecting.code ? (
+                <span className="ml-2 font-normal text-ink-muted">{inspecting.name}</span>
+              ) : null}
+            </>
+          ) : (
+            ""
+          )
+        }
+        subtitle={
+          inspecting && !showInspector ? (
+            <InverterHeadline
+              device={inspecting}
+              plantName={plantQuery.data?.name ?? null}
+              clientName={plantQuery.data?.client_name ?? null}
+              timeZone={timezone}
+            />
+          ) : undefined
+        }
+        footer={
+          inspecting ? (
+            <button
+              type="button"
+              onClick={() => setShowInspector((shown) => !shown)}
+              className="flex w-full items-center justify-between gap-2 rounded-control border border-line px-3 py-1.5 text-xs font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
+            >
+              {showInspector
+                ? "Back to the Inverter view"
+                : "Every signal, its binding, the topic and the wiring — the Device inspector"}
+              <IconChevronRight size={13} />
+            </button>
+          ) : null
+        }
       >
-        {inspecting ? (
+        {inspecting && showInspector ? (
           <DeviceInspector
             device={inspecting}
             values={valuesFor(inspecting.id)}
             timezone={timezone}
             deviceLookup={deviceById}
+          />
+        ) : inspecting ? (
+          <InverterView
+            key={inspecting.id}
+            device={inspecting}
+            live={liveDevices[inspecting.id]?.values}
+            timeZone={timezone}
           />
         ) : null}
       </Drawer>

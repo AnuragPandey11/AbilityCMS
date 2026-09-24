@@ -281,6 +281,20 @@ export const PlantKpisSchema = z.object({
   cuf: KpiFigureSchema,
   availability: KpiFigureSchema,
   co2_avoided_kg: KpiFigureSchema,
+  /** Which meter's counter the energy (and so PR, CUF, CO₂) came from. Only
+   *  the part the screen names; optional for an API that predates it. */
+  energy_source: z
+    .object({
+      device_type_code: z.string().nullable(),
+      tag_code: z.string().nullable(),
+      device_count: z.number(),
+    })
+    .nullable()
+    .optional()
+    .catch(null),
+  /** The period's energy over DC capacity. Optional so an API that predates
+   *  it degrades to "—" rather than failing the whole response. */
+  specific_yield: KpiFigureSchema.nullable().optional().catch(null),
   coverage: KpiCoverageSchema.nullable().catch(null),
   /** Where the period began, in the Plant's calendar: its midnight, the 1st,
    *  1 January — or its first reading, for lifetime. */
@@ -294,6 +308,109 @@ export const PlantKpisSchema = z.object({
   assumptions_note: z.string(),
 });
 export type PlantKpis = z.infer<typeof PlantKpisSchema>;
+
+// ── Operating status ────────────────────────────────────────────────────────
+
+/**
+ * One Plant-local day's start and stop, from `GET /plants/{id}/operating-status`.
+ *
+ * `*_observed` is the part that keeps the card honest. A Plant first heard at
+ * 13:55 already generating did not start at 13:55; it started somewhere in the
+ * silence before, and `start_after` is the last moment it was known to be off
+ * (null when nothing that day said so).
+ */
+export const OperatingDaySchema = z.object({
+  date: z.string(),
+  start_at: z.string().nullable(),
+  start_after: z.string().nullable(),
+  start_observed: z.boolean(),
+  stop_at: z.string().nullable(),
+  stop_after: z.string().nullable(),
+  stop_observed: z.boolean(),
+  /** Still generating at the day's last reading. */
+  ended_running: z.boolean(),
+  last_sample_at: z.string().nullable(),
+});
+export type OperatingDay = z.infer<typeof OperatingDaySchema>;
+
+export const OperatingStateSchema = z
+  .enum(["running", "stopped", "not_started", "unknown"])
+  .nullable()
+  .catch(null);
+export type OperatingState = z.infer<typeof OperatingStateSchema>;
+
+export const GridStateSchema = z
+  .enum(["connected", "disconnected", "partial", "unknown"])
+  .nullable()
+  .catch(null);
+
+/**
+ * Whether the Plant is generating, when it started and stopped, its peak and
+ * the grid. Every rule is the backend's (`domain/operating`, thresholds in
+ * `assumptions.py`) and is echoed back so the screen can say what it meant.
+ */
+export const OperatingStatusSchema = z.object({
+  plant_id: z.number(),
+  as_of: z.string(),
+  operating: z.object({
+    state: OperatingStateSchema,
+    undefined_reason: z.string().nullable(),
+    last_sample_at: z.string().nullable(),
+    source: z.object({
+      device_type_code: z.string(),
+      tag_code: z.string(),
+      aggregate: z.string(),
+      device_count: z.number(),
+      reporting: z.number(),
+    }),
+    start_above: numeric(),
+    stop_at_or_below: numeric(),
+    unit: z.string(),
+    resolution: z.string(),
+    flagged_buckets: z.number(),
+  }),
+  today: OperatingDaySchema,
+  yesterday: OperatingDaySchema,
+  peak: z.object({
+    value: nullableNumeric(),
+    at: z.string().nullable(),
+    unit: z.string().nullable(),
+    source: z
+      .object({
+        device_type_code: z.string().nullable(),
+        tag_code: z.string(),
+        aggregate: z.string(),
+        device_count: z.number(),
+      })
+      .nullable(),
+    undefined_reason: z.string().nullable(),
+  }),
+  grid: z.object({
+    state: GridStateSchema,
+    breakers: z.number(),
+    reporting: z.number(),
+    closed: z.number(),
+    open: z.number(),
+    undefined_reason: z.string().nullable(),
+    source: z.object({ device_type_code: z.string(), tag_code: z.string() }),
+  }),
+});
+export type OperatingStatus = z.infer<typeof OperatingStatusSchema>;
+
+/**
+ * The same rule for one Device on its own output — `GET /devices/{id}/operating-status`.
+ * The Inverter view's "operating status", in place of a status code whose
+ * meanings nobody has supplied.
+ */
+export const DeviceOperatingStatusSchema = z.object({
+  device_id: z.number(),
+  plant_id: z.number(),
+  as_of: z.string(),
+  operating: OperatingStatusSchema.shape.operating,
+  today: OperatingDaySchema,
+  yesterday: OperatingDaySchema,
+});
+export type DeviceOperatingStatus = z.infer<typeof DeviceOperatingStatusSchema>;
 
 export const BlockKpisSchema = z.object({
   block_id: z.number(),

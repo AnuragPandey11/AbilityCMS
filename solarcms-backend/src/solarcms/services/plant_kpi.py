@@ -40,11 +40,12 @@ from solarcms.domain.assumptions import (
     DAY_ROLLOVER_LOCAL_TIME,
     DAY_ROLLOVER_PAIRS,
     PLANT_ENERGY_SOURCE_PRECEDENCE,
+    PLANT_OPERATING_SOURCE,
     PLANT_POWER_SOURCE_PRECEDENCE,
-    PLANT_RUNNING_THRESHOLD_KW,
     QUALITY_GOOD,
 )
 from solarcms.domain.derived import DerivedTag, evaluate_all
+from solarcms.domain.operating import transition
 
 log = structlog.get_logger(__name__)
 
@@ -61,6 +62,11 @@ COMPUTED_PLANT_STATUSES = ("active", "commissioning")
 RESET_AT_DAY_BOUNDARY = (
     "TODAY_PEAK_POWER", "TODAY_PEAK_POWER_TIME", "PLANT_START_TIME", "PLANT_STOP_TIME",
 )
+
+# The formula-input key for the power start and stop are judged on — the
+# Inverters' own summed output (`PLANT_OPERATING_SOURCE`), which is not the same
+# figure as PLANT_ACTIVE_POWER on a Plant with a meter.
+OPERATING_POWER = "OPERATING_POWER"
 
 
 @dataclass(slots=True)
@@ -193,6 +199,10 @@ async def gather(session: AsyncSession, plant: Any, codes: dict[int, str]) -> Pl
     power, inputs.power_source = _by_precedence(per_type, PLANT_POWER_SOURCE_PRECEDENCE)
     if power is not None:
         inputs.values["PLANT_ACTIVE_POWER"] = power
+    operating_type, operating_tag = PLANT_OPERATING_SOURCE
+    operating = per_type.get(operating_type, {}).get(operating_tag)
+    if operating:
+        inputs.values[OPERATING_POWER] = sum(operating)
     return inputs
 
 
@@ -215,38 +225,50 @@ def _by_precedence(
 
 def stateful_kpis(
     inputs: PlantInputs, standing: dict[str, float], now: datetime
-) -> dict[str, float]:
+) -> tuple[dict[str, float], tuple[str, ...]]:
     """Peak power, peak time, and the Plant's start and stop times.
 
     `standing` is what the KPI Device already holds for today. These are
     comparisons against the day so far, not arithmetic over other Tags, which is
-    why they are here and not in `tags.formula`.
+    why they are here and not in `tags.formula`. Returns the values to write
+    and the standing values to clear.
     """
     result: dict[str, float] = {}
-    power = inputs.values.get("PLANT_ACTIVE_POWER")
-    if power is None:
-        return result
-
+    cleared: tuple[str, ...] = ()
     at = local_hours(now, inputs.timezone)
-    peak = standing.get("TODAY_PEAK_POWER")
-    if peak is None or power > peak:
-        result["TODAY_PEAK_POWER"] = power
-        result["TODAY_PEAK_POWER_TIME"] = at
 
-    # SUPPLIED: "When the active power is greater than 0.1 MW, that time shall be
-    # considered the Plant Start Time." Recorded once per day — the first
-    # crossing, not every one, or a passing cloud would rewrite the morning.
-    running = power > PLANT_RUNNING_THRESHOLD_KW
-    started = standing.get("PLANT_START_TIME")
-    if running and started is None:
-        result["PLANT_START_TIME"] = at
-    # ⚠ Interpretation (T-17): the Stop Time is the *latest* fall below the
-    # threshold after a start, so an afternoon cloud updates it and the evening
-    # shutdown ends up holding it. Reading it as the first fall would name the
-    # first cloud of the day as the moment the Plant stopped.
-    elif not running and (started is not None or "PLANT_START_TIME" in result):
-        result["PLANT_STOP_TIME"] = at
-    return result
+    # The peak is the maximum of the figure the Current Power tile shows.
+    power = inputs.values.get("PLANT_ACTIVE_POWER")
+    if power is not None:
+        peak = standing.get("TODAY_PEAK_POWER")
+        if peak is None or power > peak:
+            result["TODAY_PEAK_POWER"] = power
+            result["TODAY_PEAK_POWER_TIME"] = at
+
+    # Start and stop, by the one rule in `domain/operating` — the same one
+    # `GET /plants/{id}/operating-status` folds over stored history, so the card
+    # and this row cannot disagree about what a start is.
+    #
+    # Running is recoverable from the two times alone, because a restart clears
+    # the stop: started and not stopped. That is also what stops the stop time
+    # being rewritten on every tick of the evening — it used to be set whenever
+    # the Plant was below the threshold after a start, so by the 23:55 rollover
+    # it named 23:54 as the moment the Plant shut down.
+    operating = inputs.values.get(OPERATING_POWER)
+    if operating is not None:
+        started = standing.get("PLANT_START_TIME")
+        stopped = standing.get("PLANT_STOP_TIME")
+        change = transition(started is not None and stopped is None, operating)
+        if change == "start":
+            # The first crossing of the day only; a later one is a restart,
+            # which takes the stop back rather than moving the morning.
+            if started is None:
+                result["PLANT_START_TIME"] = at
+            if stopped is not None:
+                cleared = ("PLANT_STOP_TIME",)
+        elif change == "stop":
+            result["PLANT_STOP_TIME"] = at
+    return result, cleared
 
 
 async def compute(
@@ -277,7 +299,11 @@ async def compute(
 
         standing = await _standing_values(inputs.kpi_device_id, codes)
         computed = evaluate_all(plant_formulas, inputs.values)
-        computed.update(stateful_kpis(inputs, standing, moment))
+        stateful, cleared = stateful_kpis(inputs, standing, moment)
+        computed.update(stateful)
+        if cleared:
+            await live.clear_current_values(
+                inputs.kpi_device_id, [ids[code] for code in cleared if code in ids])
         for code in ("PLANT_ACTIVE_POWER", "PLANT_ENERGY_TODAY"):
             if code in inputs.values:
                 computed[code] = inputs.values[code]

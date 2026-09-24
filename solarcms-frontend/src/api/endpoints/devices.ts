@@ -5,12 +5,14 @@ import {
   CredentialSchema,
   DeviceDetailSchema,
   DeviceListItemSchema,
+  DeviceOperatingStatusSchema,
   UnmappedKeysSchema,
   parse,
   type Binding,
   type Credential,
   type DeviceDetail,
   type DeviceListItem,
+  type DeviceOperatingStatus,
   type UnmappedKey,
 } from "../schemas";
 
@@ -33,6 +35,15 @@ export async function getDevice(deviceId: number): Promise<DeviceDetail> {
     DeviceDetailSchema,
     await request(`/devices/${deviceId}`),
     `GET /devices/${deviceId}`,
+  );
+}
+
+/** Running, start and stop for one Device, from its own output's history. */
+export async function getDeviceOperatingStatus(deviceId: number): Promise<DeviceOperatingStatus> {
+  return parse(
+    DeviceOperatingStatusSchema,
+    await request(`/devices/${deviceId}/operating-status`),
+    `GET /devices/${deviceId}/operating-status`,
   );
 }
 

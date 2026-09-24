@@ -171,6 +171,7 @@ export function SlotRailTile({
   visual,
   figure = true,
   note,
+  action,
 }: {
   slot: ResolvedSlot;
   icon: ComponentType<IconProps>;
@@ -182,6 +183,8 @@ export function SlotRailTile({
   figure?: boolean;
   /** Appended to the provenance line: what the drawing could not show, and why. */
   note?: ReactNode;
+  /** A control at the foot of the tile, passed to `RailTile`. */
+  action?: ReactNode;
 }): JSX.Element {
   const isUndefined = slot.value === null;
   const explanation = undefinedExplanation(slot);
@@ -205,6 +208,7 @@ export function SlotRailTile({
         )
       }
       visual={visual}
+      action={action}
     >
       {figure ? (
         <FittedFigure

@@ -82,6 +82,9 @@ export function useLiveRefresh(plantId: number | null): void {
       void queryClient.invalidateQueries({
         queryKey: ["plants", plantId, "kpis"],
       });
+      void queryClient.invalidateQueries({
+        queryKey: ["plants", plantId, "operating-status"],
+      });
     }, COALESCE_MS);
   }, [latestFrameAt, plantId, queryClient]);
 

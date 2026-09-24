@@ -33,12 +33,14 @@ export const qk = {
     ["plants", id, "devices", blockId ?? null] as const,
   plantSld: (id: number) => ["plants", id, "sld"] as const,
   plantDashboard: (id: number) => ["plants", id, "dashboard"] as const,
+  plantOperatingStatus: (id: number) => ["plants", id, "operating-status"] as const,
   blockKpis: (id: number, period: KpiPeriod) =>
     ["blocks", id, "kpis", period] as const,
 
   plantCommissioning: (id: number) => ["plants", id, "commissioning"] as const,
 
   device: (id: number) => ["devices", id] as const,
+  deviceOperatingStatus: (id: number) => ["devices", id, "operating-status"] as const,
   bindings: (id: number) => ["devices", id, "bindings"] as const,
   unmappedKeys: (id: number) => ["devices", id, "unmapped-keys"] as const,
 

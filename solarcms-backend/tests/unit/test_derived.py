@@ -14,7 +14,7 @@ import pytest
 
 from solarcms.domain.assumptions import (
     DERIVED_TAG_FORMULAS,
-    PLANT_RUNNING_THRESHOLD_KW,
+    PLANT_START_ABOVE_KW,
     QUALITY_OUT_OF_RANGE,
     TAG_SPECS,
 )
@@ -33,6 +33,7 @@ from solarcms.domain.derived import (
     referenced_names,
 )
 from solarcms.services.plant_kpi import (
+    OPERATING_POWER,
     PlantInputs,
     is_rollover_moment,
     local_hours,
@@ -199,51 +200,84 @@ def test_performance_ratio_is_undefined_at_night() -> None:
 
 # ── Plant KPIs that are comparisons rather than arithmetic ──────────────────
 
-def _inputs(power: float | None) -> PlantInputs:
+def _inputs(power: float | None, operating: float | None = None) -> PlantInputs:
     values = {} if power is None else {"PLANT_ACTIVE_POWER": power}
+    if operating is not None:
+        values[OPERATING_POWER] = operating
     return PlantInputs(plant_id=1, client_id=1, kpi_device_id=9,
                        timezone="Asia/Kolkata", values=values)
 
 
 def test_peak_power_records_a_new_high_with_the_time_it_happened() -> None:
     at = datetime(2026, 9, 16, 6, 15, tzinfo=UTC)  # 11:45 in Asia/Kolkata
-    result = stateful_kpis(_inputs(4200.0), {"TODAY_PEAK_POWER": 3100.0}, at)
+    result, _ = stateful_kpis(_inputs(4200.0), {"TODAY_PEAK_POWER": 3100.0}, at)
     assert result["TODAY_PEAK_POWER"] == 4200.0
     assert result["TODAY_PEAK_POWER_TIME"] == pytest.approx(11.75)
 
 
 def test_peak_power_is_not_rewritten_by_a_lower_reading() -> None:
     at = datetime(2026, 9, 16, 9, 0, tzinfo=UTC)
-    result = stateful_kpis(_inputs(2000.0), {"TODAY_PEAK_POWER": 4200.0}, at)
+    result, _ = stateful_kpis(_inputs(2000.0), {"TODAY_PEAK_POWER": 4200.0}, at)
     assert "TODAY_PEAK_POWER" not in result
 
 
 def test_plant_start_time_is_the_first_crossing_of_the_threshold() -> None:
-    # SUPPLIED: "When the active power is greater than 0.1 MW, that time shall be
-    # considered the Plant Start Time." 0.1 MW is 100 kW in the Tag's own unit.
     at = datetime(2026, 9, 16, 1, 30, tzinfo=UTC)  # 07:00 local
-    first = stateful_kpis(_inputs(PLANT_RUNNING_THRESHOLD_KW + 1), {}, at)
+    first, _ = stateful_kpis(_inputs(None, PLANT_START_ABOVE_KW + 0.1), {}, at)
     assert first["PLANT_START_TIME"] == pytest.approx(7.0)
 
     # An hour later it is still running: the morning must not be rewritten.
     later = datetime(2026, 9, 16, 2, 30, tzinfo=UTC)
-    again = stateful_kpis(_inputs(3000.0), {"PLANT_START_TIME": 7.0}, later)
+    again, _ = stateful_kpis(_inputs(None, 3000.0), {"PLANT_START_TIME": 7.0}, later)
     assert "PLANT_START_TIME" not in again
 
 
+def test_start_and_stop_read_the_inverters_not_the_meter() -> None:
+    # A meter reading 400 kW does not start a Plant whose Inverters read 0: the
+    # rule is the Inverters' own output, which is what was specified.
+    at = datetime(2026, 9, 16, 1, 30, tzinfo=UTC)
+    result, _ = stateful_kpis(_inputs(400.0, 0.0), {}, at)
+    assert "PLANT_START_TIME" not in result
+
+
 def test_plant_stop_time_is_only_recorded_after_a_start() -> None:
-    # Before sunrise the Plant is below the threshold and has not started. A stop
-    # time then would name midnight as the moment it shut down.
+    # Before sunrise the Plant has not started. A stop time then would name
+    # midnight as the moment it shut down.
     at = datetime(2026, 9, 16, 0, 30, tzinfo=UTC)
-    assert "PLANT_STOP_TIME" not in stateful_kpis(_inputs(10.0), {}, at)
+    before, _ = stateful_kpis(_inputs(None, 0.0), {}, at)
+    assert "PLANT_STOP_TIME" not in before
 
     evening = datetime(2026, 9, 16, 13, 0, tzinfo=UTC)  # 18:30 local
-    stopped = stateful_kpis(_inputs(10.0), {"PLANT_START_TIME": 7.0}, evening)
+    stopped, _ = stateful_kpis(_inputs(None, 0.0), {"PLANT_START_TIME": 7.0}, evening)
     assert stopped["PLANT_STOP_TIME"] == pytest.approx(18.5)
 
 
+def test_plant_stop_time_is_not_rewritten_by_every_tick_of_the_evening() -> None:
+    # It used to be: every tick below the threshold after a start set it again,
+    # so by the rollover it read 23:54.
+    later = datetime(2026, 9, 16, 16, 0, tzinfo=UTC)  # 21:30 local
+    result, cleared = stateful_kpis(
+        _inputs(None, 0.0), {"PLANT_START_TIME": 7.0, "PLANT_STOP_TIME": 18.5}, later)
+    assert "PLANT_STOP_TIME" not in result
+    assert cleared == ()
+
+
+def test_stop_needs_the_output_back_at_zero_not_merely_below_the_start() -> None:
+    at = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
+    dim, _ = stateful_kpis(_inputs(None, 0.3), {"PLANT_START_TIME": 7.0}, at)
+    assert "PLANT_STOP_TIME" not in dim
+
+
+def test_a_restart_takes_the_stop_back_and_keeps_the_morning() -> None:
+    at = datetime(2026, 9, 16, 6, 0, tzinfo=UTC)  # 11:30 local, after an 11:00 trip
+    result, cleared = stateful_kpis(
+        _inputs(None, 850.0), {"PLANT_START_TIME": 7.0, "PLANT_STOP_TIME": 11.0}, at)
+    assert "PLANT_START_TIME" not in result
+    assert cleared == ("PLANT_STOP_TIME",)
+
+
 def test_no_power_reading_produces_no_stateful_kpis() -> None:
-    assert stateful_kpis(_inputs(None), {}, datetime.now(UTC)) == {}
+    assert stateful_kpis(_inputs(None), {}, datetime.now(UTC)) == ({}, ())
 
 
 # ── The day boundary ────────────────────────────────────────────────────────

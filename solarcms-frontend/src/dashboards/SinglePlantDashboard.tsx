@@ -9,15 +9,18 @@
  * be seen together is a report with a scrollbar — the entire value of the form
  * is that *how the Plant is doing* is one image, not a sequence.
  *
- * So the rule here is that the whole page fits a laptop viewport, and depth is
- * reached sideways or in a drawer rather than downwards:
+ * So depth is reached sideways or in a drawer rather than downwards, and the
+ * first screen answers "is the Plant working, and how well":
  *
- *   headline strip    the figures that never change position, always visible
- *   performance       PR, CUF and availability as gauges, over the Period
- *   schematic         generation → grid, with the equipment drawn
- *   power + weather   two charts, one axis each, over a chosen window
- *   Inverters         a carousel — seventeen peers go across, not down
+ *   headline strip    Current Power, then PR, CUF and availability as gauges
+ *                     over the Period, with the coverage that qualifies them
+ *   status rail       Plant Status and Energy Summary, the client's two list
+ *                     cards, down the left — beside the schematic and the
+ *                     power trend, which need the width
+ *   Inverters         a carousel — seventeen peers go across, not down —
+ *                     beside the weather charts
  *   summary row       one card per section, each opening its full detail
+ *   energy cards      today, month and lifetime energy, drawn
  *
  * Nothing was deleted to achieve that. Every figure the long version showed is
  * still here; what changed is that the *second* copy of each is behind one
@@ -40,7 +43,7 @@
  * "Unassigned" pseudo-Block, no empty grouping level.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
 import {
@@ -52,6 +55,7 @@ import {
   usePlantDashboard,
   usePlantDevices,
   usePlantKpis,
+  usePlantOperatingStatus,
 } from "@/api/hooks";
 import { useSlotTrend, TREND_RANGES, type TrendPoint, type TrendRange } from "@/api/useSlotTrend";
 import { useSlotSteps } from "@/api/useSlotSteps";
@@ -67,11 +71,19 @@ import type {
 } from "@/api/schemas";
 import { Panel, SegmentedControl, Drawer } from "@/components/ui";
 import { useScrollPager } from "@/components/ui/Carousel";
+import { TrendChart, SmallMultiples } from "@/components/charts/TrendChart";
+import { CheckboxMenu } from "@/components/ui/CheckboxMenu";
 import {
-  TrendChart,
-  SmallMultiples,
-  type TrendLegendEntry,
-} from "@/components/charts/TrendChart";
+  PowerComparisonChart,
+  SeriesSwatch,
+  slotColor,
+} from "./single-plant/PowerComparisonChart";
+import {
+  COMPARE_DEFAULT,
+  COMPARE_SLOT,
+  usePowerComparison,
+  type CompareKey,
+} from "./single-plant/usePowerComparison";
 import { ReadingsPanel } from "@/components/charts/ReadingsPanel";
 import { PlantSchematic } from "@/components/sld/PlantSchematic";
 import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
@@ -79,12 +91,20 @@ import { DeviceArt } from "@/components/devices/DeviceArt";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { SummaryCard, type SummaryFigure } from "@/components/dashboard/SummaryCard";
 import { SlotRow, slotText } from "@/components/dashboard/SlotValue";
-import { PerformanceBand, PerformancePanel } from "./single-plant/PerformancePanel";
+import {
+  PerformanceDetailsButton,
+  PerformancePanel,
+  PerformanceTiles,
+} from "./single-plant/PerformancePanel";
+import { RailTile } from "@/components/charts/RailTile";
+import { OperatingDetail, PlantStatusCard } from "./single-plant/PlantStatusCard";
+import { EnergySummaryCard } from "./single-plant/EnergySummaryCard";
 import { PowerSummary } from "./single-plant/PowerSummary";
 import { fullyDuplicated } from "./single-plant/duplication";
 import {
   EmptyState,
   ErrorState,
+  Skeleton,
   SkeletonKpiRow,
   SkeletonPanel,
   SkeletonTable,
@@ -103,7 +123,6 @@ import {
 } from "@/components/domain";
 import {
   IconAlarm,
-  IconCapacity,
   IconChevronLeft,
   IconChevronRight,
   IconClock,
@@ -129,11 +148,10 @@ import { useLiveSocket } from "@/live/LiveSocket";
 import { useLiveRefresh } from "@/live/useLiveRefresh";
 
 /**
- * Which icon labels a headline slot — per *quantity*: the array for capacity,
- * a bolt for a rate, accumulating bars for an energy total. Presentation only.
+ * Which icon labels a headline slot — per *quantity*: a bolt for a rate,
+ * accumulating bars for an energy total. Presentation only.
  */
 const SLOT_ICONS: Record<string, typeof IconPower> = {
-  "kpi.plant_capacity": IconCapacity,
   "kpi.current_power": IconPower,
   "kpi.energy_today": IconEnergy,
   "kpi.energy_month": IconEnergy,
@@ -165,53 +183,56 @@ const PANEL_TITLES: Record<string, { title: string; subtitle: string; icon: type
 };
 
 /**
- * Summary-row columns at desktop width, by how many cards there are.
- *
- * The count varies by Plant — panel cards drop out when the headline strip
- * already answers them, and Blocks appears only where there are some — so a
- * fixed column count left a row ending in a hole. Five fit one row; six split
- * three and three until the widest screens; seven is prime, so four and three.
- * Literal class names, so Tailwind's scanner emits every one.
+ * The energy cards at the foot of the page. Each is a drawing of a register —
+ * a month of columns, an odometer — read for its shape once the state of the
+ * Plant has been read above. Today's sun clock is not here: it closes the
+ * headline strip, where it carries the way into the performance detail.
  */
-const SUMMARY_COLUMNS: Record<number, string> = {
-  2: "xl:grid-cols-2",
-  3: "xl:grid-cols-3",
-  4: "xl:grid-cols-4",
-  5: "xl:grid-cols-5",
-  6: "xl:grid-cols-3 2xl:grid-cols-6",
-  7: "xl:grid-cols-4",
+const ENERGY_CARDS = ["kpi.energy_month", "kpi.energy_lifetime"];
+
+/** Literal class names, so Tailwind's scanner emits every one. */
+const ENERGY_COLUMNS: Record<number, string> = {
+  1: "",
+  2: "md:grid-cols-2",
 };
 
 /**
- * The power trend's legend, as the reference draws it: actual solid, expected
- * dashed.
- *
- * ⚠ Expected power is **not defined anywhere** — no forecast, no PVsyst or
- * budget profile, no design PR — so its entry is present and visibly off, with
- * the reason on hover, and nothing is drawn. A curve computed from a guessed
- * design PR would sit under the measured one and invite the gap between them
- * to be read as a loss. When the client names the basis, the series goes into
- * this chart as a dashed line and the entry loses its `unavailable`.
+ * The panels whose figures the status rail already carries: Plant Status holds
+ * the weather and opens onto the electrical boundary, Energy Summary opens
+ * onto the energy panel. A summary card for any of them would be a second
+ * copy of a card that is on the first screen.
  */
-const POWER_TREND_LEGEND: TrendLegendEntry[] = [
-  { label: "Actual power", line: "solid" },
-  {
-    label: "Expected power",
-    line: "dashed",
-    unavailable: {
-      note: "not yet defined",
-      reason:
-        "No expected-power model is defined for this Plant. It needs the client's basis — " +
-        "irradiance × DC capacity × a design PR, a PVsyst or budget profile, or a weather " +
-        "forecast — and nothing is drawn until then rather than a guessed curve.",
-    },
-  },
-];
+const ON_THE_RAIL = new Set(["plant_status", "energy_summary", "environment"]);
+
+/**
+ * The energy panel's rows for the Energy Summary drawer, less start and stop:
+ * those are on Plant Status, derived from history by one rule, and the Plant
+ * KPI Device's copies here would be a second answer to the same question.
+ */
+const RAIL_OWNS = new Set(["energy.plant_start", "energy.plant_stop"]);
+
+/**
+ * Summary-row columns, by how many cards there are.
+ *
+ * The count varies by Plant — Power Summary drops out when the headline slots
+ * already answer it, and Blocks appears only where there are some — so a fixed
+ * column count left a row ending in a hole. With the status rail holding the
+ * other panels it is two to four: three go across from `md`, four go two by
+ * two until there is room for all four. Literal class names, so Tailwind's
+ * scanner emits every one.
+ */
+const SUMMARY_COLUMNS: Record<number, string> = {
+  2: "",
+  3: "md:grid-cols-3",
+  4: "xl:grid-cols-4",
+};
 
 /** Which drawer is open. `null` is the normal state. */
 type OpenPanel =
   | { kind: "panel"; code: string }
   | { kind: "performance" }
+  | { kind: "status" }
+  | { kind: "energy" }
   | { kind: "health" }
   | { kind: "alarms" }
   | { kind: "blocks" }
@@ -346,6 +367,35 @@ function DeviceStrip({
 }
 
 /**
+ * Whether the viewport is at least `px` wide, following it as it changes.
+ * False where there is no `matchMedia` (jsdom), which is the narrow layout.
+ */
+function useMinWidth(px: number): boolean {
+  const query = `(min-width: ${px}px)`;
+  const read = () => typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const list = window.matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+  return matches;
+}
+
+/**
+ * The trend chart's height. Beside the status rail it is the one flexible
+ * thing in the right-hand column, so it is sized to end where the rail ends —
+ * the rail is ten rows over six on every Plant, so that is a constant, not a
+ * measurement. Below `xl` the rail sits above it and the chart keeps the height
+ * it always had. Measured rather than flexed: a chart that grew to fill its
+ * cell would also grow the row it sits in.
+ */
+const TREND_HEIGHT = { beside_rail: 370, stacked: 230 };
+
+/**
  * How many of the Plant's days the Energy view shows for each chart window.
  * A per-day chart cannot show "the last 24 hours", so each window becomes the
  * calendar days it touches: 24h is yesterday and today.
@@ -400,6 +450,9 @@ export function SinglePlantDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   const [chartView, setChartView] = useState<"power" | "energy">("power");
   const [open, setOpen] = useState<OpenPanel>(null);
+  // Tailwind's `xl`, where the status rail moves beside the charts.
+  const besideRail = useMinWidth(1280);
+  const trendHeight = besideRail ? TREND_HEIGHT.beside_rail : TREND_HEIGHT.stacked;
 
   const plantQuery = usePlant(plantId);
   // The slots and KPI tiles refetch when this Plant's readings actually arrive,
@@ -409,6 +462,10 @@ export function SinglePlantDashboard(): JSX.Element {
   useLiveRefresh(plantId);
 
   const kpisQuery = usePlantKpis(plantId, period);
+  // Energy Summary is about today whatever the Period says. When the Period is
+  // today this is the same cache entry as the gauges', so the two PRs are one.
+  const kpisTodayQuery = usePlantKpis(plantId, "today");
+  const operatingQuery = usePlantOperatingStatus(plantId);
   const dashboardQuery = usePlantDashboard(plantId);
   const columnsQuery = useDeviceTableColumns();
   const blocksQuery = usePlantBlocks(plantId);
@@ -450,6 +507,23 @@ export function SinglePlantDashboard(): JSX.Element {
     [energyDays.periods],
   );
   const irradianceTrend = useSlotTrend(plantId, "env.irradiance", range);
+  // What the power trend is compared with: direct radiation by default, as the
+  // client's reference chart draws it, and the two nameplate references on
+  // request. See `single-plant/powerComparison` for what each curve is.
+  const radiationTrend = useSlotTrend(plantId, "env.direct_radiation", range);
+  // The Inverters' own efficiency, for the AC reference's conversion loss.
+  const efficiencyTrend = useSlotTrend(plantId, "sld.inv.efficiency", range);
+  const [compareWith, setCompareWith] = useState<Set<CompareKey>>(() => new Set(COMPARE_DEFAULT));
+  const comparison = usePowerComparison({
+    power: powerTrend,
+    radiation: radiationTrend,
+    irradiance: irradianceTrend,
+    efficiency: efficiencyTrend,
+    environment: dashboardQuery.data?.panels.environment,
+    dcCapacityKwp: plantQuery.data?.dc_capacity_kwp,
+    acCapacityKw: plantQuery.data?.ac_capacity_kw,
+    chosen: compareWith,
+  });
   const moduleTempTrend = useSlotTrend(plantId, "env.module_temperature", range);
 
   const blocks = blocksQuery.data ?? [];
@@ -573,10 +647,12 @@ export function SinglePlantDashboard(): JSX.Element {
       <div className="space-y-2.5">
         <SkeletonPanel lines={1} />
         <SkeletonKpiRow tiles={5} />
-        <SkeletonPanel lines={3} />
         <div className="grid gap-5 xl:grid-cols-12">
-          <div className="xl:col-span-7"><SkeletonPanel lines={4} /></div>
-          <div className="xl:col-span-5"><SkeletonPanel lines={4} /></div>
+          <div className="xl:col-span-3"><SkeletonPanel lines={10} /></div>
+          <div className="space-y-5 xl:col-span-9">
+            <SkeletonPanel lines={4} />
+            <SkeletonPanel lines={4} />
+          </div>
         </div>
         <SkeletonTable rows={3} columns={6} />
       </div>
@@ -591,12 +667,30 @@ export function SinglePlantDashboard(): JSX.Element {
   // Every timestamp on this screen renders in the Plant's zone (Guardrail 11).
   const timezone = plant.timezone;
 
-  /** The panel cards, minus any the headline strip already answered. */
+  /** The panel cards, minus the rail's and any the headline slots already answered. */
   const panelCards = ["plant_status", "power_summary", "energy_summary", "environment"]
+    .filter((code) => !ON_THE_RAIL.has(code))
     .map((code) => ({ code, slots: panel(code) }))
     .filter(({ slots }) => slots.length > 0 && !fullyDuplicated(slots, headline));
+  const slotByCode = new Map(headline.map((slot) => [slot.slot_code, slot]));
+  const currentPower = slotByCode.get("kpi.current_power");
+  const energyToday = slotByCode.get("kpi.energy_today");
+  const energyCards = ENERGY_CARDS.flatMap((code) => {
+    const slot = slotByCode.get(code);
+    return slot ? [slot] : [];
+  });
   // Panel cards, Device Health, Alarms, and Blocks where the Plant has any.
   const summaryCount = panelCards.length + 2 + (blocks.length > 0 ? 1 : 0);
+
+  /** Into the performance drawer, with the gauges' coverage on it. */
+  const performanceButton = (
+    <PerformanceDetailsButton
+      kpis={kpis}
+      period={period}
+      timeZone={timezone}
+      onOpen={() => setOpen({ kind: "performance" })}
+    />
+  );
 
   const drawerTitle = (() => {
     if (!open) return "";
@@ -605,6 +699,10 @@ export function SinglePlantDashboard(): JSX.Element {
         return PANEL_TITLES[open.code]?.title ?? open.code;
       case "performance":
         return `Performance — ${period}`;
+      case "status":
+        return "Plant Status";
+      case "energy":
+        return "Energy Summary — today";
       case "health":
         return "Device health";
       case "alarms":
@@ -646,6 +744,7 @@ export function SinglePlantDashboard(): JSX.Element {
       case "alarms":
         return link("/d/alarms", "Open the Alarms dashboard");
       case "performance":
+      case "energy":
         return link("/d/reports", "Generate a performance report");
       case "device":
         return canManage
@@ -655,6 +754,7 @@ export function SinglePlantDashboard(): JSX.Element {
         return link("/d/sld", "See how these Devices are connected");
       case "stage":
         return link("/d/sld", "Open the full Single Line Diagram");
+      case "status":
       case "panel":
         // These panels are answered by Devices; the useful next step is the
         // list of what answered them, which is one drawer away rather than
@@ -818,160 +918,217 @@ export function SinglePlantDashboard(): JSX.Element {
       </header>
 
       {/*
-        The headline strip. Every tile here is answerable by a bare rooftop
-        Plant publishing four Inverters *and* by an 8 MW Plant with a settlement
-        meter — that is the test a figure has to pass to be in this row — and
-        each one names the Device that answered it.
+        The headline strip: what the Plant is doing now, how well it did over
+        the Period, and what it has made today. Current Power and today's energy
+        are live; the three gauges between them are derived and provisional,
+        which is why each says its period — and why the button into their
+        detail carries their coverage, so it stays in the same row as the
+        figures it qualifies (Guardrail 18).
       */}
-      {dashboardQuery.isLoading ? (
-        <SkeletonKpiRow tiles={5} />
-      ) : dashboardQuery.isError ? (
-        <ErrorState error={dashboardQuery.error} retry={() => void dashboardQuery.refetch()} />
-      ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-          {headline.map((slot) => (
-            <HeadlineCard
-              key={slot.slot_code}
-              slot={slot}
-              icon={SLOT_ICONS[slot.slot_code] ?? IconGauge}
-              plantId={plant.id}
-              dcCapacityKwp={plant.dc_capacity_kwp}
-              acCapacityKw={plant.ac_capacity_kw}
-            />
-          ))}
-        </div>
-      )}
-
-      {/*
-        Period performance, on the page rather than behind a card. The strip
-        above is what the Plant is doing now; this is how well it did over the
-        Period — its own panel, with the provisional caveat on it, so the two
-        are never read as one row of the same kind of figure.
-      */}
-      <PerformanceBand
-        kpis={kpis}
-        period={period}
-        timeZone={timezone}
-        isLoading={kpisQuery.isLoading}
-        error={kpisQuery.error}
-        retry={() => void kpisQuery.refetch()}
-        onOpen={() => setOpen({ kind: "performance" })}
-      />
-
-      <div className="grid gap-5 xl:grid-cols-12">
-        {/*
-          The four-stage schematic, fixed on every Plant. The detailed
-          `parent_device_id` tree — which Inverter is the broken one — lives on
-          the SLD dashboard; this answers the other question, whether the Plant
-          is healthy at a glance and how it compares with the next one.
-        */}
-        {/* Default padding, unchanged: the schematic keeps exactly the room it
-            had, and at mid widths every pixel is a stage that does not scroll. */}
-        <Panel
-          fill
-          className="xl:col-span-7"
-          title={heading("Plant Schematic")}
-          subtitle={lede(
-            "PV Array → Inverters → Transformer → Grid. Every power-path Device folds into one of the four by its Device Type.",
-          )}
-        >
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {dashboardQuery.isLoading ? (
+          <Skeleton className="rounded-card" style={{ minHeight: 270 }} />
+        ) : dashboardQuery.isError ? (
+          <ErrorState error={dashboardQuery.error} retry={() => void dashboardQuery.refetch()} />
+        ) : currentPower ? (
+          <HeadlineCard
+            slot={currentPower}
+            icon={SLOT_ICONS[currentPower.slot_code] ?? IconGauge}
+            plantId={plant.id}
+            acCapacityKw={plant.ac_capacity_kw}
+          />
+        ) : null}
+        <PerformanceTiles
+          kpis={kpis}
+          period={period}
+          isLoading={kpisQuery.isLoading}
+          error={kpisQuery.error}
+          retry={() => void kpisQuery.refetch()}
+        />
+        {/* Spans the row at `sm`, where the strip is two columns and it is the
+            fifth tile — alone it would leave a hole beside it. */}
+        <div className="flex sm:col-span-2 xl:col-span-1 [&>*]:flex-1">
           {dashboardQuery.isLoading ? (
-            <SkeletonPanel lines={3} title={false} />
-          ) : dash ? (
-            <PlantSchematic
-              sld={dash.sld}
+            <Skeleton className="rounded-card" style={{ minHeight: 270 }} />
+          ) : energyToday ? (
+            <HeadlineCard
+              slot={energyToday}
+              icon={SLOT_ICONS[energyToday.slot_code] ?? IconGauge}
+              plantId={plant.id}
+              acCapacityKw={plant.ac_capacity_kw}
+              action={performanceButton}
               compact
-              onSelectStage={(stage) => setOpen({ kind: "stage", stage })}
-              selectedStage={open?.kind === "stage" ? open.stage.code : null}
             />
-          ) : null}
-        </Panel>
+          ) : (
+            // The slot never hides (it is a headline position), so this is the
+            // dashboard request failing — the first tile says so. The way into
+            // the performance detail must not go with it.
+            <RailTile
+              icon={IconEnergy}
+              label="Today's Energy"
+              footnote="The dashboard could not be loaded."
+              action={performanceButton}
+            />
+          )}
+        </div>
+      </div>
 
+      <div className="grid gap-5 xl:grid-cols-[20rem_minmax(0,1fr)]">
         {/*
-          Two charts, one panel. Power over time and energy per day are the two
-          questions asked of a Plant's output and they are asked at different
-          altitudes — "what is it doing" and "how much did it make" — so they
-          are genuinely different views rather than two series to overlay.
-          Stacking them as separate panels would have cost a third of the
-          screen for a chart most visits do not look at.
+          The status rail. The client's two list cards, one above the other,
+          down the left: what state the Plant is in and what it has made today,
+          read at the first glance without scrolling. Down the side rather than
+          across a row because they are tall and narrow by nature — ten short
+          rows — and the schematic beside them needs the width: its four stages
+          scroll sideways below about 650px, and squeezed between two cards
+          they would. A fixed width rather than a share of twelve: the rows'
+          labels are the client's own wording and must not be cut short.
         */}
-        <Panel
-          fill
-          padding="p-5"
-          className="xl:col-span-5"
-          title={heading(
-            chartView === "power"
-              ? `Power trend${powerTrend.unit ? ` (${powerTrend.unit})` : ""}`
-              : "Energy per day",
-          )}
-          subtitle={lede(
-            chartView === "power"
-              ? `Actual output ${range === "today" ? "across the Plant's day" : "over the window"}. Gaps are drawn as gaps — a Plant that reported nothing was not producing zero.`
-              : "One bar per Plant day, midnight to midnight: what each Device's counter added that day. A day nothing measured is left empty, not drawn as zero.",
-          )}
-        >
-          <div className="mb-3">
-            <SegmentedControl
-              label="Chart view"
-              size="lg"
-              value={chartView}
-              onChange={setChartView}
-              options={[
-                { value: "power", label: "Power", hint: "Output over the selected window." },
-                { value: "energy", label: "Energy", hint: "Generation per day over the selected window." },
-              ]}
-            />
-          </div>
-          {chartView === "power" ? (
-            powerTrend.unavailableReason ? (
+        <div className="grid gap-5 md:grid-cols-2 xl:flex xl:flex-col">
+          <PlantStatusCard
+            status={operatingQuery.data}
+            isLoading={operatingQuery.isLoading}
+            environment={panel("environment")}
+            devices={devices}
+            health={healthCounts}
+            timeZone={timezone}
+            onOpen={() => setOpen({ kind: "status" })}
+          />
+          <EnergySummaryCard
+            headline={headline}
+            today={kpisTodayQuery.data}
+            onOpen={() => setOpen({ kind: "energy" })}
+            className="xl:flex-1"
+          />
+        </div>
+
+        <div className="flex min-w-0 flex-col gap-5">
+          {/*
+            The four-stage schematic, fixed on every Plant. The detailed
+            `parent_device_id` tree — which Inverter is the broken one — lives on
+            the SLD dashboard; this answers the other question, whether the Plant
+            is healthy at a glance and how it compares with the next one.
+          */}
+          {/* Default padding, unchanged: the schematic keeps exactly the room it
+              had, and at mid widths every pixel is a stage that does not scroll. */}
+          <Panel
+            fill
+            className="min-w-0"
+            title={heading("Plant Schematic")}
+            subtitle={lede(
+              "PV Array → Inverters → Transformer → Grid. Every power-path Device folds into one of the four by its Device Type.",
+            )}
+          >
+            {dashboardQuery.isLoading ? (
+              <SkeletonPanel lines={3} title={false} />
+            ) : dash ? (
+              <PlantSchematic
+                sld={dash.sld}
+                compact
+                onSelectStage={(stage) => setOpen({ kind: "stage", stage })}
+                selectedStage={open?.kind === "stage" ? open.stage.code : null}
+              />
+            ) : null}
+          </Panel>
+
+
+          {/*
+            Two charts, one panel. Power over time and energy per day are the two
+            questions asked of a Plant's output and they are asked at different
+            altitudes — "what is it doing" and "how much did it make" — so they
+            are genuinely different views rather than two series to overlay.
+            Stacking them as separate panels would have cost a third of the
+            screen for a chart most visits do not look at.
+          */}
+          <Panel
+            fill
+            padding="p-5"
+            className="min-w-0 flex-1"
+            title={heading(
+              chartView === "power"
+                ? `Power trend${powerTrend.unit ? ` (${powerTrend.unit})` : ""}`
+                : "Energy per day",
+            )}
+            subtitle={lede(
+              chartView === "power"
+                ? `Actual output ${range === "today" ? "across the Plant's day" : "over the window"}, against what it is compared with. Gaps are drawn as gaps — a Plant that reported nothing was not producing zero.`
+                : "One bar per Plant day, midnight to midnight: what each Device's counter added that day. A day nothing measured is left empty, not drawn as zero.",
+            )}
+          >
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <SegmentedControl
+                label="Chart view"
+                size="lg"
+                value={chartView}
+                onChange={setChartView}
+                options={[
+                  { value: "power", label: "Power", hint: "Output over the selected window." },
+                  { value: "energy", label: "Energy", hint: "Generation per day over the selected window." },
+                ]}
+              />
+              {chartView === "power" && !powerTrend.unavailableReason ? (
+                <CheckboxMenu
+                  label="Select options"
+                  ariaLabel="Compare the power trend with"
+                  selected={compareWith}
+                  onChange={setCompareWith}
+                  options={comparison.options.map((option) => ({
+                    ...option,
+                    swatch: <SeriesSwatch line={option.line} color={slotColor(COMPARE_SLOT[option.value])} />,
+                  }))}
+                />
+              ) : null}
+            </div>
+            {chartView === "power" ? (
+              powerTrend.unavailableReason ? (
+                <p className="py-8 text-center text-xs text-ink-faint">
+                  {powerTrend.unavailableReason}
+                </p>
+              ) : (
+                <PowerComparisonChart
+                  series={comparison.series}
+                  perWm2={comparison.perWm2}
+                  dcCapacityKwp={plant.dc_capacity_kwp}
+                  tier={powerTrend.tier}
+                  provenance={powerTrend.provenance}
+                  flaggedCount={comparison.flaggedCount}
+                  isLoading={comparison.isLoading}
+                  timezone={timezone}
+                  height={trendHeight}
+                  day={powerTrend.day}
+                />
+              )
+            ) : energyDays.unavailableReason || energyDays.isError ? (
               <p className="py-8 text-center text-xs text-ink-faint">
-                {powerTrend.unavailableReason}
+                {energyDays.unavailableReason ?? "The daily energy could not be loaded."}
               </p>
             ) : (
               <TrendChart
-                points={powerTrend.points}
-                unit={powerTrend.unit}
-                label="Actual power"
-                tier={powerTrend.tier}
-                provenance={powerTrend.provenance}
-                flaggedCount={powerTrend.flaggedCount}
-                isLoading={powerTrend.isLoading}
+                points={energyPoints}
+                unit={energyDays.unit}
+                label="Energy"
+                // One point per Plant day, so dates format as days; the badge
+                // says where the days came from rather than naming this tier.
+                tier="agg_1d"
+                resolution={{
+                  label: "Plant days, from hourly readings",
+                  title:
+                    "Each bar is the energy every Device's counter added between two of the Plant's midnights, " +
+                    "summed. Built from hourly buckets because the daily tier is cut at UTC midnight, not the Plant's.",
+                }}
+                provenance={energyDays.provenance}
+                flaggedCount={energyDays.flaggedCount}
+                isLoading={energyDays.isLoading}
                 timezone={timezone}
-                height={210}
-                day={powerTrend.day}
-                legend={POWER_TREND_LEGEND}
+                height={trendHeight}
+                shape="bar"
+                // The largest day in a month is not a fact anybody acts on, and
+                // the label would sit over a neighbouring bar.
+                markPeak={false}
               />
-            )
-          ) : energyDays.unavailableReason || energyDays.isError ? (
-            <p className="py-8 text-center text-xs text-ink-faint">
-              {energyDays.unavailableReason ?? "The daily energy could not be loaded."}
-            </p>
-          ) : (
-            <TrendChart
-              points={energyPoints}
-              unit={energyDays.unit}
-              label="Energy"
-              // One point per Plant day, so dates format as days; the badge
-              // says where the days came from rather than naming this tier.
-              tier="agg_1d"
-              resolution={{
-                label: "Plant days, from hourly readings",
-                title:
-                  "Each bar is the energy every Device's counter added between two of the Plant's midnights, " +
-                  "summed. Built from hourly buckets because the daily tier is cut at UTC midnight, not the Plant's.",
-              }}
-              provenance={energyDays.provenance}
-              flaggedCount={energyDays.flaggedCount}
-              isLoading={energyDays.isLoading}
-              timezone={timezone}
-              height={210}
-              shape="bar"
-              // The largest day in a month is not a fact anybody acts on, and
-              // the label would sit over a neighbouring bar.
-              markPeak={false}
-            />
-          )}
-        </Panel>
+            )}
+          </Panel>
+        </div>
       </div>
 
       <div className="grid gap-5 xl:grid-cols-12">
@@ -1069,14 +1226,13 @@ export function SinglePlantDashboard(): JSX.Element {
         The summary row. Each card carries the figures somebody scans for and
         opens its full detail in a drawer — so depth costs a click, never the
         glance. A card whose section cannot be answered here renders inert with
-        the reason, rather than opening onto a list of dashes. Performance is
-        not here: its gauges are the band under the headline strip, and a card
-        repeating PR and availability below them would be a second copy.
+        the reason, rather than opening onto a list of dashes. Performance,
+        Plant Status, Energy and Weather are not here: their gauges are in the
+        headline strip and their figures on the status rail, and a card
+        repeating them below would be a second copy.
       */}
       <div
-        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 ${
-          SUMMARY_COLUMNS[summaryCount] ?? ""
-        }`}
+        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${SUMMARY_COLUMNS[summaryCount] ?? ""}`}
       >
         {panelCards.map(({ code, slots }) => {
           const chrome = PANEL_TITLES[code] ?? {
@@ -1161,6 +1317,26 @@ export function SinglePlantDashboard(): JSX.Element {
         ) : null}
       </div>
 
+
+      {/*
+        The energy registers, drawn: a month of daily columns and the lifetime
+        odometer. At the foot of the page because they answer "how much, and
+        when", which is read after "is it working".
+      */}
+      {energyCards.length > 0 ? (
+        <div className={`grid grid-cols-1 gap-4 ${ENERGY_COLUMNS[energyCards.length] ?? ""}`}>
+          {energyCards.map((slot) => (
+            <HeadlineCard
+              key={slot.slot_code}
+              slot={slot}
+              icon={SLOT_ICONS[slot.slot_code] ?? IconGauge}
+              plantId={plant.id}
+              acCapacityKw={plant.ac_capacity_kw}
+            />
+          ))}
+        </div>
+      ) : null}
+
       {/*
         The time-series explorer, collapsed. It is the one thing on this screen
         that is a *tool* rather than a reading — somebody using it has a
@@ -1196,6 +1372,48 @@ export function SinglePlantDashboard(): JSX.Element {
       >
         {open?.kind === "performance" ? (
           <PerformancePanel kpis={kpis} period={period} />
+        ) : null}
+
+        {/* Everything behind Plant Status: how its derived rows were decided,
+            then the electrical boundary and the weather in full. */}
+        {open?.kind === "status" ? (
+          <div className="space-y-5">
+            <OperatingDetail status={operatingQuery.data} timeZone={timezone} />
+            {(
+              [
+                ["plant_status", "At the grid boundary"],
+                ["environment", "Weather"],
+              ] as const
+            ).map(([code, title]) =>
+              panel(code).length > 0 ? (
+                <section key={code}>
+                  <h3 className="field-label mb-1">{title}</h3>
+                  <div className="divide-y divide-line-soft">
+                    {byPosition(panel(code)).map((slot) => (
+                      <SlotRow key={slot.slot_code} slot={slot} />
+                    ))}
+                  </div>
+                </section>
+              ) : null,
+            )}
+          </div>
+        ) : null}
+
+        {/* Everything behind Energy Summary: the energy panel in full, then
+            what today's derived figures were computed from. */}
+        {open?.kind === "energy" ? (
+          <div className="space-y-5">
+            {panel("energy_summary").some((slot) => !RAIL_OWNS.has(slot.slot_code)) ? (
+              <div className="divide-y divide-line-soft">
+                {byPosition(panel("energy_summary"))
+                  .filter((slot) => !RAIL_OWNS.has(slot.slot_code))
+                  .map((slot) => (
+                    <SlotRow key={slot.slot_code} slot={slot} />
+                  ))}
+              </div>
+            ) : null}
+            <PerformancePanel kpis={kpisTodayQuery.data} period="today" />
+          </div>
         ) : null}
 
         {open?.kind === "panel" && open.code === "power_summary" ? (

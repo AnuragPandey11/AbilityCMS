@@ -25,6 +25,7 @@ from solarcms.schemas.assets import (
     DeviceUpdate,
 )
 from solarcms.services.onboarding import bind_from_model
+from solarcms.services.operating import device_operating_status
 
 router = APIRouter(tags=["devices"])
 
@@ -171,6 +172,24 @@ async def get_device(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
     return dict(row._mapping)
+
+
+@router.get("/devices/{device_id}/operating-status")
+async def get_device_operating_status(
+    device_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> dict[str, Any]:
+    """Whether this Device is generating, and when it started and stopped today.
+
+    The Plant's rule applied to one machine's own `AC_ACTIVE_POWER`
+    (`services/operating`), derived from history on every request. It is what
+    the Inverter view says instead of translating the Inverter's status code,
+    whose meanings nobody has supplied.
+    """
+    found = await device_operating_status(session, device_id)
+    if found is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    return found
 
 
 @router.get("/devices/{device_id}/bindings")

@@ -425,6 +425,18 @@ _ENVIRONMENT: Final[tuple[SlotSpec, ...]] = (
         code="env.rainfall", label="Rainfall", panel=PANEL_ENVIRONMENT, position=7,
         unit_hint="mm/h", candidates=(_tag(1, "WMS", "RAIN_GAUGE", "avg"),),
     ),
+    SlotSpec(
+        code="env.cloud_cover", label="Cloud Cover", panel=PANEL_ENVIRONMENT, position=8,
+        unit_hint="%", candidates=(_tag(1, "WMS", "CLOUD_COVER", "avg"),),
+    ),
+    # The radiation the power trend is compared against by default. Direct
+    # (beam) radiation, not plane-of-array: it is what the client asked to see
+    # beside power, and it is *not* the PR denominator — `env.irradiance` is.
+    SlotSpec(
+        code="env.direct_radiation", label="Direct Radiation", panel=PANEL_ENVIRONMENT,
+        position=9, unit_hint="W/m2",
+        candidates=(_tag(1, "WMS", "DIRECT_RADIATION", "avg"),),
+    ),
 )
 
 

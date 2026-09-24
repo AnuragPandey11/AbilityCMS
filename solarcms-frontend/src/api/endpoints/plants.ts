@@ -4,6 +4,7 @@ import {
   BlockKpisSchema,
   BlockSchema,
   CommissioningReportSchema,
+  OperatingStatusSchema,
   PlantDashboardSchema,
   PlantDetailSchema,
   PlantKpisSchema,
@@ -14,6 +15,7 @@ import {
   type BlockKpis,
   type CommissioningReport,
   type KpiPeriod,
+  type OperatingStatus,
   type PlantDashboard,
   type PlantDetail,
   type PlantKpis,
@@ -79,6 +81,15 @@ export async function plantKpis(
 ): Promise<PlantKpis> {
   const body = await request(`/plants/${plantId}/kpis`, { params: { period } });
   return parse(PlantKpisSchema, body, `GET /plants/${plantId}/kpis`);
+}
+
+/** Running, start, stop, peak and the grid — derived from history per request. */
+export async function plantOperatingStatus(plantId: number): Promise<OperatingStatus> {
+  return parse(
+    OperatingStatusSchema,
+    await request(`/plants/${plantId}/operating-status`),
+    `GET /plants/${plantId}/operating-status`,
+  );
 }
 
 /**

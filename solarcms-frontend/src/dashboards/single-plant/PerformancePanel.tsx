@@ -1,21 +1,20 @@
 /**
  * Period performance: PR, CUF, Availability, CO₂ — and what they are worth.
  *
- * Two halves. `PerformanceBand` sits on the page under the headline strip and
- * carries the three gauges, the period's coverage and CO₂ avoided — the part
- * that is read at a glance, so it costs no click. `PerformancePanel` is the
- * drawer behind it: each figure's variant spelled out, the energy the ratios
- * were computed from, the tier and the assumptions. The gauges used to live
- * only in the drawer, which hid the most visual reading of the Plant behind a
- * card that summarised it in three lines of text.
+ * Three parts. `PerformanceTiles` puts the three gauges in the headline strip,
+ * beside Current Power — the part read at a glance, so it costs no click.
+ * `PerformanceDetailsButton` is the way into the drawer, carrying the period's
+ * coverage so it stays in the same row as the figures it qualifies.
+ * `PerformancePanel` is the drawer: each figure's variant spelled out, the
+ * energy the ratios were computed from, the coverage in full, the tier and the
+ * assumptions.
  *
- * Kept deliberately separate from the live headline strip, and not merged with
- * it however well they would fit together. The strip is *what the Plant is
- * doing now*, read from the equipment this second. These are computed over a
- * chosen period from hourly aggregates, and every one of them is provisional
- * pending the client's own definitions (OPEN-16). Putting a measured figure and
- * a provisional derived one in the same row, at the same size, with the same
- * chrome, is how a placeholder gets quoted back as a commitment.
+ * ⚠ They share a row with a live figure, so every tile says its period. Current
+ * Power is *now*, read from the equipment this second; these are computed over
+ * the chosen Period from aggregates, and every one is provisional pending the
+ * client's own definitions (OPEN-16). The period on each footnote is what stops
+ * a measured figure and a derived one being read as the same kind of number
+ * because they sit at the same size.
  *
  * Three things every figure here carries, and none of them are decoration:
  *
@@ -29,12 +28,18 @@
  *   figure that is low, plausible, and wrong in a way nothing else reveals.
  */
 
+import type { ComponentType } from "react";
 import type { KpiFigure, KpiPeriod, PlantKpis } from "@/api/schemas";
 import { Gauge } from "@/components/charts/Gauge";
-import { CoverageBar } from "@/components/dashboard/CoverageBadge";
-import { Panel } from "@/components/ui";
+import { RailTile } from "@/components/charts/RailTile";
+import { CoverageBadge, CoverageBar } from "@/components/dashboard/CoverageBadge";
 import { ErrorState, Skeleton } from "@/components/state";
-import { IconChevronRight } from "@/components/icons";
+import {
+  IconAvailability,
+  IconChevronRight,
+  IconGauge,
+  type IconProps,
+} from "@/components/icons";
 import {
   UNDEFINED_DISPLAY,
   formatNumber,
@@ -120,119 +125,138 @@ function FigureRow({
   );
 }
 
-/** Every tile in the band is this tall, so the row reads as one strip. */
-const BAND_TILE_HEIGHT = 168;
+/** The height of a gauge inside its tile, matched to the Current Power dial. */
+const GAUGE_HEIGHT = 150;
+
+const PERIOD_LABEL: Record<KpiPeriod, string> = {
+  today: "Today",
+  month: "This month",
+  year: "This year",
+  lifetime: "Lifetime",
+};
+
+function RatioTile({
+  figure,
+  label,
+  icon,
+  period,
+  banded = true,
+}: {
+  figure: KpiFigure;
+  label: string;
+  icon: ComponentType<IconProps>;
+  period: KpiPeriod;
+  banded?: boolean;
+}): JSX.Element {
+  return (
+    <RailTile
+      icon={icon}
+      label={label}
+      visual={<Gauge figure={figure} label={label} height={GAUGE_HEIGHT} banded={banded} bare />}
+      footnote={
+        <span title={figure.variant ? variantNote(figure.variant) : undefined}>
+          {PERIOD_LABEL[period]}
+          {figure.variant ? ` · ${figure.variant.replace(/_/g, " ")}` : ""}
+        </span>
+      }
+    />
+  );
+}
 
 /**
- * The on-page half: three gauges and what qualifies them, in one row.
+ * The on-page half: three gauges, as three tiles of the headline strip. A
+ * fragment, so the strip's grid places them.
  *
- * Its own panel, titled with the period and the OPEN-16 caveat, rather than
- * more tiles in the headline strip above it — see the module note. It sits
- * directly under that strip because both answer "how is the Plant doing"
- * before the schematic and charts answer "why", and because the Period
- * control that scopes it is in the header just above.
+ * A gauge is the right form only because these genuinely have a fixed 0..100%
+ * range — a gauge around an unbounded quantity invents a maximum.
  */
-export function PerformanceBand({
+export function PerformanceTiles({
   kpis,
   period,
   isLoading,
   error,
   retry,
-  onOpen,
+}: {
+  kpis: PlantKpis | undefined;
+  period: KpiPeriod;
+  isLoading: boolean;
+  error: unknown;
+  retry: () => void;
+}): JSX.Element {
+  if (isLoading) {
+    // Tiles at their final height, so the strip does not move when data lands.
+    return (
+      <>
+        {Array.from({ length: 3 }, (_, index) => (
+          <Skeleton key={index} className="rounded-card" style={{ minHeight: GAUGE_HEIGHT + 120 }} />
+        ))}
+      </>
+    );
+  }
+  if (!kpis) {
+    // Never three "not defined" gauges: that would state a fact about the
+    // period when the truth is that the request failed.
+    return (
+      <div className="sm:col-span-2 xl:col-span-3">
+        <ErrorState error={error} retry={retry} />
+      </div>
+    );
+  }
+  return (
+    <>
+      <RatioTile figure={kpis.performance_ratio} label="Performance Ratio" icon={IconGauge} period={period} />
+      <RatioTile figure={kpis.cuf} label="CUF" icon={IconGauge} period={period} banded={false} />
+      <RatioTile figure={kpis.availability} label="Availability" icon={IconAvailability} period={period} />
+    </>
+  );
+}
+
+/**
+ * The way into the drawer, and the gauges' coverage with it.
+ *
+ * ⚠ The badge is Guardrail 18, not decoration. A ratio over a period with a
+ * hole in it is low, plausible and wrong, and nothing on the gauge says so;
+ * this badge, in the same row as the gauges, is the one thing on the first
+ * screen that does. The full sentence is on its tooltip and in the drawer.
+ */
+export function PerformanceDetailsButton({
+  kpis,
+  period,
   timeZone,
+  onOpen,
 }: {
   kpis: PlantKpis | undefined;
   period: KpiPeriod;
   /** The Plant's zone, for the date the period began. */
   timeZone?: string;
-  isLoading: boolean;
-  error: unknown;
-  retry: () => void;
-  /** Opens the drawer with every figure's variant, the energy and the tier. */
   onOpen: () => void;
 }): JSX.Element {
-  let body: JSX.Element;
-  if (isLoading) {
-    // Tiles at their final height, so the page does not move when data lands.
-    body = (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-4" aria-hidden="true">
-        {Array.from({ length: 4 }, (_, index) => (
-          <Skeleton key={index} className="rounded-lg" style={{ height: BAND_TILE_HEIGHT }} />
-        ))}
-      </div>
-    );
-  } else if (!kpis) {
-    // Never three "not defined" gauges: that would state a fact about the
-    // period when the truth is that the request failed.
-    body = <ErrorState error={error} retry={retry} />;
-  } else {
-    body = (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-4">
-        {/* The three bounded ratios, as gauges. A gauge is the right form only
-            because these genuinely have a fixed 0..100% range — a gauge around
-            an unbounded quantity invents a maximum. */}
-        <Gauge figure={kpis.performance_ratio} label="Performance ratio" height={BAND_TILE_HEIGHT} />
-        <Gauge figure={kpis.cuf} label="CUF" height={BAND_TILE_HEIGHT} banded={false} />
-        <Gauge figure={kpis.availability} label="Availability" height={BAND_TILE_HEIGHT} />
-
-        {/* Coverage beside the gauges, not under a click (Guardrail 18): a
-            ratio over a period with a hole in it is low, plausible and wrong,
-            and nothing on the gauge itself says so. */}
-        <div
-          className="flex flex-col justify-between rounded-lg border border-line bg-surface-raised p-4 md:col-span-3 xl:col-span-1"
-          style={{ minHeight: BAND_TILE_HEIGHT }}
-        >
-          <CoverageBar coverage={kpis.coverage} compact />
-          <div
-            className="mt-3 flex items-baseline justify-between gap-3 border-t border-line pt-3"
-            title={
-              kpis.co2_avoided_kg.value === null
-                ? (kpis.co2_avoided_kg.undefined_reason ??
-                  "No grid emission factor is recorded for this Region.")
-                : "Uses the Region's grid emission factor."
-            }
-          >
-            <span className="text-sm text-ink-muted">CO₂ avoided</span>
-            {kpis.co2_avoided_kg.value === null ? (
-              <span className="figure text-base text-ink-faint">{UNDEFINED_DISPLAY}</span>
-            ) : (
-              <span className="figure text-base font-semibold text-ink">
-                {formatNumber(kpis.co2_avoided_kg.value)}
-                <span className="ml-1 text-xs font-normal text-ink-muted">kg</span>
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <Panel
-      title={
-        <span className="text-lg">
-          Performance <span className="font-normal capitalize text-ink-muted">— {period}</span>
-        </span>
-      }
-      subtitle={
-        <span className="text-sm">
-          Computed {periodSince(kpis, period, timeZone) ?? "over the selected period"}, in the
-          Plant's time, from aggregates. Every formula is provisional pending OPEN-16.
-        </span>
-      }
-      actions={
-        <button
-          type="button"
-          onClick={onOpen}
-          className="flex items-center gap-1 rounded-control border border-line px-3 py-1.5 text-sm font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
+    <div className="space-y-2">
+      {/* Its own line, not inside the button: in a fifth of the row the badge
+          and the label do not both fit, and the label is the one people use. */}
+      <div className="flex items-center justify-between gap-2 text-xs text-ink-faint">
+        <span
+          className="truncate"
+          title="How much of the period the three gauges — PR, CUF and availability — actually saw."
         >
-          Details
-          <IconChevronRight size={14} />
-        </button>
-      }
-    >
-      {body}
-    </Panel>
+          Gauges
+        </span>
+        {kpis ? <CoverageBadge coverage={kpis.coverage} /> : null}
+      </div>
+      <button
+        type="button"
+        onClick={onOpen}
+        title={
+          `PR, CUF and availability computed ${periodSince(kpis, period, timeZone) ?? "over the selected period"}, ` +
+          "in the Plant's time, from aggregates. Every formula is provisional pending OPEN-16."
+        }
+        className="flex w-full items-center justify-between gap-1 rounded-control border border-line px-3 py-1.5 text-sm font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
+      >
+        Performance details
+        <IconChevronRight size={14} />
+      </button>
+    </div>
   );
 }
 
@@ -257,6 +281,13 @@ export function PerformancePanel({
           kind="quantity"
           unit="kWh"
           note="From aggregates (the tier is named below) — Reports and KPIs never query raw Readings."
+        />
+        <FigureRow
+          label="Specific yield"
+          figure={kpis?.specific_yield ?? undefined}
+          kind="quantity"
+          unit="kWh/kWp"
+          note="The period's energy over the Plant's DC capacity."
         />
         <FigureRow label="Performance ratio" figure={kpis?.performance_ratio} kind="ratio" />
         <FigureRow label="CUF" figure={kpis?.cuf} kind="ratio" />

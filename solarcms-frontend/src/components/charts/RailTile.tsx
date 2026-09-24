@@ -45,6 +45,7 @@ export function RailTile({
   figureTone = "ink",
   visual,
   children,
+  action,
 }: {
   /** Kept for existing callers; every tone renders the same (see `WELL`). */
   tone?: RailTone;
@@ -61,6 +62,8 @@ export function RailTile({
   visual?: ReactNode;
   /** The figure — usually a `RailFigure`. Omitted when `visual` carries it. */
   children?: ReactNode;
+  /** A control at the foot of the tile — a way into the detail behind it. */
+  action?: ReactNode;
 }): JSX.Element {
   return (
     <div className="surface-card flex min-w-0 flex-col rounded-card border border-line p-5 xl:p-4 2xl:p-5">
@@ -82,6 +85,7 @@ export function RailTile({
       {footnote ? (
         <p className={`${visual ? "mt-3" : "mt-2"} text-xs leading-snug text-ink-faint`}>{footnote}</p>
       ) : null}
+      {action ? <div className="mt-3">{action}</div> : null}
     </div>
   );
 }

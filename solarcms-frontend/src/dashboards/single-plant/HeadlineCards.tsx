@@ -1,12 +1,11 @@
 /**
- * The headline strip, drawn — each figure with a picture of what it is.
+ * The headline figures, drawn — each with a picture of what it is.
  *
- * Five forms, one per quantity, because the five figures are five different
+ * Four forms, one per quantity, because the four figures are four different
  * *kinds* of number and a row of identical sparklines would say they were the
- * same kind:
+ * same kind. Current Power heads the page; the three energy registers sit at
+ * its foot.
  *
- *   Plant Capacity    a taper from the array's DC to the Inverters' AC — the
- *                     nameplate is a pair, and the ratio is the fact in it
  *   Current Power     a dial against AC capacity — a rate, bounded above
  *   Today's Energy    a sun clock, one spoke per hour of the Plant's day
  *   Month Energy      one column per day of the Plant's month
@@ -32,7 +31,7 @@ import type { PeriodEnergy } from "@/dashboards/single-plant/registerSteps";
 import { SlotRailTile } from "@/components/dashboard/SlotValue";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 import type { IconProps } from "@/components/icons";
-import { digitsForUnit, formatCapacity, formatCompact, formatHeadline, formatNumber } from "@/format/value";
+import { digitsForUnit, formatCompact, formatHeadline, formatNumber } from "@/format/value";
 import { formatDate, formatTime } from "@/format/datetime";
 
 /**
@@ -49,35 +48,39 @@ const UNPLACED_NOTE_SHARE = 0.01;
 interface CardProps {
   slot: ResolvedSlot;
   icon: ComponentType<IconProps>;
+  /** A control at the foot of the card, in every state it can render in. */
+  action?: ReactNode;
+  /** Draw at the size of a fifth of a row rather than a third. */
+  compact?: boolean;
 }
 
 export function HeadlineCard({
   slot,
   icon,
+  action,
+  compact,
   plantId,
-  dcCapacityKwp,
   acCapacityKw,
 }: CardProps & {
   plantId: number;
-  dcCapacityKwp: number | null;
   acCapacityKw: number | null;
 }): JSX.Element {
   // No value, no drawing: the tile's explanation of *why* there is no value is
   // worth more than any picture of nothing.
-  if (slot.value === null) return <SlotRailTile slot={slot} icon={icon} />;
+  if (slot.value === null) return <SlotRailTile slot={slot} icon={icon} action={action} />;
   switch (slot.slot_code) {
-    case "kpi.plant_capacity":
-      return <CapacityCard slot={slot} icon={icon} dc={dcCapacityKwp} ac={acCapacityKw} />;
     case "kpi.current_power":
-      return <PowerCard slot={slot} icon={icon} acCapacityKw={acCapacityKw} />;
+      return <PowerCard slot={slot} icon={icon} action={action} acCapacityKw={acCapacityKw} />;
     case "kpi.energy_today":
-      return <SunClockCard slot={slot} icon={icon} plantId={plantId} />;
+      return (
+        <SunClockCard slot={slot} icon={icon} action={action} compact={compact} plantId={plantId} />
+      );
     case "kpi.energy_month":
-      return <DayColumnsCard slot={slot} icon={icon} plantId={plantId} />;
+      return <DayColumnsCard slot={slot} icon={icon} action={action} plantId={plantId} />;
     case "kpi.energy_lifetime":
-      return <OdometerCard slot={slot} icon={icon} />;
+      return <OdometerCard slot={slot} icon={icon} action={action} />;
     default:
-      return <SlotRailTile slot={slot} icon={icon} />;
+      return <SlotRailTile slot={slot} icon={icon} action={action} />;
   }
 }
 
@@ -123,79 +126,6 @@ function placementNote(
   );
 }
 
-// ── Plant Capacity ────────────────────────────────────────────────────────────
-
-function CapacityCard({
-  slot,
-  icon,
-  dc,
-  ac,
-}: CardProps & { dc: number | null; ac: number | null }): JSX.Element {
-  if (dc === null || ac === null || dc <= 0 || ac <= 0) {
-    const missing = dc === null || dc <= 0 ? "DC" : "AC";
-    return (
-      <SlotRailTile
-        slot={slot}
-        icon={icon}
-        note={`no ${missing} capacity recorded, so there is no ratio to draw`}
-      />
-    );
-  }
-  return <SlotRailTile slot={slot} icon={icon} visual={<CapacityTaper dc={dc} ac={ac} />} />;
-}
-
-function CapacityTaper({ dc, ac }: { dc: number; ac: number }): JSX.Element {
-  const gradient = useSvgId();
-  const top = Math.max(dc, ac);
-  const left = (dc / top) * 100;
-  const right = (ac / top) * 100;
-  return (
-    <div>
-      <div
-        className="relative h-20"
-        role="img"
-        aria-label={`DC ${formatCapacity(dc, "kWp")} to AC ${formatCapacity(ac, "kW")}, a ratio of ${(dc / ac).toFixed(2)}`}
-      >
-        {/* The band is stretched to the tile's width; it has no corners to distort. */}
-        <svg
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          className="absolute inset-y-0 left-4 h-full w-[calc(100%-2rem)]"
-          aria-hidden="true"
-        >
-          <defs>
-            <linearGradient id={gradient} x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" style={{ stopColor: "rgb(var(--c-accent))", stopOpacity: 0.3 }} />
-              <stop offset="1" style={{ stopColor: "rgb(var(--c-accent))", stopOpacity: 0.16 }} />
-            </linearGradient>
-          </defs>
-          <path
-            d={`M0 ${100 - left} C50 ${100 - left} 50 ${100 - right} 100 ${100 - right} L100 100 L0 100 Z`}
-            fill={`url(#${gradient})`}
-          />
-        </svg>
-        <div className="absolute bottom-0 left-0 w-4 rounded bg-accent" style={{ height: `${left}%` }} />
-        <div className="absolute bottom-0 right-0 w-4 rounded bg-accent/60" style={{ height: `${right}%` }} />
-        <div className="absolute inset-x-4 bottom-2 flex flex-col items-center">
-          <span className="figure text-xl font-semibold leading-none text-ink">{(dc / ac).toFixed(2)}</span>
-          <span className="mt-1 text-[11px] text-ink-muted">DC : AC</span>
-        </div>
-      </div>
-      {/* Stacked, so a narrow tile keeps both figures whole rather than truncating them. */}
-      <div className="mt-1.5 flex justify-between gap-2 text-[11px] leading-tight">
-        <div className="min-w-0">
-          <div className="text-ink-faint">DC</div>
-          <div className="whitespace-nowrap font-semibold text-ink">{formatCapacity(dc, "kWp")}</div>
-        </div>
-        <div className="min-w-0 text-right">
-          <div className="text-ink-faint">AC</div>
-          <div className="whitespace-nowrap font-semibold text-ink">{formatCapacity(ac, "kW")}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Current Power ─────────────────────────────────────────────────────────────
 
 /** A point on a circle, angles in degrees clockwise from three o'clock (SVG's own). */
@@ -210,9 +140,9 @@ function arcPath(cx: number, cy: number, r: number, from: number, to: number): s
   return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${to - from > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
 }
 
-function PowerCard({ slot, icon, acCapacityKw }: CardProps & { acCapacityKw: number | null }): JSX.Element {
+function PowerCard({ slot, icon, action, acCapacityKw }: CardProps & { acCapacityKw: number | null }): JSX.Element {
   if (acCapacityKw === null || acCapacityKw <= 0) {
-    return <SlotRailTile slot={slot} icon={icon} note="no AC capacity recorded to draw this against" />;
+    return <SlotRailTile slot={slot} icon={icon} action={action} note="no AC capacity recorded to draw this against" />;
   }
   // The figure's unit comes from the Tag catalogue and the capacity's from the
   // column name. Where they differ they are not compared — dividing kW by MW is
@@ -222,6 +152,7 @@ function PowerCard({ slot, icon, acCapacityKw }: CardProps & { acCapacityKw: num
       <SlotRailTile
         slot={slot}
         icon={icon}
+        action={action}
         note={`reported in ${slot.unit ?? "no unit"}, and AC capacity is in kW — not compared`}
       />
     );
@@ -239,6 +170,7 @@ function PowerCard({ slot, icon, acCapacityKw }: CardProps & { acCapacityKw: num
     <SlotRailTile
       slot={slot}
       icon={icon}
+      action={action}
       figure={false}
       note={outside}
       visual={<PowerDial slot={slot} fraction={fraction} capacity={acCapacityKw} />}
@@ -333,25 +265,34 @@ function periodLabel(period: PeriodEnergy, timeZone: string | undefined, unit: s
   }
 }
 
-function SunClockCard({ slot, icon, plantId }: CardProps & { plantId: number }): JSX.Element {
+function SunClockCard({ slot, icon, action, compact, plantId }: CardProps & { plantId: number }): JSX.Element {
   // "Today's energy" is a daily register by definition: its restart at midnight
   // is the day turning over, not an anomaly.
   const steps = useSlotSteps(plantId, slot.slot_code, "day", { resetsExpected: true });
   if (steps.unavailableReason) {
-    return <SlotRailTile slot={slot} icon={icon} note={steps.unavailableReason} />;
+    return <SlotRailTile slot={slot} icon={icon} action={action} note={steps.unavailableReason} />;
   }
   return (
     <SlotRailTile
       slot={slot}
       icon={icon}
+      action={action}
       figure={false}
       note={placementNote(slot, steps, "hour")}
-      visual={<SunClock slot={slot} steps={steps} />}
+      visual={<SunClock slot={slot} steps={steps} compact={compact} />}
     />
   );
 }
 
-function SunClock({ slot, steps }: { slot: ResolvedSlot; steps: ReturnType<typeof useSlotSteps> }): JSX.Element {
+function SunClock({
+  slot,
+  steps,
+  compact = false,
+}: {
+  slot: ResolvedSlot;
+  steps: ReturnType<typeof useSlotSteps>;
+  compact?: boolean;
+}): JSX.Element {
   const { text, title } = slotHeadline(slot);
   const c = 100;
   const inner = 50;
@@ -362,7 +303,11 @@ function SunClock({ slot, steps }: { slot: ResolvedSlot; steps: ReturnType<typeo
     frame ? (((period.start + period.end) / 2 - frame.start) / (frame.end - frame.start)) * 360 - 90 : 0;
 
   return (
-    <div className="relative mx-auto aspect-square w-full max-w-[11rem]" role="img" aria-label={`${title} today, by hour`}>
+    <div
+      className={`relative mx-auto aspect-square w-full ${compact ? "max-w-[8.5rem]" : "max-w-[11rem]"}`}
+      role="img"
+      aria-label={`${title} today, by hour`}
+    >
       <svg viewBox="0 0 200 200" className="block h-full w-full">
         {steps.periods.map((period) => {
           const angle = angleOf(period);
@@ -421,12 +366,16 @@ function SunClock({ slot, steps }: { slot: ResolvedSlot; steps: ReturnType<typeo
         </span>
       ))}
       <div className="pointer-events-none absolute inset-[29%] flex flex-col items-center justify-center">
+        {/* One step smaller in a compact clock, so the figure stays inside the
+            ring instead of reaching over the spokes it is the total of. */}
         <FittedFigure
           value={text}
-          className="figure text-2xl font-semibold leading-none tracking-tight text-ink"
+          className={`figure ${compact ? "text-lg" : "text-2xl"} font-semibold leading-none tracking-tight text-ink`}
           title={title}
         />
-        {slot.unit ? <span className="mt-1 text-xs text-ink-muted">{slot.unit}</span> : null}
+        {slot.unit ? (
+          <span className={`${compact ? "mt-0.5 text-[10px]" : "mt-1 text-xs"} text-ink-muted`}>{slot.unit}</span>
+        ) : null}
       </div>
     </div>
   );
@@ -434,15 +383,16 @@ function SunClock({ slot, steps }: { slot: ResolvedSlot; steps: ReturnType<typeo
 
 // ── Month Energy ──────────────────────────────────────────────────────────────
 
-function DayColumnsCard({ slot, icon, plantId }: CardProps & { plantId: number }): JSX.Element {
+function DayColumnsCard({ slot, icon, action, plantId }: CardProps & { plantId: number }): JSX.Element {
   const steps = useSlotSteps(plantId, slot.slot_code, "month");
   if (steps.unavailableReason) {
-    return <SlotRailTile slot={slot} icon={icon} note={steps.unavailableReason} />;
+    return <SlotRailTile slot={slot} icon={icon} action={action} note={steps.unavailableReason} />;
   }
   return (
     <SlotRailTile
       slot={slot}
       icon={icon}
+      action={action}
       note={placementNote(slot, steps, "day")}
       visual={<DayColumns slot={slot} steps={steps} />}
     />
@@ -535,11 +485,11 @@ function DayColumns({ slot, steps }: { slot: ResolvedSlot; steps: ReturnType<typ
 /** Past this many characters a drum is too narrow to read at a tile's width. */
 const ODOMETER_MAX_CHARS = 13;
 
-function OdometerCard({ slot, icon }: CardProps): JSX.Element {
+function OdometerCard({ slot, icon, action }: CardProps): JSX.Element {
   const value = slot.value ?? 0;
   const text = formatNumber(value, { digits: Math.abs(value) >= 10_000 ? 0 : 1 });
-  if (value < 0 || text.length > ODOMETER_MAX_CHARS) return <SlotRailTile slot={slot} icon={icon} />;
-  return <SlotRailTile slot={slot} icon={icon} figure={false} visual={<Odometer text={text} unit={slot.unit} />} />;
+  if (value < 0 || text.length > ODOMETER_MAX_CHARS) return <SlotRailTile slot={slot} icon={icon} action={action} />;
+  return <SlotRailTile slot={slot} icon={icon} action={action} figure={false} visual={<Odometer text={text} unit={slot.unit} />} />;
 }
 
 function Odometer({ text, unit }: { text: string; unit: string | null }): JSX.Element {

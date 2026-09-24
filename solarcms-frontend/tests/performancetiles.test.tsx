@@ -1,19 +1,18 @@
 /**
- * The Performance band on the single-Plant screen.
+ * The Performance tiles in the single-Plant headline strip.
  *
- * The gauges used to live only in a drawer, where a failed request or a
- * banding rule that does not fit a quantity was seen by whoever clicked. On
- * the page they are seen by everybody, so the two ways a gauge can state
- * something false are pinned here: three "not defined" gauges standing in for
- * a request that failed, and a CUF arc coloured by thresholds it can never
- * reach.
+ * The gauges sit in the first row of the page, beside a live figure, so they
+ * are seen by everybody and read at the size of a measurement. The ways a
+ * gauge can state something false are pinned here: three "not defined" gauges
+ * standing in for a request that failed, a CUF arc coloured by thresholds it
+ * can never reach, and a derived figure that does not say its period.
  *
  * ECharts is mocked as in `chartmount.test.tsx` — jsdom has no canvas, so what
  * is asserted is the option each gauge would paint, not a drawing.
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { EChartsOption } from "echarts";
 import type { KpiFigure, PlantKpis } from "@/api/schemas";
 
@@ -34,7 +33,7 @@ vi.mock("echarts", () => ({
   },
 }));
 
-const { PerformanceBand, PerformancePanel } = await import(
+const { PerformanceDetailsButton, PerformanceTiles, PerformancePanel } = await import(
   "@/dashboards/single-plant/PerformancePanel"
 );
 
@@ -64,15 +63,14 @@ const kpis: PlantKpis = {
   assumptions_note: "All KPI formulas are provisional pending OPEN-16.",
 };
 
-const band = (props: Partial<Parameters<typeof PerformanceBand>[0]> = {}) =>
+const band = (props: Partial<Parameters<typeof PerformanceTiles>[0]> = {}) =>
   render(
-    <PerformanceBand
+    <PerformanceTiles
       kpis={kpis}
       period="today"
       isLoading={false}
       error={null}
       retry={() => {}}
-      onOpen={() => {}}
       {...props}
     />,
   );
@@ -88,21 +86,31 @@ beforeEach(() => {
   charts.length = 0;
 });
 
-describe("Performance band", () => {
-  it("shows the three gauges, coverage and CO₂ without a click", () => {
+describe("Performance tiles", () => {
+  it("shows the three gauges without a click", () => {
     band();
-    expect(screen.getByText("Performance ratio")).toBeInTheDocument();
+    expect(screen.getByText("Performance Ratio")).toBeInTheDocument();
     expect(screen.getByText("CUF")).toBeInTheDocument();
     expect(screen.getByText("Availability")).toBeInTheDocument();
-    expect(screen.getByText("13.9%")).toBeInTheDocument();
-    expect(screen.getByText("2,679")).toBeInTheDocument();
+    expect(screen.getByText("Today · poa uncorrected")).toBeInTheDocument();
     expect(charts).toHaveLength(3);
   });
 
-  it("says the caveat once, in the header, not under every gauge", () => {
-    band();
-    expect(screen.getAllByText(/OPEN-16/)).toHaveLength(1);
-    expect(screen.getByText("poa uncorrected")).toBeInTheDocument();
+  it("keeps the gauges' coverage on the button into their detail", () => {
+    let opened = 0;
+    render(
+      <PerformanceDetailsButton kpis={kpis} period="today" onOpen={() => (opened += 1)} />,
+    );
+    // 13.9% of the day's samples: shown in the same row as the gauges, never
+    // only behind the click (Guardrail 18).
+    expect(screen.getByText("14% coverage")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Performance details/ }));
+    expect(opened).toBe(1);
+  });
+
+  it("names the period on every gauge, beside a figure that is live", () => {
+    band({ period: "month" });
+    expect(screen.getAllByText(/^This month ·/)).toHaveLength(3);
   });
 
   it("reports a failed request as an error, never as undefined figures", () => {

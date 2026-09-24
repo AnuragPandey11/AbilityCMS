@@ -159,17 +159,31 @@ const BUCKET_MS: Partial<Record<Tier, number>> = {
  * null to not connect. One null just past the last bucket before a hole is
  * enough: the axis is time, so the break lands where the silence began
  * (Guardrail 23).
+ *
+ * ⚠ `sampleEveryMs` is for a series finer than its source. One Device's Tag
+ * at the minute tier fills a bucket only when a reading was *stored* in it,
+ * and a Tag throttled to 300 s stores one every five minutes — so every bucket
+ * looked like the edge of a hole, a null went after each, and a chart of
+ * isolated points drew nothing at all while the tile beside it read 36.8 °C.
+ * Pass how often the series can be expected to be stored at all, and a hole
+ * is only what is longer than that plus a bucket.
  */
-export function withGaps(points: TrendPoint[], tier: Tier | null): TrendPoint[] {
+export function withGaps(
+  points: TrendPoint[],
+  tier: Tier | null,
+  sampleEveryMs = 0,
+): TrendPoint[] {
   const step = tier ? BUCKET_MS[tier] : undefined;
   if (!step || points.length < 2) return points;
+  // Half a bucket of slack, so a bucket that lands a few seconds late is not
+  // mistaken for a missing one — or, for a sparse source, one bucket past its
+  // own spacing, since a reading can fall anywhere inside the bucket it lands in.
+  const allowed = Math.max(step * 1.5, step + sampleEveryMs);
   const out: TrendPoint[] = [];
   let previous: number | null = null;
   for (const point of points) {
     const at = Date.parse(point.at);
-    // Half a bucket of slack, so a bucket that lands a few seconds late is not
-    // mistaken for a missing one.
-    if (previous !== null && at - previous > step * 1.5) {
+    if (previous !== null && at - previous > allowed) {
       out.push({ at: new Date(previous + step).toISOString(), value: null, contributors: 0 });
     }
     out.push(point);
@@ -237,11 +251,17 @@ export function useSlotSource(plantId: number | null, slotCode: string): SlotSou
   const tagsQuery = useTags();
 
   // The slot, wherever the server put it. Panels are keyed by panel code and a
-  // caller should not have to know which panel holds `kpi.current_power`.
+  // caller should not have to know which panel holds `kpi.current_power` — nor
+  // that a figure such as the Inverters' efficiency is resolved inside a
+  // schematic stage rather than a panel. Both are the server's resolution.
   const slot = useMemo(() => {
-    const panels = dashboardQuery.data?.panels;
-    if (!panels) return undefined;
-    for (const slots of Object.values(panels)) {
+    const data = dashboardQuery.data;
+    if (!data) return undefined;
+    const everywhere = [
+      ...Object.values(data.panels),
+      ...data.sld.stages.map((stage) => stage.slots),
+    ];
+    for (const slots of everywhere) {
       const found = slots.find((candidate) => candidate.slot_code === slotCode);
       if (found) return found;
     }

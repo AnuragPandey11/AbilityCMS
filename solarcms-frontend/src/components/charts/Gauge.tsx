@@ -99,6 +99,7 @@ export function Gauge({
   label,
   height = 160,
   banded = true,
+  bare = false,
 }: {
   figure: KpiFigure | null | undefined;
   label: string;
@@ -109,6 +110,12 @@ export function Gauge({
    * it would draw every healthy Plant red.
    */
   banded?: boolean;
+  /**
+   * Inside a tile that already frames and labels it: no border, no label, no
+   * variant line. The undefined and implausible states keep their own marking,
+   * because that marking *is* the message.
+   */
+  bare?: boolean;
 }): JSX.Element {
   const value = figure?.value ?? null;
 
@@ -121,7 +128,7 @@ export function Gauge({
         style={{ height }}
       >
         <span className="figure text-xl text-ink-faint">—</span>
-        <span className="mt-1 text-sm font-medium text-ink-muted">{label}</span>
+        {bare ? null : <span className="mt-1 text-sm font-medium text-ink-muted">{label}</span>}
         <span className="mt-1 max-w-[14rem] px-2 text-[11px] leading-snug text-ink-faint">
           {figure?.undefined_reason ?? "Not defined for this period."}
         </span>
@@ -146,7 +153,7 @@ export function Gauge({
         title={implausibleRatioReason(value, label)}
       >
         <span className="figure text-xl font-semibold text-warn">{formatRatioAsPercent(value)}</span>
-        <span className="mt-1 text-sm font-medium text-ink-muted">{label}</span>
+        {bare ? null : <span className="mt-1 text-sm font-medium text-ink-muted">{label}</span>}
         <span className="mt-1 max-w-[15rem] px-2 text-[10px] leading-snug text-ink-faint">
           Outside the range this quantity can take — the numerator and denominator cover
           different spans. Check coverage.
@@ -154,6 +161,8 @@ export function Gauge({
       </div>
     );
   }
+
+  if (bare) return <GaugeCanvas value={value} height={height} banded={banded} />;
 
   return (
     <div

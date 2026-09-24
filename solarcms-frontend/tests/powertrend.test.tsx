@@ -102,6 +102,23 @@ describe("a missing bucket is a gap, not a slope (Guardrail 23)", () => {
     const raw = [point("2026-09-23T08:45:00Z", 1), point("2026-09-23T12:00:00Z", 2)];
     expect(withGaps(raw, "readings")).toEqual(raw);
   });
+
+  it("does not call every bucket of a sparse Tag the edge of a hole", () => {
+    // A Tag throttled to 300 s fills one minute bucket in five. Judged against
+    // the bucket alone, a null went after every point and nothing was drawn.
+    const sparse = [
+      point("2026-09-23T08:00:00Z", 36.8),
+      point("2026-09-23T08:05:00Z", 36.9),
+      point("2026-09-23T08:11:00Z", 37.0),
+    ];
+    // 300 s throttle on a 30 s Device: stored every 300–330 s, plus a cycle.
+    expect(withGaps(sparse, "agg_1m", (300 + 30) * 1000)).toEqual(sparse);
+    // An hour of silence is still a hole.
+    const silent = [...sparse, point("2026-09-23T09:15:00Z", 36.1)];
+    expect(withGaps(silent, "agg_1m", (300 + 30) * 1000).map((entry) => entry.value)).toEqual([
+      36.8, 36.9, 37.0, null, 36.1,
+    ]);
+  });
 });
 
 describe("the power trend chart", () => {

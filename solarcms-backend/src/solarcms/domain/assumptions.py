@@ -555,13 +555,35 @@ DAY_ROLLOVER_PAIRS: Final[tuple[tuple[str, str], ...]] = (
     ("GTI_CUMULATIVE", "GTI_CUMULATIVE_YESTERDAY"),
 )
 
-# ── Plant start and stop — SUPPLIED.
+# ── Plant start and stop — DECIDED 24 Sep 2026 by the project.
 #
-# "When the active power is greater than 0.1 MW, that time shall be considered
-# the Plant Start Time" (and less than, the Stop Time). 0.1 MW = 100 kW, and the
-# Tag is in kW, so the threshold is expressed in the Tag's own unit — a 1000x
-# trap otherwise, of exactly the kind OPEN-15 exists to prevent.
-PLANT_RUNNING_THRESHOLD_KW: Final = 100.0
+# The Plant starts when its Inverters' summed AC output rises above 0.5 kW and
+# stops the moment it falls back to 0; the gap between the two is hysteresis,
+# so dawn hovering at 0.3 kW neither starts nor stops it. `domain/operating`
+# holds the rule; the card and the Plant KPI Device both use it.
+#
+# ⚠ This **supersedes the client's sheet**, which says one threshold of 0.1 MW
+# for both ("When the active power is greater than 0.1 MW, that time shall be
+# considered the Plant Start Time", and less than, the Stop Time — TAG_CATALOGUE
+# §2.15.4; the constant was `PLANT_RUNNING_THRESHOLD_KW = 100.0`), and it reads
+# the Inverters where the sheet read "the active power". Worth knowing if this
+# is ever re-pointed at a meter: a stop at exactly 0 would then rarely fire,
+# because a meter at night reads the Plant's own auxiliary import. Both figures
+# are in the Tag's own unit, kW — a 1000x trap otherwise, of exactly the kind
+# OPEN-15 exists to prevent.
+PLANT_OPERATING_SOURCE: Final = ("INVERTER", "AC_ACTIVE_POWER")
+PLANT_START_ABOVE_KW: Final = 0.5
+PLANT_STOP_AT_OR_BELOW_KW: Final = 0.0
+
+# ── Grid status — ⚠ ASSUMED.
+#
+# "Connected" is read from the breaker's ON FEEDBACK contact: closed means the
+# Plant's boundary is closed onto the grid. An interpretation, not a supplied
+# definition — the client's sheet names the contact and says nothing about what
+# it is evidence of — and it cannot see a grid that is closed onto but dead
+# (voltage absent upstream). A Plant with no VCB has no grid status at all,
+# never an assumed "connected".
+GRID_STATUS_SOURCE: Final = ("VCB", "VCB_ON_FEEDBACK")
 
 
 

@@ -57,8 +57,18 @@ export interface TrendChartProps {
   height?: number;
   /** `area` for a rate (power, irradiance); `bar` for a per-bucket total. */
   shape?: "area" | "bar";
-  /** Series colour. Defaults to the brand accent — this chart is one series. */
-  colorToken?: "series" | "accent";
+  /**
+   * Series colour. Defaults to the brand accent — this chart is one series.
+   * `neutral` is the muted ink, for a page of trends that has run out of
+   * hues clear of the ones status owns.
+   */
+  colorToken?: "series" | "accent" | "neutral";
+  /**
+   * A slot of the validated categorical palette instead, for a page of
+   * several single-series charts that should be told apart at a glance — the
+   * Inverter view's six trends. Wins over `colorToken`.
+   */
+  paletteSlot?: number;
   /** Mark and label the maximum. Off for a chart where the peak means nothing. */
   markPeak?: boolean;
   /**
@@ -130,7 +140,7 @@ function dayTicks(day: DayFrame): number[] {
  * Formatted as a clock it would read `00:00` at both ends of the axis, and the
  * right-hand one would claim the start of a day the chart is not showing.
  */
-function timeAxisLabel(
+export function timeAxisLabel(
   value: number,
   tier: Tier | null | undefined,
   timezone: string,
@@ -141,13 +151,13 @@ function timeAxisLabel(
 }
 
 /** The x-axis bounds and labels for a day frame; nothing when there is none. */
-function dayAxis(
+export function dayAxis(
   day: DayFrame | null | undefined,
 ): { min?: number; max?: number; customValues?: number[] } {
   return day ? { min: day.start, max: day.end, customValues: dayTicks(day) } : {};
 }
 
-function LegendSwatch({ line, color }: { line: "solid" | "dashed"; color: string | null }): JSX.Element {
+export function LegendSwatch({ line, color }: { line: "solid" | "dashed"; color: string | null }): JSX.Element {
   return line === "solid" ? (
     <span
       aria-hidden
@@ -182,7 +192,7 @@ function LegendSwatch({ line, color }: { line: "solid" | "dashed"; color: string
  */
 const AXIS_COMPACT_ABOVE = 10_000;
 
-function axisTickLabel(value: number): string {
+export function axisTickLabel(value: number): string {
   if (!Number.isFinite(value)) return "";
   if (Math.abs(value) >= AXIS_COMPACT_ABOVE) return formatCompact(value);
   if (Number.isInteger(value)) return formatNumber(value, { digits: 0 });
@@ -212,7 +222,9 @@ function axisGutter(points: TrendPoint[]): number {
  * for charts that do. `"series"` still selects slot 1 for a caller that sits a
  * trend beside a multi-series chart and wants them to agree.
  */
-function seriesColor(which: "series" | "accent"): string {
+function seriesColor(which: "series" | "accent" | "neutral", slot?: number): string {
+  if (slot !== undefined) return seriesPalette()[slot] ?? token("accent");
+  if (which === "neutral") return token("ink-muted");
   return which === "accent" ? token("accent") : (seriesPalette()[0] ?? token("accent"));
 }
 
@@ -226,6 +238,7 @@ export function TrendChart({
   height = 200,
   shape = "area",
   colorToken = "accent",
+  paletteSlot,
   markPeak = true,
   flaggedCount = 0,
   isLoading = false,
@@ -262,7 +275,7 @@ export function TrendChart({
     };
   }, [points, day]);
 
-  const color = seriesColor(colorToken);
+  const color = seriesColor(colorToken, paletteSlot);
   const data = points.map((point) => [point.at, point.value] as [string, number | null]);
 
   /**
@@ -372,7 +385,7 @@ export function TrendChart({
         },
         selectedDataBackground: {
           lineStyle: { color, width: 1 },
-          areaStyle: { color: tokenAlpha("accent", 0.15) },
+          areaStyle: { color: withAlpha(color, 0.15) },
         },
         labelFormatter: "",
       },
@@ -487,6 +500,7 @@ export function TrendChart({
     tier,
     timezone,
     shape,
+    paletteSlot,
     themeVersion,
     tableView,
     day?.start,

@@ -55,6 +55,7 @@ from solarcms.services.energy import (
     read_counter_series,
     split_by_pair,
 )
+from solarcms.services.operating import operating_status
 
 router = APIRouter(prefix="/plants", tags=["plants"])
 # Block routes addressed by their own id sit at /blocks/{id}, not under
@@ -450,11 +451,13 @@ async def plant_kpis(
         pr = FormulaResult(None, performance_ratio(0.0, 0.0, 0.0).variant, reason)
         cuf_result = FormulaResult(None, cuf(0.0, 0.0, 0.0).variant, reason)
         co2 = FormulaResult(None, co2_avoided_kg(0.0, grid_factor).variant, reason)
+        yield_result = FormulaResult(None, specific_yield(0.0, 0.0).variant, reason)
     else:
         energy_kwh = energy_result.value
         pr = performance_ratio(energy_kwh, irradiation_wh, dc_kwp)
         cuf_result = cuf(energy_kwh, ac_kw, hours)
         co2 = co2_avoided_kg(energy_kwh, grid_factor)
+        yield_result = specific_yield(energy_kwh, dc_kwp)
 
     avail = await _availability(session, plant_id, start, now)
 
@@ -553,6 +556,9 @@ async def plant_kpis(
         "cuf": render(cuf_result),
         "availability": render(avail),
         "co2_avoided_kg": render(co2),
+        # The period's energy over DC capacity — the same energy PR and CUF are
+        # computed from, so the three cannot disagree about how much was made.
+        "specific_yield": render(yield_result),
         # ⚠ Read this before the figures above. A period with a hole in it
         # produces numbers that look plausible and are low, and nothing else on
         # the response can tell you that happened.
@@ -569,6 +575,27 @@ async def plant_kpis(
             "definitions may differ by percentage points."
         ),
     }
+
+
+@router.get("/{plant_id}/operating-status")
+async def plant_operating_status(
+    plant_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> dict[str, Any]:
+    """Whether the Plant is generating, when it started and stopped, its peak
+    today and whether its breakers are closed onto the grid.
+
+    Derived from stored history on every request (`services/operating`), so a
+    restart forgets nothing and yesterday needs no copy. Every threshold is in
+    `domain/assumptions.py` and is echoed back, so the screen can say what
+    "started" meant.
+    """
+    plant = (await session.execute(
+        text("SELECT timezone FROM plants WHERE id = :plant_id"), {"plant_id": plant_id}
+    )).first()
+    if plant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+    return await operating_status(session, plant_id, plant.timezone)
 
 
 @router.get("/{plant_id}/sld")
