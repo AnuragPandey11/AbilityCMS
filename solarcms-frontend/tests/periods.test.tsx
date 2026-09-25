@@ -73,4 +73,13 @@ describe("the chart window", () => {
     useSelection.getState().reset();
     expect(useSelection.getState()).toMatchObject({ trendRange: "today", period: "today" });
   });
+
+  it("is one per chart panel: the Weather window never moves the Power trend's", () => {
+    useSelection.getState().setWeatherRange("30d");
+    expect(useSelection.getState()).toMatchObject({ weatherRange: "30d", trendRange: "today" });
+    useSelection.getState().setTrendRange("7d");
+    expect(useSelection.getState()).toMatchObject({ weatherRange: "30d", trendRange: "7d" });
+    useSelection.getState().reset();
+    expect(useSelection.getState()).toMatchObject({ weatherRange: "today", trendRange: "today" });
+  });
 });

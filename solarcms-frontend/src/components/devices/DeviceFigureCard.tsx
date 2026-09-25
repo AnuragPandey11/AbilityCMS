@@ -1,6 +1,7 @@
 /**
- * One Device as a card of large figures — the Single Plant carousel and the
- * Inverter Monitoring grid both use it, so a Device looks the same on both.
+ * One Device as a card of large figures, for the Single Plant carousel.
+ * Inverter Monitoring uses `InverterCard`, the client's reference card, which
+ * is built around an Inverter's output against its rating.
  *
  * Wider than `DeviceCard` (which stays for the dense Device-type panels): two
  * columns of large figures, an optional place on whatever measure the screen is

@@ -63,7 +63,7 @@ import {
   IconSignal,
 } from "@/components/icons";
 import { UNDEFINED_DISPLAY, formatNumber, formatValue } from "@/format/value";
-import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
+import { InverterCard, inverterCardTagIds } from "@/components/devices/InverterCard";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
@@ -107,13 +107,15 @@ const byCode = (a: RankedInverter, b: RankedInverter) =>
   a.device.code.localeCompare(b.device.code, undefined, { numeric: true });
 
 /**
- * A variant group's cards: two rows, paged sideways, with the paging buttons in
+ * A variant group's cards: one row, paged sideways, with the paging buttons in
  * the section header rather than over the cards.
  *
- * Column-major (`grid-flow-col`), so a page reads down then across and paging
- * moves whole columns — never half a card. Columns per page follow the width
- * the grid actually has: three when the cards have the full panel, two beside
- * the chart on a mid-size screen, three again when that is wide.
+ * One row because an Inverter card is about as tall as the comparison chart
+ * beside it; a second row left the chart stranded above half a screen of
+ * nothing. Paging moves whole cards, never half of one. Cards per page follow
+ * the width the grid actually has, and never drop a card below the ~20rem its
+ * header needs to show a code like `INVERTER_12` whole: one on a phone, two
+ * from a tablet up, three only on a very wide screen.
  */
 function CardPages({
   title,
@@ -164,9 +166,7 @@ function CardPages({
         ref={pager.ref}
         role="group"
         aria-label={title}
-        className={`grid snap-x snap-mandatory auto-cols-[100%] grid-flow-col gap-4 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:none] sm:auto-cols-[calc((100%-1rem)/2)] lg:auto-cols-[calc((100%-2rem)/3)] xl:auto-cols-[calc((100%-1rem)/2)] 2xl:auto-cols-[calc((100%-2rem)/3)] ${
-          count > 1 ? "grid-rows-2" : ""
-        }`}
+        className="grid snap-x snap-mandatory auto-cols-[100%] grid-flow-col gap-4 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:none] md:auto-cols-[calc((100%-1rem)/2)] min-[1880px]:auto-cols-[calc((100%-2rem)/3)]"
       >
         {children}
       </div>
@@ -178,6 +178,7 @@ export function InverterMonitoringDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   const devicesQuery = usePlantDevices(plantId);
   const tagsById = useTagsById();
+  const tagsByCode = new Map([...tagsById.values()].map((tag) => [tag.code, tag]));
   const { devices: liveDevices } = useLiveSocket();
   const columnsQuery = useDeviceTableColumns();
   // Timestamps render in the Plant's zone, never the browser's (Guardrail 11).
@@ -231,7 +232,14 @@ export function InverterMonitoringDashboard(): JSX.Element {
    */
   const latest = useLatestValues(
     inverters.map((device) => device.id),
-    inverterColumns.map((column) => column.tag_id),
+    // The columns, plus the card's positions that are not columns (lifetime
+    // energy) — without those the card would have nothing to put there.
+    [
+      ...new Set([
+        ...inverterColumns.map((column) => column.tag_id),
+        ...inverterCardTagIds(tagsByCode),
+      ]),
+    ],
     inverters.length > 0 && inverterColumns.length > 0,
   );
 
@@ -593,7 +601,7 @@ export function InverterMonitoringDashboard(): JSX.Element {
                       Inverters together ranks across the two by implication,
                       which is the thing the grouping exists to prevent
                       (Guardrail 9). */}
-                  <div className="min-w-0 xl:col-span-5">
+                  <div className="min-w-0 xl:col-span-4">
                     <div className="mb-3 flex min-h-9 items-center justify-between gap-3">
                       <span className="tile-label">
                         {/* "Sorted", not "Ranked", where the variant is unknown:
@@ -628,7 +636,7 @@ export function InverterMonitoringDashboard(): JSX.Element {
                     )}
                   </div>
 
-                  <div className="min-w-0 xl:col-span-7">
+                  <div className="min-w-0 xl:col-span-8">
                     <CardPages
                       title={`Devices · ${groupOnline} online`}
                       count={rows.length}
@@ -637,9 +645,10 @@ export function InverterMonitoringDashboard(): JSX.Element {
                         const place = position.get(row.device.id) ?? null;
                         return (
                           <div key={row.device.id} className="min-w-0 snap-start">
-                            <DeviceFigureCard
+                            <InverterCard
                               device={row.device}
                               columns={inverterColumns}
+                              tagsByCode={tagsByCode}
                               values={valuesFor(row.device.id)}
                               highlightTagId={metric?.tag_id}
                               position={place}

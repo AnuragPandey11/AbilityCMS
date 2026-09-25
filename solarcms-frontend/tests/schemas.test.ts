@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  DeviceDetailSchema,
+  DeviceUpdateResultSchema,
   KpiFigureSchema,
   LiveFrameSchema,
   MeSchema,
@@ -223,5 +225,36 @@ describe("ReadingsResponseSchema", () => {
     });
     expect(parsed.items[0].sample_count).toBe(3);
     expect(parsed.items[1].sample_count).toBeUndefined();
+  });
+});
+
+describe("PATCH /devices/{id}", () => {
+  // The row the route RETURNs, as it arrived in the browser on 25 Sep 2026.
+  // Parsed as the full detail, it failed *after* the save had committed, so
+  // every edit on Tag Mapping and in the hierarchy editor reported an error
+  // and was applied anyway.
+  const returned = {
+    id: 16,
+    code: "INVERTER_3",
+    name: "Inverter 3",
+    status: "active",
+    block_id: null,
+    parent_device_id: null,
+    reports_via_device_id: null,
+    collector_code: "MCR_A",
+    source_address: "scms/v1/SUNFIELD/SF_NORTH/MCR_A/INVERTER_3",
+    expected_interval_s: 30,
+    rated_capacity_kw: "400.00",
+    string_count: null,
+    sld_stage_override: null,
+  };
+
+  it("parses the row the route actually returns", () => {
+    const parsed = DeviceUpdateResultSchema.parse(returned);
+    expect(parsed.rated_capacity_kw).toBe(400);
+  });
+
+  it("is not the full Device detail, which is why it has its own schema", () => {
+    expect(DeviceDetailSchema.safeParse(returned).success).toBe(false);
   });
 });

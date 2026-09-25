@@ -6,6 +6,7 @@ import {
   DeviceDetailSchema,
   DeviceListItemSchema,
   DeviceOperatingStatusSchema,
+  DeviceUpdateResultSchema,
   UnmappedKeysSchema,
   parse,
   type Binding,
@@ -13,6 +14,7 @@ import {
   type DeviceDetail,
   type DeviceListItem,
   type DeviceOperatingStatus,
+  type DeviceUpdateResult,
   type UnmappedKey,
 } from "../schemas";
 
@@ -174,9 +176,9 @@ export type DeviceUpdate = Partial<Omit<DeviceCreate, "device_model_id">> & {
 export async function updateDevice(
   deviceId: number,
   body: DeviceUpdate,
-): Promise<DeviceDetail> {
+): Promise<DeviceUpdateResult> {
   return parse(
-    DeviceDetailSchema,
+    DeviceUpdateResultSchema,
     await request(`/devices/${deviceId}`, { method: "PATCH", body }),
     `PATCH /devices/${deviceId}`,
   );

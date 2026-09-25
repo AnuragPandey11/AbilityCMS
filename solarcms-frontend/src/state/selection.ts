@@ -28,16 +28,24 @@ interface SelectionState {
   clientId: number | null;
   plantSearch: string;
   /**
-   * The charts' window. Kept here beside `period` so both time controls
-   * survive leaving the screen alike — `period` was remembered and this was
-   * not, so returning to a Plant restored one and silently reset the other.
+   * The Power trend panel's window. Kept here beside `period` so the time
+   * controls survive leaving the screen alike — `period` was remembered and
+   * this was not, so returning to a Plant restored one and silently reset the
+   * other.
    */
   trendRange: TrendRange;
+  /**
+   * The Weather panel's window, independent of the Power trend's: each chart
+   * panel carries its own control, and a control that also moved another
+   * panel's chart would be the ambiguity that moving it into the panel removed.
+   */
+  weatherRange: TrendRange;
   setPlantId: (plantId: number | null) => void;
   setPeriod: (period: KpiPeriod) => void;
   setClientId: (clientId: number | null) => void;
   setPlantSearch: (plantSearch: string) => void;
   setTrendRange: (trendRange: TrendRange) => void;
+  setWeatherRange: (weatherRange: TrendRange) => void;
   reset: () => void;
 }
 
@@ -49,13 +57,22 @@ export const useSelection = create<SelectionState>()(
       clientId: null,
       plantSearch: "",
       trendRange: "today",
+      weatherRange: "today",
       setPlantId: (plantId) => set({ plantId }),
       setPeriod: (period) => set({ period }),
       setClientId: (clientId) => set({ clientId }),
       setPlantSearch: (plantSearch) => set({ plantSearch }),
       setTrendRange: (trendRange) => set({ trendRange }),
+      setWeatherRange: (weatherRange) => set({ weatherRange }),
       reset: () =>
-        set({ plantId: null, period: "today", clientId: null, plantSearch: "", trendRange: "today" }),
+        set({
+          plantId: null,
+          period: "today",
+          clientId: null,
+          plantSearch: "",
+          trendRange: "today",
+          weatherRange: "today",
+        }),
     }),
     {
       name: "solarcms.selection",

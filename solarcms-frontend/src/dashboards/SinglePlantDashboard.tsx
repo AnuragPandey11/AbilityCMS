@@ -403,6 +403,46 @@ const TREND_HEIGHT = { beside_rail: 370, stacked: 230 };
 const ENERGY_DAYS: Record<TrendRange, number> = { today: 1, "24h": 2, "7d": 7, "30d": 30 };
 
 /**
+ * A chart panel's own window, inside the panel it scopes.
+ *
+ * It used to be one control in the page's filter row, beside `Period`, driving
+ * every chart at once — which read as though it scoped the gauges too, and
+ * gave no way to tell which charts followed it. Each chart panel now carries
+ * its own, so what a control changes is the panel it sits in and nothing else.
+ */
+function ChartWindow({
+  label,
+  value,
+  onChange,
+}: {
+  /** Names the group for a screen reader: which chart this window is for. */
+  label: string;
+  value: TrendRange;
+  onChange: (value: TrendRange) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className="text-xs font-medium text-ink-muted"
+        title="The span of readings this chart shows. Separate from Period: 'today' and 'the last 24 hours' are different ranges."
+      >
+        Window
+      </span>
+      <SegmentedControl
+        label={label}
+        value={value}
+        onChange={onChange}
+        options={TREND_RANGES.map((option) => ({
+          value: option.value,
+          label: option.label,
+          hint: option.hint,
+        }))}
+      />
+    </div>
+  );
+}
+
+/**
  * DC and AC nameplate, then the timezone every timestamp on the page is in.
  * Rendered in the header from `xl` and at the head of the filter row below it.
  */
@@ -443,10 +483,18 @@ function PlantNameplate({
 export function SinglePlantDashboard(): JSX.Element {
   const navigate = useNavigate();
   const canManage = usePermission("plant.manage");
-  // `range` is the Plant's day by default, framed 00:00–24:00: a generation
-  // curve is read for the shape of a day, and a rolling 24 hours splits that
-  // shape in two.
-  const { period, setPeriod, trendRange: range, setTrendRange: setRange } = useSelection();
+  // `range` is the Power trend panel's window, `weatherRange` the Weather
+  // panel's — each set by the control inside its own panel. Both are the
+  // Plant's day by default, framed 00:00–24:00: a generation curve is read for
+  // the shape of a day, and a rolling 24 hours splits that shape in two.
+  const {
+    period,
+    setPeriod,
+    trendRange: range,
+    setTrendRange: setRange,
+    weatherRange,
+    setWeatherRange,
+  } = useSelection();
   const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   const [chartView, setChartView] = useState<"power" | "energy">("power");
   const [open, setOpen] = useState<OpenPanel>(null);
@@ -524,7 +572,11 @@ export function SinglePlantDashboard(): JSX.Element {
     acCapacityKw: plantQuery.data?.ac_capacity_kw,
     chosen: compareWith,
   });
-  const moduleTempTrend = useSlotTrend(plantId, "env.module_temperature", range);
+  // The Weather panel's own series, on its own window. Irradiance is asked for
+  // twice — the Power trend's Exp Power (DC) needs it on that panel's window —
+  // but with the two windows equal the query keys match and it is fetched once.
+  const weatherIrradianceTrend = useSlotTrend(plantId, "env.irradiance", weatherRange);
+  const moduleTempTrend = useSlotTrend(plantId, "env.module_temperature", weatherRange);
 
   const blocks = blocksQuery.data ?? [];
   const blockKpiQueries = useQueries({
@@ -871,12 +923,11 @@ export function SinglePlantDashboard(): JSX.Element {
       </HeaderContent>
 
       {/*
-        One filter row, above everything it scopes. Two time controls rather
-        than one because they genuinely scope different things and merging
-        them would be a lie: `Period` drives the derived figures, computed
-        over a calendar period from aggregates; `Window` drives the charts,
-        which are a rolling span of readings. "Today" and "the last 24 hours"
-        are not the same range and must not share a control.
+        One filter row, above everything it scopes. `Period` drives the
+        derived figures, computed over a calendar period from aggregates. The
+        charts' `Window` is not here: each chart panel carries its own, inside
+        the panel it scopes (see `ChartWindow`). "Today" and "the last 24
+        hours" are not the same range and must not share a control.
       */}
       <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
@@ -888,25 +939,6 @@ export function SinglePlantDashboard(): JSX.Element {
             Period
           </span>
           <PeriodPicker value={period} onChange={setPeriod} size="lg" />
-        </div>
-        <div className="flex items-center gap-2.5">
-          <span
-            className="text-sm font-medium text-ink-muted"
-            title="Scopes the charts, which show a rolling span of readings. Deliberately separate from Period: 'today' and 'the last 24 hours' are different ranges."
-          >
-            Window
-          </span>
-          <SegmentedControl
-            label="Chart window"
-            size="lg"
-            value={range}
-            onChange={setRange}
-            options={TREND_RANGES.map((option) => ({
-              value: option.value,
-              label: option.label,
-              hint: option.hint,
-            }))}
-          />
         </div>
         {/* What the header had no room for at this width. */}
         <div className="flex flex-wrap items-center gap-3 xl:hidden">
@@ -1056,16 +1088,21 @@ export function SinglePlantDashboard(): JSX.Element {
             )}
           >
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <SegmentedControl
-                label="Chart view"
-                size="lg"
-                value={chartView}
-                onChange={setChartView}
-                options={[
-                  { value: "power", label: "Power", hint: "Output over the selected window." },
-                  { value: "energy", label: "Energy", hint: "Generation per day over the selected window." },
-                ]}
-              />
+              {/* The window scopes both views of this chart, so it sits beside
+                  the switch between them rather than inside either. */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <SegmentedControl
+                  label="Chart view"
+                  size="lg"
+                  value={chartView}
+                  onChange={setChartView}
+                  options={[
+                    { value: "power", label: "Power", hint: "Output over the selected window." },
+                    { value: "energy", label: "Energy", hint: "Generation per day over the selected window." },
+                  ]}
+                />
+                <ChartWindow label="Power trend window" value={range} onChange={setRange} />
+              </div>
               {chartView === "power" && !powerTrend.unavailableReason ? (
                 <CheckboxMenu
                   label="Select options"
@@ -1190,34 +1227,39 @@ export function SinglePlantDashboard(): JSX.Element {
             "Two measures, two scales, one shared time axis — never one plot with two y-axes.",
           )}
         >
-          {irradianceTrend.unavailableReason && moduleTempTrend.unavailableReason ? (
+          {weatherIrradianceTrend.unavailableReason && moduleTempTrend.unavailableReason ? (
             <p className="py-8 text-center text-xs text-ink-faint">
-              {irradianceTrend.unavailableReason}
+              {weatherIrradianceTrend.unavailableReason}
             </p>
           ) : (
-            <SmallMultiples
-              timezone={timezone}
-              height={210}
-              day={irradianceTrend.day}
-              series={[
-                {
-                  key: "irradiance",
-                  label: irradianceTrend.label,
-                  unit: irradianceTrend.unit,
-                  points: irradianceTrend.points,
-                  tier: irradianceTrend.tier,
-                  flaggedCount: irradianceTrend.flaggedCount,
-                },
-                {
-                  key: "module_temp",
-                  label: moduleTempTrend.label,
-                  unit: moduleTempTrend.unit,
-                  points: moduleTempTrend.points,
-                  tier: moduleTempTrend.tier,
-                  flaggedCount: moduleTempTrend.flaggedCount,
-                },
-              ]}
-            />
+            <>
+              <div className="mb-3">
+                <ChartWindow label="Weather window" value={weatherRange} onChange={setWeatherRange} />
+              </div>
+              <SmallMultiples
+                timezone={timezone}
+                height={210}
+                day={weatherIrradianceTrend.day}
+                series={[
+                  {
+                    key: "irradiance",
+                    label: weatherIrradianceTrend.label,
+                    unit: weatherIrradianceTrend.unit,
+                    points: weatherIrradianceTrend.points,
+                    tier: weatherIrradianceTrend.tier,
+                    flaggedCount: weatherIrradianceTrend.flaggedCount,
+                  },
+                  {
+                    key: "module_temp",
+                    label: moduleTempTrend.label,
+                    unit: moduleTempTrend.unit,
+                    points: moduleTempTrend.points,
+                    tier: moduleTempTrend.tier,
+                    flaggedCount: moduleTempTrend.flaggedCount,
+                  },
+                ]}
+              />
+            </>
           )}
         </Panel>
       </div>

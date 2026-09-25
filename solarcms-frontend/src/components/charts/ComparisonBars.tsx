@@ -84,7 +84,7 @@ export function ComparisonBars({
   const theme = chartTheme();
   // The brand accent, not categorical slot 1: this is one series, so its hue
   // distinguishes it from nothing, and the figure being compared on each Device
-  // card takes the same colour (`DeviceFigureCard`).
+  // card takes the same colour (`DeviceFigureCard`, `InverterCard`).
   const base = token("accent");
   const gradient = appearance === "gradient";
   // One wash for every bar, left to right. Colours through `token`, which

@@ -509,6 +509,33 @@ export const DeviceDetailSchema = DeviceListItemSchema.extend({
 }).passthrough();
 export type DeviceDetail = z.infer<typeof DeviceDetailSchema>;
 
+/**
+ * What `PATCH /devices/{id}` sends back: the edited row's own columns, not the
+ * joined detail `GET /devices/{id}` returns.
+ *
+ * It used to be parsed as `DeviceDetailSchema`, which failed every save *after*
+ * it had committed — the row carries no `type_code`, `plant_id` or health — so
+ * Tag Mapping said "Could not save the Device", the hierarchy editor said it
+ * could not re-parent, and a refresh showed every one of those edits applied.
+ * Callers refetch the detail on success; nothing reads this body.
+ */
+export const DeviceUpdateResultSchema = z.object({
+  id: z.number(),
+  code: z.string(),
+  name: z.string(),
+  status: z.string(),
+  block_id: z.number().nullable(),
+  parent_device_id: z.number().nullable(),
+  reports_via_device_id: z.number().nullable(),
+  collector_code: z.string().nullable(),
+  source_address: z.string().nullable(),
+  expected_interval_s: z.number(),
+  rated_capacity_kw: nullableNumeric(),
+  string_count: z.number().nullable(),
+  sld_stage_override: z.string().nullable(),
+});
+export type DeviceUpdateResult = z.infer<typeof DeviceUpdateResultSchema>;
+
 // ── Commissioning ───────────────────────────────────────────────────────────
 
 /**
