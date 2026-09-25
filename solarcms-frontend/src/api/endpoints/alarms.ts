@@ -49,8 +49,10 @@ export async function acknowledgeAlarm(alarmId: number): Promise<unknown> {
 
 /**
  * A Client's own rules plus the platform defaults (`client_id: null`), which are
- * read-only here. To change a default a Client creates a more specific rule and
- * scope resolution prefers it: device → plant → device_type → global (§7.3).
+ * read-only here; a platform administrator also sees every Client's rules. To
+ * change a default a Client creates its own rule at the same scope or narrower:
+ * scope decides first (device → plant → device_type → client → global), and at
+ * the same scope the Client's own rule wins (§7.3).
  */
 export async function listAlarmRules(): Promise<AlarmRule[]> {
   return parse(
@@ -75,6 +77,12 @@ export interface AlarmRuleWrite {
   severity?: string;
   classification?: string | null;
   enabled?: boolean;
+  /**
+   * The owner, honoured on create for a platform administrator only: a Client
+   * id, or `null` for a platform default every Client inherits. Ignored for
+   * everyone else, whose Client comes from the session.
+   */
+  client_id?: number | null;
 }
 
 export async function createAlarmRule(body: AlarmRuleWrite): Promise<unknown> {

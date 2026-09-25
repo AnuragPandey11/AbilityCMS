@@ -24,6 +24,7 @@ see (migrations 0008/0010).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -42,6 +43,8 @@ from solarcms.domain.assumptions import (
 from solarcms.domain.operating import (
     Breaker,
     OperatingDay,
+    Transition,
+    first_crossing,
     grid_status,
     held_series,
     operating_day,
@@ -142,6 +145,56 @@ def _observed(at: datetime | None, after: datetime | None, gap: timedelta) -> bo
     return at is not None and after is not None and at - after <= gap
 
 
+def carried_over_midnight(
+    before: OperatingDay, after: OperatingDay, gap: timedelta,
+) -> bool:
+    """Whether a run went on across midnight, heard throughout.
+
+    The day before ended generating, and the day after's first reading was
+    already above the start threshold and came within one ordinary interval of
+    the last. Then the second day has no start of its own and the first had no
+    stop — neither a silence nor a start, and saying either would be wrong. A
+    real array does not generate at midnight; a simulator with a shifted sun
+    does, and so would a Plant whose timezone is mis-recorded.
+    """
+    return (
+        before.running
+        and before.last_sample is not None
+        and after.start is not None
+        and after.start_after is None
+        and after.start - before.last_sample <= gap
+    )
+
+
+async def _exact(
+    session: AsyncSession, devices: list[Any], tag_code: str, minute: datetime | None,
+    kind: Transition,
+) -> datetime | None:
+    """A transition the fold found to the minute, pinned to the reading that made it.
+
+    Reads the raw readings of that minute — plus enough before it for every
+    Device's held value to be known on entry — through the same `held_series`
+    the fold uses. Raw readings are kept thirty days, so today and yesterday
+    always have them; where they do not, or nothing in the minute crosses on its
+    own, the minute stands.
+    """
+    if minute is None or not devices:
+        return minute
+    hold = _hold(devices)
+    rows = (await session.execute(text("""
+        SELECT r.time, r.device_id, r.value
+          FROM readings_v r JOIN tags t ON t.id = r.tag_id
+         WHERE r.device_id = ANY(:device_ids) AND t.code = :tag_code
+           AND coalesce(r.quality, 0) = 0 AND r.value IS NOT NULL
+           AND r.time >= :start AND r.time < :end
+         ORDER BY r.time, r.device_id
+    """), {"device_ids": [device.id for device in devices], "tag_code": tag_code,
+          "start": minute - max(hold.values()), "end": minute + BUCKET})).all()
+    series = held_series(
+        [(row.time, row.device_id, float(row.value)) for row in rows], hold, "sum")
+    return first_crossing(series, minute, minute + BUCKET, kind) or minute
+
+
 def _day_json(day: date, folded: OperatingDay, gap: timedelta) -> dict[str, Any]:
     return {
         "date": day.isoformat(),
@@ -236,6 +289,17 @@ async def _operating(
         session, devices, tag_code, "sum", yesterday_start, moment + BUCKET)
     folded_yesterday = operating_day(s for s in series if s[0] < today_start)
     folded_today = operating_day(s for s in series if s[0] >= today_start)
+    # Each start and stop to the second, from the reading that made it.
+    folded_yesterday = replace(
+        folded_yesterday,
+        start=await _exact(session, devices, tag_code, folded_yesterday.start, "start"),
+        stop=await _exact(session, devices, tag_code, folded_yesterday.stop, "stop"),
+    )
+    folded_today = replace(
+        folded_today,
+        start=await _exact(session, devices, tag_code, folded_today.start, "start"),
+        stop=await _exact(session, devices, tag_code, folded_today.stop, "stop"),
+    )
 
     # The state now. "Running" is only said on fresh evidence: Inverters that
     # went quiet mid-afternoon leave a running fold behind them, and silence is
@@ -260,6 +324,7 @@ async def _operating(
     else:
         state = "not_started"
 
+    carried = carried_over_midnight(folded_yesterday, folded_today, gap)
     return {
         "operating": {
             "state": state,
@@ -274,8 +339,8 @@ async def _operating(
             "resolution": RESOLUTION,
             "flagged_buckets": flagged,
         },
-        "today": _day_json(today, folded_today, gap),
-        "yesterday": _day_json(yesterday, folded_yesterday, gap),
+        "today": {**_day_json(today, folded_today, gap), "start_carried_over": carried},
+        "yesterday": {**_day_json(yesterday, folded_yesterday, gap), "ran_past_midnight": carried},
     }
 
 

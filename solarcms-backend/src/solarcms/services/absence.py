@@ -15,7 +15,6 @@ check the grant before the logic.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 import structlog
 from sqlalchemy import text
@@ -30,6 +29,7 @@ from solarcms.domain.absence import (
     AbsenceCondition,
     diff_conditions,
 )
+from solarcms.domain.alarm_logic import AlarmRuleSpec, RuleTarget, rules_for
 from solarcms.services.notifications import notify_alarm_subscribers
 
 log = structlog.get_logger("absence")
@@ -46,19 +46,62 @@ ABSENCE_RULE_CODES = (
 AlarmKey = tuple[str, int | None, str | None]
 
 
-async def _rules(session: AsyncSession) -> dict[str, Any]:
-    """The absence rules as configured, by code.
+async def _rules(session: AsyncSession) -> list[AlarmRuleSpec]:
+    """Every enabled absence rule, platform default and Client-owned alike.
 
     Severity comes from the row, never from this module: a rule is
     configuration, and an operator who decides a silent Inverter is critical
-    rather than medium changes a row, not a deployment.
+    rather than medium changes a row, not a deployment. Which row applies to a
+    given condition is `rules_for`, the same precedence the alarm worker uses —
+    this used to read the platform default only, so a Client's own COMM_LOST
+    was stored, listed, and silently never consulted.
     """
     rows = (await session.execute(text("""
-        SELECT id, code, severity, duration_s, enabled
+        SELECT id, client_id, code, severity, duration_s, scope_type, scope_id
           FROM alarm_rules
-         WHERE code = ANY(:codes) AND client_id IS NULL AND scope_type = 'global'
+         WHERE code = ANY(:codes) AND enabled
+         ORDER BY id
     """), {"codes": list(ABSENCE_RULE_CODES)})).all()
-    return {row.code: row for row in rows if row.enabled}
+    return [
+        AlarmRuleSpec(
+            rule_id=row.id, code=row.code, tag_id=None, operator="special",
+            threshold=None, threshold_high=None, clear_threshold=None,
+            duration_s=row.duration_s or 0, severity=row.severity,
+            scope_type=row.scope_type, scope_id=row.scope_id, client_id=row.client_id,
+        )
+        for row in rows
+    ]
+
+
+async def _device_types(session: AsyncSession, device_ids: list[int]) -> dict[int, int]:
+    """Device → Device Type, for rules scoped to a Type."""
+    if not device_ids:
+        return {}
+    rows = (await session.execute(text("""
+        SELECT d.id, dm.device_type_id
+          FROM devices d JOIN device_models dm ON dm.id = d.device_model_id
+         WHERE d.id = ANY(:ids)
+    """), {"ids": device_ids})).all()
+    return {row.id: row.device_type_id for row in rows}
+
+
+def _winners(
+    desired: list[AbsenceCondition], rules: list[AlarmRuleSpec], types: dict[int, int]
+) -> dict[AlarmKey, AlarmRuleSpec]:
+    """The rule in force for each condition. A condition no enabled rule
+    reaches has no entry, and is not raised."""
+    winners: dict[AlarmKey, AlarmRuleSpec] = {}
+    for condition in desired:
+        target = RuleTarget(
+            client_id=condition.client_id, plant_id=condition.plant_id,
+            device_id=condition.device_id,
+            device_type_id=(types.get(condition.device_id)
+                            if condition.device_id is not None else None),
+        )
+        chosen = rules_for([r for r in rules if r.code == condition.rule_code], target)
+        if chosen:
+            winners[condition.key] = chosen[0]
+    return winners
 
 
 async def _open_keys(session: AsyncSession, rule_ids: dict[int, str]) -> set[AlarmKey]:
@@ -85,12 +128,20 @@ async def reconcile(
     now = now or datetime.now(UTC)
     stats = {"opened": 0, "cleared": 0, "notified": 0}
 
-    configured = await _rules(session)
+    rules = await _rules(session)
+    winners = _winners(desired, rules, await _device_types(
+        session, sorted({c.device_id for c in desired if c.device_id is not None})))
     # A rule disabled in configuration is not merely skipped — anything already
     # open under it is left alone rather than force-cleared, because disabling a
     # rule is a statement about raising new Alarms, not about closing live ones.
-    desired = [c for c in desired if c.rule_code in configured]
-    rule_ids = {configured[code].id: code for code in configured}
+    desired = [c for c in desired if c.key in winners]
+    rule_ids = {rule.rule_id: rule.code for rule in rules}
+    # Clearing is by code, across every enabled rule carrying it: an Alarm opened
+    # under the platform default must still close after a Client adds its own
+    # rule and the Client's becomes the one in force.
+    ids_by_code: dict[str, list[int]] = {}
+    for rule in rules:
+        ids_by_code.setdefault(rule.code, []).append(rule.rule_id)
 
     open_keys = await _open_keys(session, rule_ids)
     to_open, to_clear = diff_conditions(desired, open_keys)
@@ -101,7 +152,7 @@ async def reconcile(
     held_back = 0
     ready: list[AbsenceCondition] = []
     for condition in to_open:
-        required = configured[condition.rule_code].duration_s or 0
+        required = winners[condition.key].duration_s
         if required and (condition.held_for_s or 0) < required:
             held_back += 1
             continue
@@ -111,7 +162,7 @@ async def reconcile(
     to_open = ready
 
     for condition in to_open:
-        rule = configured[condition.rule_code]
+        rule = winners[condition.key]
         # ON CONFLICT DO NOTHING against both partial unique indexes: the
         # Device-scoped one and the subject-scoped one added in 0025. A second
         # sweeper, or a restart mid-sweep, cannot duplicate an Alarm.
@@ -122,7 +173,7 @@ async def reconcile(
                     'active', :severity, :now, :message, :classification)
             ON CONFLICT DO NOTHING
         """), {
-            "client_id": condition.client_id, "rule_id": rule.id,
+            "client_id": condition.client_id, "rule_id": rule.rule_id,
             "device_id": condition.device_id, "plant_id": condition.plant_id,
             "subject": condition.subject, "severity": rule.severity,
             "now": now, "message": condition.message,
@@ -138,7 +189,7 @@ async def reconcile(
              WHERE rule_id = :rule_id AND state = 'active'
                AND device_id IS NOT DISTINCT FROM :device_id
                AND subject IS NOT DISTINCT FROM :subject
-        """), {"rule_id": rule.id, "device_id": condition.device_id,
+        """), {"rule_id": rule.rule_id, "device_id": condition.device_id,
                "subject": condition.subject})).first()
         if opened is not None:
             stats["notified"] += await notify_alarm_subscribers(
@@ -148,13 +199,12 @@ async def reconcile(
             )
 
     for rule_code, device_id, subject in sorted(to_clear, key=lambda k: str(k)):
-        rule = configured[rule_code]
         await session.execute(text("""
             UPDATE alarms SET state = 'resolved', resolved_at = :now
-             WHERE rule_id = :rule_id AND state IN ('active','acknowledged')
+             WHERE rule_id = ANY(:rule_ids) AND state IN ('active','acknowledged')
                AND device_id IS NOT DISTINCT FROM :device_id
                AND subject IS NOT DISTINCT FROM :subject
-        """), {"now": now, "rule_id": rule.id, "device_id": device_id,
+        """), {"now": now, "rule_ids": ids_by_code[rule_code], "device_id": device_id,
                "subject": subject})
         stats["cleared"] += 1
         log.info("absence alarm cleared", rule=rule_code,

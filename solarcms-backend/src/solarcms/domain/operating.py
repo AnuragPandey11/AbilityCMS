@@ -165,6 +165,34 @@ def combine(values: Sequence[float], aggregate: str) -> float | None:
     return float(values[0])
 
 
+def first_crossing(
+    samples: Iterable[tuple[datetime, float | None]],
+    window_start: datetime,
+    window_end: datetime,
+    kind: Transition,
+    *,
+    start_above: float = PLANT_START_ABOVE_KW,
+    stop_at_or_below: float = PLANT_STOP_AT_OR_BELOW_KW,
+) -> datetime | None:
+    """The exact reading, inside one bucket, at which a start or stop happened.
+
+    The day is folded per minute, so a transition is first known to the minute.
+    Replayed over the raw readings of that minute — each Device held at its
+    last value, as the fold holds it — the crossing lands on the timestamp of
+    the reading that made it, which is what lets a start be printed to the
+    second without the seconds being invented. None when no reading in the
+    window crosses: the caller keeps the minute.
+    """
+    for at, value in samples:
+        if value is None or not window_start <= at < window_end:
+            continue
+        if kind == "start" and value > start_above:
+            return at
+        if kind == "stop" and value <= stop_at_or_below:
+            return at
+    return None
+
+
 def peak(samples: Iterable[tuple[datetime, float | None]]) -> tuple[datetime, float] | None:
     """The largest sample and when it was taken; the earliest wins a tie."""
     best: tuple[datetime, float] | None = None

@@ -123,19 +123,28 @@ describe("Plant Status card", () => {
     expect(valueOf("Plant Status")).toHaveTextContent("Running");
     expect(valueOf("Grid Status")).toHaveTextContent("Connected");
     expect(valueOf("Irradiance")).toHaveTextContent("633.6");
-    expect(valueOf("Plant Start (Today)")).toHaveTextContent("13:55");
-    // Running, so the stop shown is yesterday's: 13:10 UTC is 18:40 local.
-    expect(valueOf("Plant Stop (Yesterday)")).toHaveTextContent("18:40");
+    // To the second, as the client's reference prints them.
+    expect(valueOf("Plant Start (Today)")).toHaveTextContent("13:55:00");
+    // 13:10 UTC is 18:40 local.
+    expect(valueOf("Plant Stop (Yesterday)")).toHaveTextContent("18:40:00");
     expect(valueOf("Peak Load (Today)")).toHaveTextContent("3,381");
     expect(screen.getByText("Online")).toBeInTheDocument();
   });
 
-  it("says 'by' when the start happened in a silence", () => {
-    card(status({ today: day({ start_at: "2026-09-24T08:25:00Z", ended_running: true }) }));
-    expect(valueOf("Plant Start (Today)")).toHaveTextContent("by 13:55");
+  it("colours start green and stop amber, as the reference does", () => {
+    card(status());
+    expect(valueOf("Plant Start (Today)")).toHaveClass("text-ok");
+    expect(valueOf("Plant Stop (Yesterday)")).toHaveClass("text-warn");
   });
 
-  it("shows today's stop once the Plant has stopped for the day", () => {
+  it("prints a start first heard after a silence plainly, and says so on hover", () => {
+    card(status({ today: day({ start_at: "2026-09-24T08:25:51Z", ended_running: true }) }));
+    const cell = valueOf("Plant Start (Today)");
+    expect(cell).toHaveTextContent("13:55:51");
+    expect(cell).toHaveAttribute("title", expect.stringMatching(/after a silence since midnight/));
+  });
+
+  it("keeps showing yesterday's stop after today's, which is tomorrow's yesterday", () => {
     const stopped = status();
     stopped.operating = { ...stopped.operating, state: "stopped" };
     stopped.today = day({
@@ -147,7 +156,8 @@ describe("Plant Status card", () => {
       stop_observed: true,
     });
     card(stopped);
-    expect(valueOf("Plant Stop (Today)")).toHaveTextContent("18:35");
+    expect(valueOf("Plant Stop (Yesterday)")).toHaveTextContent("18:40:00");
+    expect(screen.queryByTitle("Plant Stop (Today)")).not.toBeInTheDocument();
   });
 
   it("leaves a stop it never saw blank, and says why", () => {
@@ -155,6 +165,30 @@ describe("Plant Status card", () => {
     const cell = valueOf("Plant Stop (Yesterday)");
     expect(cell).toHaveTextContent("—");
     expect(cell).toHaveAttribute("title", expect.stringMatching(/went quiet at 23:13/));
+  });
+
+  it("says a run heard across midnight carried over, not that it started or went quiet", () => {
+    card(
+      status({
+        today: day({ start_at: "2026-09-24T18:30:37Z", ended_running: true, start_carried_over: true }),
+        yesterday: day({
+          date: "2026-09-23",
+          start_at: "2026-09-24T08:25:00Z",
+          start_after: "2026-09-24T08:24:00Z",
+          start_observed: true,
+          ended_running: true,
+          ran_past_midnight: true,
+          last_sample_at: "2026-09-24T18:29:37Z",
+        }),
+      }),
+    );
+    // The day's first reading, and on hover that it is not a start.
+    const start = valueOf("Plant Start (Today)");
+    expect(start).toHaveTextContent("00:00:37");
+    expect(start).toHaveAttribute("title", expect.stringMatching(/began yesterday at 13:55:00/));
+    const stop = valueOf("Plant Stop (Yesterday)");
+    expect(stop).toHaveTextContent("—");
+    expect(stop).toHaveAttribute("title", expect.stringMatching(/did not stop that day/));
   });
 
   it("never calls a Plant with no breaker connected", () => {

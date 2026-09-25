@@ -330,6 +330,14 @@ export const OperatingDaySchema = z.object({
   /** Still generating at the day's last reading. */
   ended_running: z.boolean(),
   last_sample_at: z.string().nullable(),
+  /**
+   * Today only: already generating at midnight and heard without a break from
+   * yesterday — so today has no start of its own, and it is not a start "by
+   * 00:00" either.
+   */
+  start_carried_over: z.boolean().optional().catch(false),
+  /** Yesterday only: the same run seen from the other side — it did not stop. */
+  ran_past_midnight: z.boolean().optional().catch(false),
 });
 export type OperatingDay = z.infer<typeof OperatingDaySchema>;
 
@@ -739,6 +747,8 @@ export const AlarmRuleSchema = z.object({
   id: z.number(),
   // NULL means a platform default: read-only to a Client (§7.3).
   client_id: z.number().nullable(),
+  // The owner's code; a platform administrator sees every Client's rules.
+  client_code: z.string().nullable().catch(null),
   code: z.string(),
   name: z.string(),
   scope_type: z.string(),
@@ -752,6 +762,9 @@ export const AlarmRuleSchema = z.object({
   enabled: z.boolean(),
   tag_code: z.string().nullable(),
   device_type_code: z.string().nullable(),
+  // What the scope points at (a Plant, Device, Type or Client code). Null for
+  // `global`, and for a target the caller is not allowed to see.
+  scope_code: z.string().nullable().catch(null),
 });
 export type AlarmRule = z.infer<typeof AlarmRuleSchema>;
 

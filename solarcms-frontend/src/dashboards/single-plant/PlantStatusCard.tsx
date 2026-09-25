@@ -196,7 +196,16 @@ function slotRow(label: string, slot: ResolvedSlot | undefined): Row {
   };
 }
 
-/** A transition time, "by HH:MM" when it happened in a silence rather than in view. */
+/** HH:MM:SS in the Plant's zone — a start or stop, pinned to the reading that made it. */
+function exact(at: string | null, timeZone: string): string {
+  return at ? formatTime(at, timeZone) : UNDEFINED_DISPLAY;
+}
+
+/**
+ * A start or stop as the client's reference prints it — the time, to the
+ * second — with what kind of evidence it rests on in the tooltip. The seconds
+ * are real: the backend pins each transition to the reading that crossed.
+ */
 function transitionValue(
   at: string | null,
   after: string | null,
@@ -204,31 +213,42 @@ function transitionValue(
   what: "started" | "stopped",
   timeZone: string,
 ): { value: string; title: string } {
-  const time = clock(at, timeZone);
+  const time = exact(at, timeZone);
   if (observed) {
     return {
       value: time,
-      title: `To the minute: the reading before, at ${clock(after, timeZone)}, had not yet ${what}.`,
+      title:
+        `The reading at which the Inverters' summed output ${what === "started" ? "rose above the start threshold" : "fell back to zero"}. ` +
+        `The one before it, at ${clock(after, timeZone)}, had not yet ${what}.`,
     };
   }
   const since = after ? clock(after, timeZone) : "midnight";
   return {
-    value: `by ${time}`,
+    value: time,
     title:
-      `No reading between ${since} and ${time}, so the Plant ${what} somewhere in that gap. ` +
-      `${time} is when it was first heard ${what === "started" ? "generating" : "at zero"}.`,
+      `First heard ${what === "started" ? "generating" : "at zero"} at ${time}, after a silence since ${since} — ` +
+      `the Plant ${what} somewhere in that silence, not necessarily at this time.`,
   };
 }
 
 function startRow(status: OperatingStatus | undefined, timeZone: string): Row {
   const label = "Plant Start (Today)";
   if (!status) return { label, value: UNDEFINED_DISPLAY, tone: "faint" };
-  const { today, operating } = status;
+  const { today, yesterday, operating } = status;
   if (today.start_at) {
     const { value, title } = transitionValue(
       today.start_at, today.start_after, today.start_observed, "started", timeZone,
     );
-    return { label, value, tone: "ink", title };
+    return {
+      label,
+      value,
+      tone: "ok",
+      title: today.start_carried_over
+        ? `Already generating when the Plant's day began, heard without a break across midnight — ` +
+          `${value} is the day's first reading, not a start. This run began yesterday` +
+          (yesterday.start_at ? ` at ${exact(yesterday.start_at, timeZone)}.` : ".")
+        : title,
+    };
   }
   if (operating.state === "not_started") {
     return {
@@ -247,21 +267,13 @@ function startRow(status: OperatingStatus | undefined, timeZone: string): Row {
 }
 
 /**
- * Today's stop once the Plant has stopped for the day; otherwise yesterday's,
- * which is what the reference shows while the Plant is running. The label
- * always says which day it is.
+ * Yesterday's stop, always — the reference's row. Today's, once there is one,
+ * is in the drawer; here it becomes tomorrow's "yesterday".
  */
 function stopRow(status: OperatingStatus | undefined, timeZone: string): Row {
-  if (!status) return { label: "Plant Stop", value: UNDEFINED_DISPLAY, tone: "faint" };
-  const { today, yesterday, operating } = status;
-  if (today.stop_at && operating.state === "stopped") {
-    const { value, title } = transitionValue(
-      today.stop_at, today.stop_after, today.stop_observed, "stopped", timeZone,
-    );
-    return { label: "Plant Stop (Today)", value, tone: "ink", title };
-  }
   const label = "Plant Stop (Yesterday)";
-  return dayStop(label, yesterday, timeZone);
+  if (!status) return { label, value: UNDEFINED_DISPLAY, tone: "faint" };
+  return dayStop(label, status.yesterday, timeZone);
 }
 
 function dayStop(label: string, day: OperatingDay, timeZone: string): Row {
@@ -269,7 +281,17 @@ function dayStop(label: string, day: OperatingDay, timeZone: string): Row {
     const { value, title } = transitionValue(
       day.stop_at, day.stop_after, day.stop_observed, "stopped", timeZone,
     );
-    return { label, value, tone: "ink", title };
+    return { label, value, tone: "warn", title };
+  }
+  if (day.ran_past_midnight) {
+    return {
+      label,
+      value: UNDEFINED_DISPLAY,
+      tone: "faint",
+      title:
+        "Still generating when the day ended, and heard without a break into the next — " +
+        "so it did not stop that day.",
+    };
   }
   if (day.ended_running) {
     return {
@@ -529,8 +551,9 @@ export function OperatingDetail({
         the Inverters' summed AC output rose above {setting(operating.start_above)}{" "}
         {operating.unit}. <strong className="text-ink">Stop</strong> is the minute it fell back to{" "}
         {setting(operating.stop_at_or_below)} {operating.unit}; a restart later the same day
-        takes the stop back, so the day's last fall is the one that stands. "by 13:55" means the
-        change happened in a silence and 13:55 is when it was first heard.
+        takes the stop back, so the day's last fall is the one that stands. Each time is pinned to
+        the second by the reading that crossed; hover one to see whether the change was seen
+        happen or only first heard after a silence.
       </p>
       <p>
         <strong className="text-ink">Peak load</strong> is the highest per-minute reading today of

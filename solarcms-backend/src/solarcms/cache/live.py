@@ -120,6 +120,24 @@ async def read_device_seen(device_ids: list[int]) -> dict[int, datetime | None]:
     }
 
 
+async def read_kpi_day(device_id: int) -> dict[str, str]:
+    """The Plant KPI Device's figures for its day, by Tag code, plus `_boundary`."""
+    result: dict[str, str] = await cast(
+        "Awaitable[dict[str, str]]", get_redis().hgetall(keys.plant_kpi_day(device_id))
+    )
+    return result
+
+
+async def write_kpi_day(device_id: int, values: dict[str, str]) -> None:
+    """Replace the day's figures whole: what is not in `values` no longer stands."""
+    key = keys.plant_kpi_day(device_id)
+    async with get_redis().pipeline(transaction=True) as pipe:
+        pipe.delete(key)
+        pipe.hset(key, mapping=values)
+        pipe.expire(key, keys.PLANT_KPI_DAY_TTL_S)
+        await pipe.execute()
+
+
 async def read_current_values(device_id: int) -> dict[str, str]:
     # redis-py types hgetall as possibly-sync depending on the client flavour;
     # this client is always async, so the cast is the narrowing, not a guess.

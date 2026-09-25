@@ -20,6 +20,11 @@ class AlarmRuleWrite(BaseModel):
     severity: str = Field(default="medium", pattern="^(critical|high|medium|low)$")
     classification: str | None = None
     enabled: bool = True
+    # The owner, honoured on create for a platform administrator only: a Client
+    # id files the rule under that Client, an explicit null makes it a platform
+    # default every Client inherits. Omitted, it falls back to the session's
+    # Client. Ignored for everyone else, whose Client comes from the session.
+    client_id: int | None = None
 
     @model_validator(mode="after")
     def _check_operator_arity(self) -> AlarmRuleWrite:

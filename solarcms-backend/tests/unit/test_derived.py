@@ -35,8 +35,10 @@ from solarcms.domain.derived import (
 from solarcms.services.plant_kpi import (
     OPERATING_POWER,
     PlantInputs,
+    day_state_from_history,
     is_rollover_moment,
     local_hours,
+    rollover_boundary,
     stateful_kpis,
 )
 
@@ -278,6 +280,61 @@ def test_a_restart_takes_the_stop_back_and_keeps_the_morning() -> None:
 
 def test_no_power_reading_produces_no_stateful_kpis() -> None:
     assert stateful_kpis(_inputs(None), {}, datetime.now(UTC)) == ({}, ())
+
+
+# ── The day's figures, when Redis has lost them ────────────────────────────
+
+def _at(hour: int, minute: int = 0, day: int = 25) -> datetime:
+    return datetime(2026, 9, day, hour, minute, tzinfo=UTC)
+
+
+def test_day_state_keeps_the_first_start_not_the_last() -> None:
+    # Measured 24 Sep 2026: after every silence the scheduler wrote a new
+    # "start". Rebuilt from history, the day's start is the first one.
+    rows = [
+        ("PLANT_START_TIME", _at(8, 25), 13.94),
+        ("PLANT_START_TIME", _at(12, 33), 18.06),
+        ("PLANT_START_TIME", _at(14, 18), 19.80),
+    ]
+    assert day_state_from_history(rows)["PLANT_START_TIME"] == pytest.approx(13.94)
+
+
+def test_day_state_keeps_the_highest_peak_with_its_own_time() -> None:
+    # A silence reset the running peak, so a later, lower value was written
+    # after the real one; the day's peak is the highest ever written.
+    rows = [
+        ("TODAY_PEAK_POWER", _at(9, 4), 3468.3),
+        ("TODAY_PEAK_POWER_TIME", _at(9, 4), 14.57),
+        ("TODAY_PEAK_POWER", _at(17, 14), 1612.5),
+        ("TODAY_PEAK_POWER_TIME", _at(17, 14), 22.73),
+    ]
+    state = day_state_from_history(rows)
+    assert state["TODAY_PEAK_POWER"] == pytest.approx(3468.3)
+    assert state["TODAY_PEAK_POWER_TIME"] == pytest.approx(14.57)
+
+
+def test_day_state_takes_the_latest_stop() -> None:
+    rows = [
+        ("PLANT_START_TIME", _at(1), 7.0),
+        ("PLANT_STOP_TIME", _at(5), 11.0),
+        ("PLANT_STOP_TIME", _at(13), 18.5),
+    ]
+    assert day_state_from_history(rows)["PLANT_STOP_TIME"] == pytest.approx(18.5)
+
+
+def test_an_empty_history_is_an_empty_day() -> None:
+    assert day_state_from_history([]) == {}
+
+
+def test_the_day_begins_at_local_2355_not_at_midnight() -> None:
+    # 10:26 IST on the 25th belongs to the day that began at 23:55 IST on the
+    # 24th — 18:25 UTC. One second before 23:55, it is still the day before.
+    began_24th = datetime(2026, 9, 24, 18, 25, tzinfo=UTC)
+    began_25th = datetime(2026, 9, 25, 18, 25, tzinfo=UTC)
+    assert rollover_boundary(_at(4, 56), "Asia/Kolkata") == began_24th
+    just_before = datetime(2026, 9, 25, 18, 24, 59, tzinfo=UTC)
+    assert rollover_boundary(just_before, "Asia/Kolkata") == began_24th
+    assert rollover_boundary(_at(18, 25), "Asia/Kolkata") == began_25th
 
 
 # ── The day boundary ────────────────────────────────────────────────────────

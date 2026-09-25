@@ -26,8 +26,9 @@ missing one leaked another Client's meter into a Financial Report once already
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -104,6 +105,46 @@ def _zone(timezone: str) -> ZoneInfo:
         # the Plant entirely.
         log.warning("unknown plant timezone, using UTC", timezone=timezone)
         return ZoneInfo("UTC")
+
+
+def rollover_boundary(moment: datetime, timezone: str) -> datetime:
+    """The most recent local 23:55 at or before `moment` — where the Plant's KPI
+    day began. Everything written since belongs to the day in progress."""
+    hour, minute = DAY_ROLLOVER_LOCAL_TIME
+    local = moment.astimezone(_zone(timezone))
+    boundary = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if boundary > local:
+        boundary -= timedelta(days=1)
+    return boundary.astimezone(UTC)
+
+
+def day_state_from_history(rows: Iterable[tuple[str, datetime, float]]) -> dict[str, float]:
+    """The day's start, stop and peak, recovered from what this module wrote.
+
+    For when Redis has lost the day state. Each Tag is written only when it
+    changes, so the history says it all: the start is the *earliest* written
+    (the first crossing), the stop the *latest*, and the peak the *highest*,
+    with the time written beside it. A stop taken back by a restart is not in
+    the history — it is never written, only cleared — so one may resurface
+    here; the next tick the Plant is generating clears it again.
+    """
+    history = list(rows)
+    out: dict[str, float] = {}
+    starts = sorted((at, value) for code, at, value in history if code == "PLANT_START_TIME")
+    if starts:
+        out["PLANT_START_TIME"] = starts[0][1]
+    stops = sorted((at, value) for code, at, value in history if code == "PLANT_STOP_TIME")
+    if stops and (not starts or stops[-1][0] >= starts[0][0]):
+        out["PLANT_STOP_TIME"] = stops[-1][1]
+    peaks = [(at, value) for code, at, value in history if code == "TODAY_PEAK_POWER"]
+    if peaks:
+        # The highest; of equals, the earliest.
+        at, value = max(peaks, key=lambda peak: (peak[1], -peak[0].timestamp()))
+        out["TODAY_PEAK_POWER"] = value
+        times = {when: hours for code, when, hours in history if code == "TODAY_PEAK_POWER_TIME"}
+        if at in times:
+            out["TODAY_PEAK_POWER_TIME"] = times[at]
+    return out
 
 
 def is_rollover_moment(now: datetime, timezone: str, tick_seconds: int) -> bool:
@@ -297,7 +338,26 @@ async def compute(
             log.debug("plant has no KPI Device", plant_id=plant.id)
             continue
 
+        boundary = rollover_boundary(moment, plant.timezone)
+        rolling = is_rollover_moment(moment, plant.timezone, tick_seconds)
+        day, day_boundary = await _day_state(session, inputs.kpi_device_id, boundary)
+        if not rolling and day_boundary is not None and day_boundary < boundary:
+            # A 23:55 this scheduler was not running for — the laptop asleep, the
+            # process down. The day it belongs to has ended: carry what can be
+            # carried, then start the new day empty rather than let yesterday's
+            # start and peak stand in for today's.
+            if day_boundary == boundary - timedelta(days=1):
+                rolled += await _roll_over(session, inputs, day, ids, moment, clear=False)
+            log.info("missed day rollover completed", plant_id=plant.id,
+                     day_began=day_boundary.isoformat())
+            day = {}
+
         standing = await _standing_values(inputs.kpi_device_id, codes)
+        # The day's figures come from the day state, never from the live hash,
+        # which forgets them after 15 quiet minutes.
+        for code in RESET_AT_DAY_BOUNDARY:
+            standing.pop(code, None)
+        standing.update(day)
         computed = evaluate_all(plant_formulas, inputs.values)
         stateful, cleared = stateful_kpis(inputs, standing, moment)
         computed.update(stateful)
@@ -312,13 +372,60 @@ async def compute(
             await _write(session, inputs, computed, ids, moment)
             written += len(computed)
 
-        if is_rollover_moment(moment, plant.timezone, tick_seconds):
+        if rolling:
             rolled += await _roll_over(session, inputs, standing | computed, ids, moment)
+            day = {}
+        else:
+            day = {code: value for code, value in (day | stateful).items() if code not in cleared}
+            # Keep the live hash showing the day's figures too, so a slot reading
+            # the KPI Device does not go blank after a quiet spell.
+            live_day = {ids[code]: value for code, value in day.items() if code in ids}
+            if live_day:
+                await live.write_current_values(inputs.kpi_device_id, live_day, moment)
+        await live.write_kpi_day(inputs.kpi_device_id, {
+            "_boundary": boundary.isoformat(),
+            **{code: repr(value) for code, value in day.items()},
+        })
 
     if written or rolled:
         log.info("plant kpis computed", plants=len(plants), values=written,
                  rolled_over=rolled)
     return {"plants": len(plants), "values": written, "rolled_over": rolled}
+
+
+async def _day_state(
+    session: AsyncSession, kpi_device_id: int, boundary: datetime,
+) -> tuple[dict[str, float], datetime | None]:
+    """The day's start, stop and peak, and the boundary they belong to.
+
+    From Redis when it has them; otherwise rebuilt from the Readings this module
+    wrote since `boundary` — the day state is a cache of history, never the only
+    copy of it. Redis here runs without persistence, so a restart would
+    otherwise begin the day again at whatever hour it happened.
+    """
+    raw = await live.read_kpi_day(kpi_device_id)
+    if raw:
+        state: dict[str, float] = {}
+        for code, value in raw.items():
+            if code.startswith("_"):
+                continue
+            try:
+                state[code] = float(value)
+            except ValueError:
+                continue
+        stamp = raw.get("_boundary")
+        return state, (datetime.fromisoformat(stamp) if stamp else None)
+
+    rows = (await session.execute(text("""
+        SELECT t.code, r.time, r.value
+          FROM readings_v r JOIN tags t ON t.id = r.tag_id
+         WHERE r.device_id = :device_id AND t.code = ANY(:codes) AND r.time >= :since
+         ORDER BY r.time
+    """), {"device_id": kpi_device_id, "codes": list(RESET_AT_DAY_BOUNDARY),
+          "since": boundary})).all()
+    return day_state_from_history(
+        (row.code, row.time, float(row.value)) for row in rows if row.value is not None
+    ), boundary
 
 
 async def _standing_values(device_id: int, codes: dict[int, str]) -> dict[str, float]:
@@ -380,7 +487,7 @@ async def _write(
 
 async def _roll_over(
     session: AsyncSession, inputs: PlantInputs, standing: dict[str, float],
-    ids: dict[str, int], moment: datetime,
+    ids: dict[str, int], moment: datetime, *, clear: bool = True,
 ) -> int:
     """Copy today's figures into the YESTERDAY family. SUPPLIED behaviour.
 
@@ -397,6 +504,8 @@ async def _roll_over(
     if not carried:
         return 0
     await _write(session, inputs, carried, ids, moment)
+    if not clear:
+        return len(carried)
 
     # Then stop today's figures standing. Without this, tomorrow's peak is
     # compared against today's and never beats it, and the Plant's start time

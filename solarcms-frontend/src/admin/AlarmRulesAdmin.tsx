@@ -3,10 +3,18 @@
  *
  * ⚠ Platform defaults (`client_id: null`) are **read-only** to a Client. They
  * are rendered distinctly and editing is disabled; to change one, a Client
- * creates a more specific rule and scope resolution prefers it
- * (device → plant → device_type → global). The backend enforces this — an
- * UPDATE against a default returns 404 rather than editing every Client's
- * inherited rule.
+ * creates its own rule with the same code at the same scope or narrower. Scope
+ * decides first (device → plant → device_type → client → global) and at the
+ * same scope the Client's own rule wins. The backend enforces this — an UPDATE
+ * against a default returns 404 rather than editing every Client's inherited
+ * rule. Each row states its standing (`ruleStanding.ts`), because a rule at a
+ * wider scope than the default it meant to replace is stored without error and
+ * never wins.
+ *
+ * A platform administrator sees every Client's rules and must choose the owner
+ * of a new one: a Client, or a platform default that every Client inherits.
+ * Leaving that to the session is how a rule meant for one Client used to reach
+ * all of them.
  *
  * ⚠ Rules with operator `is_true` / `is_false` carry **no threshold** — the
  * contact is the condition. The threshold fields are hidden entirely, not shown
@@ -19,9 +27,11 @@
  */
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAlarmRules, useDeviceTypes, useTags } from "@/api/hooks";
+import { qk } from "@/api/queryKeys";
 import * as alarmsApi from "@/api/endpoints/alarms";
+import * as clientsApi from "@/api/endpoints/clients";
 import type { AlarmRule } from "@/api/schemas";
 import { OPERATORS, operatorNeedsThreshold } from "@/api/schemas";
 import { isApiError } from "@/api/problem";
@@ -31,8 +41,25 @@ import { DataTable, type Column } from "@/components/tables/DataTable";
 import { SeverityBadge } from "@/components/domain";
 import { formatNumber } from "@/format/value";
 import { usePermission } from "@/auth/usePermission";
+import { useAuth } from "@/auth/AuthProvider";
+import { scopeLabel, standingOf, type Standing } from "./ruleStanding";
 
 const DIGITAL_ONLY_TYPES = new Set(["TRANSFORMER", "VCB"]);
+
+/** The owner select's value for a platform default; a Client is its id. */
+const PLATFORM_OWNER = "platform";
+
+function StandingNote({ standing }: { standing: Standing }): JSX.Element {
+  return (
+    <span
+      className={`mt-0.5 block text-[11px] leading-snug ${
+        standing.tone === "warn" ? "text-warn" : "text-ink-muted"
+      }`}
+    >
+      {standing.text}
+    </span>
+  );
+}
 
 export function AlarmRulesAdmin(): JSX.Element {
   const canConfigure = usePermission("config.modify");
@@ -40,6 +67,14 @@ export function AlarmRulesAdmin(): JSX.Element {
   const rulesQuery = useAlarmRules(canConfigure);
   const tagsQuery = useTags();
   const typesQuery = useDeviceTypes();
+  const { me } = useAuth();
+  const isPlatformAdmin = me?.platform_admin ?? false;
+  const clientsQuery = useQuery({
+    queryKey: qk.clients(),
+    queryFn: clientsApi.listClients,
+    enabled: canConfigure && isPlatformAdmin,
+    retry: false,
+  });
 
   const [editing, setEditing] = useState<AlarmRule | null>(null);
   const [creating, setCreating] = useState(false);
@@ -59,6 +94,8 @@ export function AlarmRulesAdmin(): JSX.Element {
     severity: "medium",
     classification: "",
     enabled: true,
+    // Chosen, never inferred: "" until a platform administrator picks one.
+    owner: me?.client_id != null ? String(me.client_id) : "",
   });
 
   const reset = () => {
@@ -88,6 +125,10 @@ export function AlarmRulesAdmin(): JSX.Element {
     severity: form.severity,
     classification: form.classification || null,
     enabled: form.enabled,
+    // Sent only by a platform administrator; the server ignores it otherwise.
+    ...(isPlatformAdmin && form.owner
+      ? { client_id: form.owner === PLATFORM_OWNER ? null : Number(form.owner) }
+      : {}),
   });
 
   const save = useMutation({
@@ -129,6 +170,38 @@ export function AlarmRulesAdmin(): JSX.Element {
   const digitalOnlyWarning =
     scopedType && DIGITAL_ONLY_TYPES.has(scopedType.code) && needsThreshold;
 
+  const clients = clientsQuery.data ?? [];
+  // Who the rule being written will belong to: undefined until chosen.
+  const draftOwner: number | null | undefined = editing
+    ? editing.client_id
+    : !isPlatformAdmin
+      ? (me?.client_id ?? undefined)
+      : form.owner === PLATFORM_OWNER
+        ? null
+        : form.owner
+          ? Number(form.owner)
+          : undefined;
+  const draftStanding =
+    form.code && draftOwner !== undefined
+      ? standingOf(
+          {
+            id: editing?.id ?? -1,
+            client_id: draftOwner,
+            client_code:
+              draftOwner === null
+                ? null
+                : (clients.find((client) => client.id === draftOwner)?.code ??
+                  me?.client_code ??
+                  null),
+            code: form.code,
+            scope_type: form.scope_type,
+            scope_id: form.scope_id ? Number(form.scope_id) : null,
+            scope_code: scopedType?.code ?? null,
+          },
+          rules,
+        )
+      : null;
+
   const beginEdit = (rule: AlarmRule) => {
     setEditing(rule);
     setCreating(false);
@@ -149,6 +222,7 @@ export function AlarmRulesAdmin(): JSX.Element {
       severity: rule.severity,
       classification: "",
       enabled: rule.enabled,
+      owner: rule.client_id === null ? PLATFORM_OWNER : String(rule.client_id),
     });
   };
 
@@ -156,14 +230,18 @@ export function AlarmRulesAdmin(): JSX.Element {
     {
       key: "code",
       header: "Rule",
-      render: (rule) => (
-        <span
-          className={rule.client_id === null ? "text-ink-muted" : "text-ink"}
-        >
-          <span className="font-medium">{rule.code}</span>
-          <span className="ml-2">{rule.name}</span>
-        </span>
-      ),
+      render: (rule) => {
+        const standing = standingOf(rule, rules);
+        return (
+          <span
+            className={rule.client_id === null ? "text-ink-muted" : "text-ink"}
+          >
+            <span className="font-medium">{rule.code}</span>
+            <span className="ml-2">{rule.name}</span>
+            {standing ? <StandingNote standing={standing} /> : null}
+          </span>
+        );
+      },
       sortValue: (rule) => rule.code,
       filterValue: (rule) => `${rule.code} ${rule.name}`,
     },
@@ -175,28 +253,25 @@ export function AlarmRulesAdmin(): JSX.Element {
         rule.client_id === null ? (
           <Badge
             tone="neutral"
-            title="A platform default, inherited by every Client and read-only here. To change it, create a more specific rule — scope resolution prefers device → plant → device_type → global."
+            title="A platform default, inherited by every Client and read-only here. To change it, create a rule with the same code at the same scope or narrower — at the same scope the Client's own rule wins."
           >
             platform default
           </Badge>
         ) : (
-          <Badge tone="accent">this Client</Badge>
+          <Badge tone="accent">{rule.client_code ?? "this Client"}</Badge>
         ),
-      sortValue: (rule) => (rule.client_id === null ? "platform" : "client"),
+      sortValue: (rule) => rule.client_code ?? "",
+      filterValue: (rule) => rule.client_code ?? "platform default",
     },
     {
       key: "scope",
       header: "Scope",
-      width: "150px",
+      width: "170px",
       render: (rule) => (
-        <span className="text-ink-muted">
-          {rule.scope_type}
-          {rule.device_type_code ? ` · ${rule.device_type_code}` : ""}
-        </span>
+        <span className="text-ink-muted">{scopeLabel(rule)}</span>
       ),
       sortValue: (rule) => rule.scope_type,
-      filterValue: (rule) =>
-        `${rule.scope_type} ${rule.device_type_code ?? ""}`,
+      filterValue: (rule) => scopeLabel(rule),
     },
     {
       key: "condition",
@@ -244,7 +319,11 @@ export function AlarmRulesAdmin(): JSX.Element {
         rule.client_id === null ? (
           <span
             className="text-[11px] text-ink-faint"
-            title="Platform defaults are read-only. Create a more specific rule to override one."
+            title={
+              isPlatformAdmin
+                ? "Platform defaults are seeded from domain/assumptions.py, and `cli seed` rewrites them — an edit made here would be undone. Change the file and re-seed."
+                : "Platform defaults are read-only. Create your own rule with the same code at the same scope or narrower to replace one."
+            }
           >
             read-only
           </span>
@@ -262,8 +341,9 @@ export function AlarmRulesAdmin(): JSX.Element {
         <div>
           <h1 className="page-title">Alarm Rules</h1>
           <p className="mt-1.5 text-sm text-ink-muted">
-            The most specific matching rule wins: device → plant → device type →
-            global.
+            For each code, the narrowest rule wins: device → plant → device
+            type → client → global. At the same scope, a Client's own rule beats
+            the platform default.
           </p>
         </div>
         <Button
@@ -282,8 +362,10 @@ export function AlarmRulesAdmin(): JSX.Element {
           title={editing ? `Edit ${editing.code}` : "New rule"}
           subtitle={
             editing
-              ? "Editing a Client-owned rule."
-              : "Created under this Client. A platform default can never be created or edited from here."
+              ? `Editing a rule owned by ${editing.client_code ?? "this Client"}.`
+              : isPlatformAdmin
+                ? "Choose who owns it: one Client, or a platform default every Client inherits."
+                : `Created under ${me?.client_code ?? "this Client"}, for its Devices only.`
           }
           actions={
             <Button variant="ghost" onClick={reset}>
@@ -292,6 +374,31 @@ export function AlarmRulesAdmin(): JSX.Element {
           }
         >
           <div className="grid max-w-4xl grid-cols-2 gap-3 lg:grid-cols-3">
+            {isPlatformAdmin && !editing ? (
+              <Field
+                label="Owner"
+                required
+                hint="A platform default reaches every Client; a Client's rule reaches only its Devices."
+              >
+                <select
+                  value={form.owner}
+                  onChange={(event) =>
+                    setForm({ ...form, owner: event.target.value })
+                  }
+                  className={inputClass}
+                >
+                  <option value="">Choose…</option>
+                  <option value={PLATFORM_OWNER}>
+                    Platform default (every Client)
+                  </option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.code} — {client.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
             <Field label="Code" required>
               <input
                 value={form.code}
@@ -502,6 +609,18 @@ export function AlarmRulesAdmin(): JSX.Element {
             </div>
           ) : null}
 
+          {draftStanding ? (
+            <div
+              className={`mt-3 rounded border px-3 py-2 text-[11px] leading-relaxed ${
+                draftStanding.tone === "warn"
+                  ? "border-warn/30 bg-warn/10 text-ink"
+                  : "border-line bg-surface text-ink-muted"
+              }`}
+            >
+              {draftStanding.text}
+            </div>
+          ) : null}
+
           {error ? (
             <p className="mt-3 rounded border border-bad/30 bg-bad/10 px-3 py-2 text-xs text-bad">
               {error}
@@ -511,7 +630,12 @@ export function AlarmRulesAdmin(): JSX.Element {
           <Button
             variant="primary"
             className="mt-4"
-            disabled={!form.code || !form.name || save.isPending}
+            disabled={
+              !form.code ||
+              !form.name ||
+              (isPlatformAdmin && !editing && !form.owner) ||
+              save.isPending
+            }
             onClick={() => save.mutate()}
           >
             {save.isPending

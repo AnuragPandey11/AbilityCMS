@@ -10,10 +10,14 @@ from solarcms.domain.alarm_logic import (
     Action,
     AlarmRuleSpec,
     RuleState,
+    RuleTarget,
+    applies_to,
     evaluate,
     has_cleared,
     is_breaching,
     resolve_rules,
+    restored_state,
+    rules_for,
     should_escalate,
     underperforming_devices,
 )
@@ -132,6 +136,127 @@ class TestScopeResolution:
     def test_distinct_codes_all_survive(self) -> None:
         rules = [rule(rule_id=1, code="A"), rule(rule_id=2, code="B")]
         assert len(resolve_rules(rules)) == 2
+
+    @pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+    def test_at_the_same_scope_the_clients_own_rule_wins(
+        self, order: tuple[int, int]
+    ) -> None:
+        # The tie used to go to whichever row Postgres returned first, and a
+        # `cli seed` rewriting the default could reverse it. Both orders now
+        # give the same answer.
+        platform = rule(rule_id=10, code="INV_OVERTEMP", scope_type="device_type",
+                        scope_id=3, threshold=75.0)
+        own = rule(rule_id=50, code="INV_OVERTEMP", scope_type="device_type",
+                   scope_id=3, threshold=70.0, client_id=1)
+        pair = [platform, own]
+        resolved = resolve_rules([pair[order[0]], pair[order[1]]])
+        assert [r.rule_id for r in resolved] == [50]
+
+    def test_a_narrower_default_beats_a_wider_client_rule(self) -> None:
+        # Scope is compared first: ownership only breaks a tie. A Client rule
+        # for everything it owns does not replace a default about Inverters.
+        platform = rule(rule_id=10, code="INV_OVERTEMP", scope_type="device_type",
+                        scope_id=3)
+        own = rule(rule_id=50, code="INV_OVERTEMP", scope_type="client",
+                   scope_id=1, client_id=1)
+        assert resolve_rules([own, platform])[0].rule_id == 10
+
+    def test_a_narrower_client_rule_beats_the_default(self) -> None:
+        platform = rule(rule_id=10, code="INV_OVERTEMP", scope_type="device_type",
+                        scope_id=3)
+        own = rule(rule_id=50, code="INV_OVERTEMP", scope_type="plant",
+                   scope_id=2, client_id=1)
+        assert resolve_rules([platform, own])[0].rule_id == 50
+
+
+class TestRuleReach:
+    """Which rules reach a target at all, before precedence. SUNFIELD (1) owns
+    SF_NORTH (1) and SF_SOUTH (2); ROOFCO (2) owns WH1 (3); INVERTER is Type 3."""
+
+    SF_SOUTH_INVERTER = RuleTarget(client_id=1, plant_id=2, device_id=40,
+                                   device_type_id=3)
+    WH1_INVERTER = RuleTarget(client_id=2, plant_id=3, device_id=5, device_type_id=3)
+
+    def test_another_clients_rule_never_reaches(self) -> None:
+        sunfield = rule(code="INV_OVERTEMP", scope_type="device_type", scope_id=3,
+                        client_id=1)
+        assert applies_to(sunfield, self.SF_SOUTH_INVERTER)
+        assert not applies_to(sunfield, self.WH1_INVERTER)
+
+    def test_a_platform_default_reaches_every_client(self) -> None:
+        default = rule(code="INV_OVERTEMP", scope_type="device_type", scope_id=3)
+        assert applies_to(default, self.SF_SOUTH_INVERTER)
+        assert applies_to(default, self.WH1_INVERTER)
+
+    @pytest.mark.parametrize(
+        ("scope_type", "scope_id", "expected"),
+        [("global", None, True), ("client", 1, True), ("client", 2, False),
+         ("plant", 2, True), ("plant", 1, False), ("device_type", 3, True),
+         ("device_type", 6, False), ("device", 40, True), ("device", 41, False)],
+    )
+    def test_each_scope_matches_only_its_target(
+        self, scope_type: str, scope_id: int | None, expected: bool
+    ) -> None:
+        candidate = rule(scope_type=scope_type, scope_id=scope_id)
+        assert applies_to(candidate, self.SF_SOUTH_INVERTER) is expected
+
+    def test_a_subject_without_a_device_matches_no_device_scoped_rule(self) -> None:
+        # A Collector or a whole Plant has no Device and no Type.
+        collector = RuleTarget(client_id=1, plant_id=2)
+        assert not applies_to(rule(scope_type="device_type", scope_id=3), collector)
+        assert applies_to(rule(scope_type="plant", scope_id=2), collector)
+
+    def test_the_worked_example(self) -> None:
+        # The flow agreed on 25 Sep 2026, end to end: the platform's 75 for all
+        # Inverters, SUNFIELD's 70 for all of its Inverters, and SUNFIELD's 78
+        # for SF_SOUTH alone.
+        rules = [
+            rule(rule_id=10, code="INV_OVERTEMP", scope_type="device_type",
+                 scope_id=3, threshold=75.0),
+            rule(rule_id=50, code="INV_OVERTEMP", scope_type="device_type",
+                 scope_id=3, threshold=70.0, client_id=1),
+            rule(rule_id=51, code="INV_OVERTEMP", scope_type="plant",
+                 scope_id=2, threshold=78.0, client_id=1),
+        ]
+        sf_north = RuleTarget(client_id=1, plant_id=1, device_id=30, device_type_id=3)
+        assert rules_for(rules, sf_north)[0].threshold == 70.0
+        assert rules_for(rules, self.SF_SOUTH_INVERTER)[0].threshold == 78.0
+        assert rules_for(rules, self.WH1_INVERTER)[0].threshold == 75.0
+
+
+class TestRestoredState:
+    """The worker keeps state in memory; what it rebuilds from open Alarms."""
+
+    OPENED = NOW - timedelta(minutes=40)
+
+    def test_an_alarm_open_before_a_restart_can_still_clear(self) -> None:
+        # Before: an empty state after a restart meant "not open", and a value
+        # back to normal was "not breaching" — NO_CHANGE, for ever.
+        overtemp = rule(rule_id=9, code="INV_OVERTEMP", threshold=75.0)
+        state = restored_state([overtemp], {"INV_OVERTEMP": self.OPENED})
+        actions = evaluate(60.0, 0, [overtemp], state, NOW)
+        assert actions[0].action is Action.CLEAR
+
+    def test_a_restored_alarm_that_still_breaches_is_not_raised_again(self) -> None:
+        overtemp = rule(rule_id=9, code="INV_OVERTEMP", threshold=75.0)
+        state = restored_state([overtemp], {"INV_OVERTEMP": self.OPENED})
+        assert evaluate(80.0, 0, [overtemp], state, NOW)[0].action is Action.NO_CHANGE
+
+    def test_the_rule_now_in_force_inherits_an_alarm_raised_under_another(
+        self,
+    ) -> None:
+        # The platform default raised it; SUNFIELD's rule with the same code has
+        # since taken over. Matched by code, so SUNFIELD's rule treats it as its
+        # own: no second Alarm while it breaches, and a CLEAR when it stops.
+        sunfield = rule(rule_id=50, code="INV_OVERTEMP", threshold=70.0, client_id=1)
+        state = restored_state([sunfield], {"INV_OVERTEMP": self.OPENED})
+        assert state[50].is_open
+        assert evaluate(80.0, 0, [sunfield], state, NOW)[0].action is Action.NO_CHANGE
+        assert evaluate(60.0, 0, [sunfield], state, NOW)[0].action is Action.CLEAR
+
+    def test_only_codes_with_an_open_alarm_are_restored(self) -> None:
+        rules = [rule(rule_id=9, code="INV_OVERTEMP"), rule(rule_id=10, code="INV_DC_OV")]
+        assert set(restored_state(rules, {"INV_OVERTEMP": self.OPENED})) == {9}
 
 
 class TestEscalationGating:

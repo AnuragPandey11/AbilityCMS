@@ -52,6 +52,21 @@ class AlarmRuleSpec:
     scope_type: str = "global"
     scope_id: int | None = None
     classification: str | None = None
+    # The owner. None is a platform default, inherited by every Client; an id is
+    # the one Client the rule belongs to, and no other Client's Devices see it.
+    client_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RuleTarget:
+    """What a rule is being resolved for: one Device, or a Device-less subject
+    (a Collector, a Plant) that still belongs to a Client and usually a Plant.
+    A field left None simply matches no rule scoped by it."""
+
+    client_id: int
+    plant_id: int | None = None
+    device_id: int | None = None
+    device_type_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,21 +102,89 @@ SCOPE_SPECIFICITY: dict[str, int] = {
 }
 
 
+def applies_to(rule: AlarmRuleSpec, target: RuleTarget) -> bool:
+    """Whether `rule` reaches `target` at all, before any precedence.
+
+    Two tests, both required: the owner (a platform default reaches every
+    Client, a Client's rule reaches only that Client) and the scope.
+    """
+    if rule.client_id is not None and rule.client_id != target.client_id:
+        return False
+    match rule.scope_type:
+        case "global":
+            return True
+        case "client":
+            return rule.scope_id == target.client_id
+        case "plant":
+            return target.plant_id is not None and rule.scope_id == target.plant_id
+        case "device_type":
+            return (target.device_type_id is not None
+                    and rule.scope_id == target.device_type_id)
+        case "device":
+            return target.device_id is not None and rule.scope_id == target.device_id
+        case _:
+            return False
+
+
+def precedence(rule: AlarmRuleSpec) -> tuple[int, int, int]:
+    """Lower wins: scope first, then owner, then id.
+
+    Scope decides what a rule is *about*, so it is compared first and a narrower
+    rule always beats a wider one whoever owns it. Only between two rules at the
+    same scope does the owner decide — the Client's own rule beats the platform
+    default, because the Client chose it deliberately (AGREED 25 Sep 2026). That
+    tie used to go to whichever row Postgres returned first, which a `cli seed`
+    rewriting the defaults could reverse. The id makes the order total, so no
+    input can ever again depend on row order.
+    """
+    return (
+        SCOPE_SPECIFICITY.get(rule.scope_type, 9),
+        0 if rule.client_id is not None else 1,
+        rule.rule_id,
+    )
+
+
 def resolve_rules(rules: list[AlarmRuleSpec]) -> list[AlarmRuleSpec]:
-    """Most-specific-wins per rule code: device → plant → device_type → client →
-    global. A rule with a global scope is a platform default, inherited until
-    something more specific overrides it — so a Client tuning one threshold does
-    not have to restate the whole catalogue.
+    """One winner per rule code, by `precedence`: device → plant → device_type →
+    client → global, and at the same scope a Client's rule over the platform's.
+
+    A platform default is inherited until something wins over it — so a Client
+    tuning one threshold does not have to restate the whole catalogue. The
+    caller passes only rules that `applies_to` the target; this compares them.
     """
     best: dict[str, AlarmRuleSpec] = {}
     for rule in rules:
         incumbent = best.get(rule.code)
-        if incumbent is None or (
-            SCOPE_SPECIFICITY.get(rule.scope_type, 9)
-            < SCOPE_SPECIFICITY.get(incumbent.scope_type, 9)
-        ):
+        if incumbent is None or precedence(rule) < precedence(incumbent):
             best[rule.code] = rule
     return sorted(best.values(), key=lambda r: r.code)
+
+
+def rules_for(rules: list[AlarmRuleSpec], target: RuleTarget) -> list[AlarmRuleSpec]:
+    """The rules in force for one target: those that reach it, then one per code."""
+    return resolve_rules([rule for rule in rules if applies_to(rule, target)])
+
+
+def restored_state(
+    rules: list[AlarmRuleSpec], open_since: dict[str, datetime]
+) -> dict[int, RuleState]:
+    """The evaluation state implied by the Alarms already open on one Device.
+
+    `open_since` maps a rule code to when its open Alarm was raised. The worker
+    holds state in memory, so a restart used to forget every open Alarm — and
+    since only an open state is ever tested for clearing, an Alarm whose
+    condition then went away stayed active until it happened to breach again.
+
+    Matched by **code**, never by rule id: an Alarm raised under the platform
+    default is the same fault after a Client's rule with that code takes over,
+    and it is the one that must close. Matching by id left it open for ever and
+    let the new rule raise a second Alarm beside it.
+    """
+    return {
+        rule.rule_id: RuleState(first_breach_at=open_since[rule.code], is_open=True)
+        for rule in rules
+        if rule.code in open_since
+    }
 
 
 def is_breaching(rule: AlarmRuleSpec, value: float) -> bool:

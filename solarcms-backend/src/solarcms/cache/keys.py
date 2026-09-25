@@ -23,6 +23,16 @@ LIVE_DEVICE_TTL_S: Final = 900
 SEEN_DEVICE: Final = "seen:device:{device_id}"
 SEEN_DEVICE_TTL_S: Final = LIVE_DEVICE_TTL_S
 
+# The Plant KPI Device's figures for its day — start, stop, today's peak and its
+# time. Kept for the day, not for the live hash's 15 minutes: each is a comparison
+# against everything since the Plant's day began, and losing them to a quiet
+# spell made the scheduler record a fresh "start" and a new, lower "peak" after
+# every silence (measured 24 Sep 2026: six starts in one day, and a day peaking at
+# 3,468 kW carried to YESTERDAY as 1,743). Two days, so a rollover the scheduler
+# slept through can still be completed; rebuilt from `readings` if Redis loses it.
+PLANT_KPI_DAY: Final = "plant_kpi:day:{device_id}"
+PLANT_KPI_DAY_TTL_S: Final = 2 * 86_400
+
 # Plant and Portfolio rollups. Short TTL: these are recomputed cheaply and a stale
 # KPI tile is worse than a missing one.
 LIVE_PLANT: Final = "live:plant:{plant_id}"
@@ -76,6 +86,10 @@ def live_device(device_id: int) -> str:
 
 def seen_device(device_id: int) -> str:
     return SEEN_DEVICE.format(device_id=device_id)
+
+
+def plant_kpi_day(device_id: int) -> str:
+    return PLANT_KPI_DAY.format(device_id=device_id)
 
 
 def live_plant(plant_id: int) -> str:

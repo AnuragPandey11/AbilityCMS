@@ -286,9 +286,11 @@ function operatingTile(
   const rule =
     `Running once this Inverter's AC output rises above ${operating.start_above} ${operating.unit}, ` +
     `until it falls back to ${operating.stop_at_or_below} ${operating.unit} — the Plant's own rule.`;
-  const since = today.start_at
-    ? `${today.start_observed ? "since" : "by"} ${clock(today.start_at, timeZone)}`
-    : null;
+  const since = today.start_carried_over
+    ? "since yesterday"
+    : today.start_at
+      ? `${today.start_observed ? "since" : "first heard"} ${formatTime(today.start_at, timeZone)}`
+      : null;
   switch (operating.state) {
     case "running":
       return (

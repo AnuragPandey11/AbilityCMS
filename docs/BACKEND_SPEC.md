@@ -568,10 +568,12 @@ def evaluate(
     """Pure. Returns OPEN / CLEAR / NO_CHANGE per rule."""
 ```
 
-- **Rule scope resolution, most specific wins:** device → plant → device_type → global. A `client_id IS NULL` rule is a platform default inherited by every Client.
+- **Rule scope resolution, most specific wins:** device → plant → device_type → client → global. A `client_id IS NULL` rule is a platform default inherited by every Client. ⚠ **At the same scope, the Client's own rule beats the platform default** — AGREED 25 Sep 2026 / BUILT (MASTER §6.4, v3.4). `domain/alarm_logic.applies_to(rule, RuleTarget)` decides whether a rule reaches a target (owner, then scope) and `precedence` orders the survivors as `(scope rank, platform-after-Client, id)`; the id makes the order total, so nothing depends on row order again. The worker and the health sweep both resolve through `rules_for`, so there is one definition of which rule applies. ⚠ The worker still caches each Device's rules for its lifetime: a rule created or edited takes effect on the next restart of `solarcms.workers.alarm`. The health sweep re-reads its absence rules every pass and needs no restart.
 - **Debounce:** the condition must hold for `duration_s` before opening. Stops flapping.
 - **Hysteresis:** clear at `clear_threshold` if set, otherwise at `threshold`.
-- **Deduplicate** via the partial unique index on `(rule_id, device_id) WHERE state IN ('active','acknowledged')`. A fault persisting six hours is one row.
+- **Deduplicate** per rule **code** per Device, not per rule id — when a Client's rule replaces a platform default the fault is the same, and so is its Alarm. BUILT 25 Sep 2026: a raise first checks for an open Alarm under the same code, a clear closes by code, and the partial unique index on `(rule_id, device_id) WHERE state IN ('active','acknowledged')` stays as the last line for a single rule. A fault persisting six hours is one row, and only a row the insert actually wrote is notified.
+- **Restart-safe.** The worker's per-(rule, device) state lives in memory, so it is restored from the open Alarms whenever a Device's rules are loaded (`restored_state`, matched by code). Without it a restart left every open Alarm unclearable.
+- ⚠ **Writes as `solarcms_scheduler`**, the role the health sweep raises and notifies under. It wrote as `solarcms_ingest` until 25 Sep 2026, which has no grant on `notification_subscriptions`; since notification shares the raise's transaction, every threshold and Digital Input Alarm rolled back — none had ever been written.
 
 ### 10.2 Health sweeper
 
