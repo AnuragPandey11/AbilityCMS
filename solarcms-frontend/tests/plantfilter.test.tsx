@@ -7,7 +7,7 @@
  * pauses, because each write switches the Plant and fires its queries.
  */
 
-import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Me, MePlant, PlantListItem } from "@/api/schemas";
 
@@ -186,7 +186,7 @@ describe("PlantFilterBar", () => {
   it("writes the search only once typing pauses", () => {
     vi.useFakeTimers();
     render(<PlantFilterBar />);
-    const input = screen.getByRole("textbox", { name: /search plants/i });
+    const input = screen.getByRole("combobox", { name: /search plants/i });
 
     fireEvent.change(input, { target: { value: "r" } });
     act(() => vi.advanceTimersByTime(PLANT_SEARCH_DEBOUNCE_MS - 50));
@@ -202,7 +202,7 @@ describe("PlantFilterBar", () => {
   it("clears at once, and a stale pending value does not come back", () => {
     vi.useFakeTimers();
     render(<PlantFilterBar />);
-    const input = screen.getByRole("textbox", { name: /search plants/i });
+    const input = screen.getByRole("combobox", { name: /search plants/i });
     fireEvent.change(input, { target: { value: "roofco" } });
     act(() => vi.advanceTimersByTime(PLANT_SEARCH_DEBOUNCE_MS));
     expect(useSelection.getState().plantSearch).toBe("roofco");
@@ -214,13 +214,82 @@ describe("PlantFilterBar", () => {
     expect(input).toHaveValue("");
   });
 
-  it("says so when nothing matches", () => {
+  it("says so when nothing matches — in the list at once, on the page once typing pauses", () => {
     vi.useFakeTimers();
     render(<PlantFilterBar />);
-    fireEvent.change(screen.getByRole("textbox", { name: /search plants/i }), {
+    fireEvent.change(screen.getByRole("combobox", { name: /search plants/i }), {
       target: { value: "atlantis" },
     });
+    expect(screen.getAllByText(/No Plant or Client matches “atlantis”/)).toHaveLength(1);
     act(() => vi.advanceTimersByTime(PLANT_SEARCH_DEBOUNCE_MS));
-    expect(screen.getByText(/No Plant or Client matches “atlantis”/)).toBeInTheDocument();
+    expect(screen.getAllByText(/No Plant or Client matches “atlantis”/)).toHaveLength(2);
+  });
+});
+
+describe("PlantFilterBar suggestions", () => {
+  const input = () => screen.getByRole("combobox", { name: /search plants/i });
+  // Scoped to the list: the Client <select>'s own <option>s share the role.
+  const suggestions = () => within(screen.getByRole("listbox")).getAllByRole("option");
+  const options = () => suggestions().map((option) => option.textContent);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useSelection.getState().setPlantId(3);
+  });
+
+  it("suggests on the first letter, and on each letter after, with no wait", () => {
+    render(<PlantFilterBar />);
+    fireEvent.change(input(), { target: { value: "s" } });
+    // Both SUNFIELD Plants, and not the ROOFCO ones that merely contain an s.
+    expect(options()).toEqual([
+      expect.stringContaining("SF_NORTH"),
+      expect.stringContaining("SF_SOUTH"),
+    ]);
+    fireEvent.change(input(), { target: { value: "so" } });
+    expect(options()).toEqual([expect.stringContaining("SF_SOUTH")]);
+    // The page's narrowing has not moved yet: that part waits for a pause.
+    expect(useSelection.getState().plantSearch).toBe("");
+  });
+
+  it("takes the best match on Enter, typo and all, and commits at once", () => {
+    render(<PlantFilterBar />);
+    fireEvent.change(input(), { target: { value: "sf-norht" } });
+    expect(input()).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(input(), { key: "Enter" });
+
+    expect(input()).toHaveValue("SF_NORTH");
+    expect(input()).toHaveAttribute("aria-expanded", "false");
+    expect(useSelection.getState().plantSearch).toBe("SF_NORTH");
+    expect(useSelection.getState().plantId).toBe(1);
+  });
+
+  it("moves through the list with the arrow keys", () => {
+    render(<PlantFilterBar />);
+    fireEvent.change(input(), { target: { value: "s" } });
+    const [first, second] = suggestions();
+    expect(input()).toHaveAttribute("aria-activedescendant", first.id);
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    expect(input()).toHaveAttribute("aria-activedescendant", second.id);
+    expect(second).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(useSelection.getState().plantId).toBe(2);
+  });
+
+  it("chooses a suggestion on click", () => {
+    render(<PlantFilterBar />);
+    fireEvent.change(input(), { target: { value: "warehouse" } });
+    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: /WH2/ }));
+    expect(input()).toHaveValue("WH2");
+    expect(useSelection.getState().plantId).toBe(4);
+  });
+
+  it("closes on the first Escape and clears on the second", () => {
+    render(<PlantFilterBar />);
+    fireEvent.change(input(), { target: { value: "roofco" } });
+    fireEvent.keyDown(input(), { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(input()).toHaveValue("roofco");
+    fireEvent.keyDown(input(), { key: "Escape" });
+    expect(input()).toHaveValue("");
   });
 });

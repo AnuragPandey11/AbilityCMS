@@ -23,6 +23,7 @@
 import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "@/components/icons";
 import { IconChevronRight } from "@/components/icons";
+import { iconWell } from "@/components/icons/wells";
 
 export interface SummaryFigure {
   label: string;
@@ -74,9 +75,9 @@ export function SummaryCard({
     <>
       <div className="flex items-center gap-2.5">
         {/*
-          One hue for every chip — the brand accent — unless the caller has
-          already made a judgement (open Alarms, Devices offline). A tint per
-          card would sit beside the figures and be read as a verdict on them.
+          The icon's own hue (`icons/wells.ts`), which names the quantity,
+          unless the caller has already made a judgement (open Alarms,
+          Devices offline) — then the verdict's hue replaces it.
         */}
         <span
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-control ${
@@ -84,7 +85,7 @@ export function SummaryCard({
               ? "bg-bad/15 text-bad"
               : accent === "warn"
                 ? "bg-warn/15 text-warn"
-                : "icon-well"
+                : iconWell(Icon)
           }`}
         >
           <Icon size={17} />

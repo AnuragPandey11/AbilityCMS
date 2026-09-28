@@ -36,8 +36,9 @@
  * The reference paints efficiency green and energy amber. Here those are
  * status colours, so a tile in them would read as a verdict nobody made
  * (design rule 2, Guardrail 34). Identity is the accent. The figure the
- * comparison chart is sorted on takes the accent too, so the eye can go from a
- * bar to its card and find the same number. The frame lights up only for bad
+ * comparison chart is sorted on takes the chart's colour (`chart`, blue in
+ * light), as does the load meter, so the eye can go from a bar to its card and
+ * find the same number. The frame lights up only for bad
  * news, and that news is about communication, never equipment (Guardrail 16).
  */
 
@@ -189,11 +190,11 @@ function loadOf(
   return { load: value / rated, reason: null };
 }
 
-/** A small accent lamp beside the figure the comparison chart is sorted on. */
+/** A small lamp in the chart's colour beside the figure the chart is sorted on. */
 function ComparedDot(): JSX.Element {
   return (
     <span
-      className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+      className="h-1.5 w-1.5 shrink-0 rounded-full bg-chart"
       title="The comparison chart is sorted on this figure."
     />
   );
@@ -229,14 +230,14 @@ function Figure({
     >
       <span
         className={`figure truncate font-bold leading-none ${size} ${
-          highlighted ? "text-accent" : "text-ink"
+          highlighted ? "text-chart" : "text-ink"
         }`}
       >
         {headline.text}
       </span>
       {unit ? (
         <span
-          className={`shrink-0 text-sm font-semibold ${highlighted ? "text-accent" : "text-ink-muted"}`}
+          className={`shrink-0 text-sm font-semibold ${highlighted ? "text-chart" : "text-ink-muted"}`}
         >
           {unit}
         </span>
@@ -299,7 +300,7 @@ function FigureTile({
             footValue === undefined
               ? "text-ink-faint"
               : footHighlighted
-                ? "text-accent"
+                ? "text-chart"
                 : "text-ink-muted"
           }`}
         >
@@ -450,7 +451,7 @@ export function InverterCard({
           {load !== null ? (
             <span
               className={`shrink-0 rounded-md border px-2 py-0.5 text-xs font-semibold ${
-                over ? "border-warn/50 bg-warn/10 text-warn" : "border-accent/35 bg-accent/10 text-accent"
+                over ? "border-warn/50 bg-warn/10 text-warn" : "border-chart/35 bg-chart/10 text-chart-strong"
               }`}
               title={
                 over
@@ -468,7 +469,7 @@ export function InverterCard({
             <span
               key={index}
               className={`h-3 flex-1 rounded-[2px] ${
-                index < filled ? (over ? "bg-warn" : "bg-accent") : "bg-line/70"
+                index < filled ? (over ? "bg-warn" : "bg-chart") : "bg-line/70"
               }`}
             />
           ))}
@@ -548,7 +549,7 @@ export function InverterCard({
                       value === undefined
                         ? "text-ink-faint"
                         : highlighted
-                          ? "text-accent"
+                          ? "text-chart"
                           : "text-ink"
                     }`}
                     title={

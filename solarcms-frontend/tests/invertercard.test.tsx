@@ -7,7 +7,7 @@
  *    rating it shows no load and says why. It never estimates a rating.
  * 2. **Units are never converted.** A power Tag in MW gets no load rather than
  *    a silent factor of 1000 against a kW rating.
- * 3. **Over 100% is flagged, not filled.** A full accent meter would read as a
+ * 3. **Over 100% is flagged, not filled.** A full meter would read as a
  *    perfect result (Guardrail 33).
  * 4. **Silence is "—", never 0**, and the meter stays empty for it.
  * 5. **The compared figure stays on the card**, so the "#n" beside the code
@@ -98,7 +98,7 @@ function renderCard({
     />,
   );
   const segments = [...view.container.querySelectorAll("span.h-3.flex-1")];
-  const filled = (hue: "accent" | "warn") =>
+  const filled = (hue: "chart" | "warn") =>
     segments.filter((segment) => segment.classList.contains(`bg-${hue}`)).length;
   return { ...view, segments, filled };
 }
@@ -109,7 +109,7 @@ describe("InverterCard", () => {
     expect(screen.getByText("50.0% load")).toBeTruthy();
     expect(screen.getByText("Rated 400.0 kW")).toBeTruthy();
     expect(segments).toHaveLength(24);
-    expect(filled("accent")).toBe(12);
+    expect(filled("chart")).toBe(12);
     // The scale is the rating in quarters, never a guessed full-scale.
     expect(screen.getByText("400 kW")).toBeTruthy();
     expect(screen.getByText("100 kW")).toBeTruthy();
@@ -121,7 +121,7 @@ describe("InverterCard", () => {
     expect(badge.className).toContain("text-warn");
     expect(badge.getAttribute("title")).toMatch(/recorded capacity is wrong/);
     expect(filled("warn")).toBe(24);
-    expect(filled("accent")).toBe(0);
+    expect(filled("chart")).toBe(0);
   });
 
   it("shows no load, and says why, when no rating is recorded", () => {
@@ -129,7 +129,7 @@ describe("InverterCard", () => {
     expect(screen.queryByText(/% load/)).toBeNull();
     expect(screen.getByText("No rating recorded")).toBeTruthy();
     expect(screen.getByText("Record a rating in Tag Mapping to show load")).toBeTruthy();
-    expect(filled("accent")).toBe(0);
+    expect(filled("chart")).toBe(0);
     // The output itself is still shown: only the ratio needs the rating.
     expect(screen.getByText("200.0")).toBeTruthy();
   });
@@ -144,7 +144,7 @@ describe("InverterCard", () => {
   it("renders silence as a dash with an empty meter, never zero", () => {
     const { filled } = renderCard({ values: {} });
     expect(screen.queryByText(/% load/)).toBeNull();
-    expect(filled("accent")).toBe(0);
+    expect(filled("chart")).toBe(0);
     expect(screen.queryByText("0.0")).toBeNull();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
@@ -160,7 +160,7 @@ describe("InverterCard", () => {
     // FREQUENCY is the fourth remaining column, so it would normally be left off.
     renderCard({ values: { "1": 200, "8": 50.01 }, highlightTagId: 8 });
     const figure = screen.getByText("50.01 Hz");
-    expect(figure.className).toContain("text-accent");
+    expect(figure.className).toContain("text-chart");
     expect(screen.queryByText("Device Temperature")).toBeNull();
   });
 

@@ -88,7 +88,7 @@ export function SeriesSwatch({ line, color }: { line: SeriesLine; color: string 
 
 /** Colour of a palette slot, resolved at render so it follows the theme. */
 export function slotColor(slot: number): string {
-  return seriesPalette()[slot] ?? token("accent");
+  return seriesPalette()[slot] ?? token("chart-primary");
 }
 
 /** Width of an axis gutter for its widest tick label. */
@@ -310,8 +310,8 @@ export function PowerComparisonChart({
         bottom: 2,
         borderColor: "transparent",
         backgroundColor: tokenAlpha("chart-grid", 0.45),
-        fillerColor: tokenAlpha("accent", 0.12),
-        handleStyle: { color: token("accent"), borderColor: token("accent") },
+        fillerColor: tokenAlpha("chart-primary", 0.12),
+        handleStyle: { color: token("chart-primary"), borderColor: token("chart-primary") },
         moveHandleStyle: { color: token("chart-grid") },
         dataBackground: {
           lineStyle: { color: tokenAlpha("ink-faint", 0.5), width: 1 },

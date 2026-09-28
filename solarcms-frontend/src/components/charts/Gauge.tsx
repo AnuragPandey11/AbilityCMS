@@ -41,9 +41,10 @@ function GaugeCanvas({
   const percent = Math.max(0, Math.min(100, value * 100));
   // Banding thresholds are presentation, not a client-confirmed judgement about
   // a good PR — the figure itself carries the caveat (§4.3). An unbanded gauge
-  // wears the accent: it states a figure and makes no judgement about it.
+  // wears the one-series chart colour: it states a figure and makes no
+  // judgement about it.
   const colour = !banded
-    ? token("accent")
+    ? token("chart-primary")
     : percent >= 80
       ? token("ok")
       : percent >= 60

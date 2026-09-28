@@ -36,6 +36,12 @@ export default {
           strong: token("accent-strong"),
           soft: token("accent-soft"),
         },
+        // One series, or one quantity drawn: blue in light, the accent in
+        // dark (see `index.css`). For data marks only — selection is `accent`.
+        chart: {
+          DEFAULT: token("chart-primary"),
+          strong: token("chart-primary-strong"),
+        },
         // Text on an accent fill: white in light, navy in dark, where the
         // accent is light enough that white on it would be 2.2:1.
         "on-accent": token("on-accent"),

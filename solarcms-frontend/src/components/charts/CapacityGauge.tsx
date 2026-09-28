@@ -6,7 +6,7 @@
  * `Gauge` draws a *ratio the backend computed* (PR, CUF, availability) and can
  * band it ok/warn/bad. This draws a *measurement* against a *registered fact*,
  * and the arc is only the one divided by the other, so it states a proportion
- * and makes no judgement — accent only, never a status colour. A Plant at 40%
+ * and makes no judgement — the chart colour only, never a status colour. A Plant at 40%
  * of capacity at 09:00 is doing exactly what it should.
  *
  * ── Three ways it declines to draw an arc ───────────────────────────────────
@@ -56,7 +56,7 @@ function Arc({ fraction }: { fraction: number }): JSX.Element {
         max: 1,
         center: [WIDTH / 2, CENTRE_Y],
         radius: RADIUS,
-        progress: { show: true, width: BAND, itemStyle: { color: token("accent") } },
+        progress: { show: true, width: BAND, itemStyle: { color: token("chart-primary") } },
         axisLine: { lineStyle: { width: BAND, color: [[1, token("chart-grid")]] } },
         axisTick: { show: false },
         splitLine: { show: false },

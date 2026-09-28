@@ -9,6 +9,7 @@
  * The map is keyed by dashboard `code`, never by Plant (F-14, Guardrail 1).
  */
 
+import { useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/components/layout/LoginPage";
@@ -16,6 +17,7 @@ import { useAuth } from "@/auth/AuthProvider";
 import { useDashboards } from "@/auth/useDashboard";
 import { EmptyState, LoadingState } from "@/components/state";
 import { PlantFilterBar } from "@/components/layout/PlantFilterBar";
+import { FilterRowSlotProvider } from "@/components/layout/FilterRowSlot";
 
 import { PortfolioDashboard } from "@/dashboards/PortfolioDashboard";
 import { PlantsDashboard } from "@/dashboards/PlantsDashboard";
@@ -76,6 +78,24 @@ const PLANT_FILTERED_DASHBOARDS = new Set([
   "alarms",
 ]);
 
+/**
+ * The route's filter row, with a slot at its end that the page may fill with
+ * its own pickers (`FilterRowContent`), so Client, search, Plant and Period
+ * read as one line of filters.
+ */
+function PlantFilteredPage({ children }: { children: ReactNode }): JSX.Element {
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <PlantFilterBar />
+        <div ref={setSlot} className="flex flex-wrap items-center gap-x-4 gap-y-2 empty:hidden" />
+      </div>
+      <FilterRowSlotProvider value={slot}>{children}</FilterRowSlotProvider>
+    </div>
+  );
+}
+
 function DashboardRoute(): JSX.Element {
   const { code = "" } = useParams();
   const dashboards = useDashboards();
@@ -104,10 +124,9 @@ function DashboardRoute(): JSX.Element {
   }
   if (me?.platform_admin && PLANT_FILTERED_DASHBOARDS.has(code)) {
     return (
-      <div className="space-y-4">
-        <PlantFilterBar />
+      <PlantFilteredPage>
         <Component />
-      </div>
+      </PlantFilteredPage>
     );
   }
   return <Component />;

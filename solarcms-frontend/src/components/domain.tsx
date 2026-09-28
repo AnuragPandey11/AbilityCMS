@@ -358,8 +358,11 @@ export function PlantPicker({
   onChange: (plantId: number | null) => void;
   allowAll?: boolean;
   label?: ReactNode;
-  /** `lg` for a page's title band: the code in mono and colour beside the name. */
-  size?: "sm" | "lg";
+  /**
+   * `lg` for a page's title band: the code in mono and colour beside the name.
+   * `md` is the same face at a filter row's density.
+   */
+  size?: "sm" | "md" | "lg";
 }): JSX.Element {
   const options = (
     <>
@@ -376,14 +379,15 @@ export function PlantPicker({
       ))}
     </>
   );
-  if (size === "lg") {
+  if (size === "lg" || size === "md") {
     const current = plants.find((plant) => plant.id === value);
     return (
       <SelectBox
         label={label}
         value={value === null ? "" : String(value)}
         onChange={(next) => onChange(next === "" ? null : Number(next))}
-        className="min-w-[15rem]"
+        size={size === "md" ? "sm" : "md"}
+        className={size === "md" ? "min-w-[12rem]" : "min-w-[15rem]"}
         display={
           current ? (
             <>

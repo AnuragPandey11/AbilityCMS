@@ -11,6 +11,7 @@
 
 import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "@/components/icons";
+import { iconWell } from "@/components/icons/wells";
 import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 import { UNDEFINED_DISPLAY, formatHeadline } from "@/format/value";
@@ -26,17 +27,15 @@ import {
 export type TileTone = "accent" | "info" | "ok" | "warn" | "bad" | "violet" | "neutral";
 
 /**
- * The icon well. `accent` is a tile's identity — what it measures — and is the
- * brand hue for every tile alike; the icon, not a colour, says which tile it
- * is. `ok`/`warn`/`bad` are verdicts, for a tile whose caller has made one
- * (an Alarm count). `info` and `violet` were per-tile identity hues and now
- * render as the accent: a row of nine tiles in six colours read as nine
- * unrelated products.
+ * The icon well. `accent` is a tile's identity — what it measures — and its
+ * hue is the icon's (`icons/wells.ts`), so a bolt is yellow on every screen
+ * whichever tile carries it. `ok`/`warn`/`bad` are verdicts, for a tile whose
+ * caller has made one (an Alarm count), and replace the icon's hue. `info` and
+ * `violet` were per-tile identity hues chosen by the caller and now take the
+ * icon's hue like `accent`: a colour picked per tile made the same quantity a
+ * different colour on each screen.
  */
-const ICON_WELL: Record<TileTone, string> = {
-  accent: "icon-well",
-  info: "icon-well",
-  violet: "icon-well",
+const VERDICT_WELL: Partial<Record<TileTone, string>> = {
   ok: "bg-ok/10 text-ok ring-1 ring-inset ring-ok/20",
   warn: "bg-warn/10 text-warn ring-1 ring-inset ring-warn/25",
   bad: "bg-bad/10 text-bad ring-1 ring-inset ring-bad/25",
@@ -110,7 +109,7 @@ export function FleetTile({
       */}
       <div className="tile-label flex min-h-[2.25rem] items-center gap-2">
         <span
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${ICON_WELL[iconTone]}`}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${VERDICT_WELL[iconTone] ?? iconWell(Icon)}`}
         >
           <Icon size={16} />
         </span>
@@ -279,7 +278,7 @@ export function GenerationBars({
               <span className="relative flex h-8 items-center overflow-hidden rounded-lg bg-surface-sunken">
                 {share > 0 ? (
                   <span
-                    className="flex h-full items-center justify-end rounded-lg bg-accent px-2.5"
+                    className="flex h-full items-center justify-end rounded-lg bg-chart px-2.5"
                     style={{ width: `max(${share * 100}%, 1.75rem)` }}
                   >
                     {inside ? (

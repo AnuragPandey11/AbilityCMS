@@ -18,14 +18,14 @@ export function Sparkline({
   height = 36,
 }: {
   points: ReadingPoint[];
-  /** Defaults to the theme's accent; a caller may pass a series colour. */
+  /** Defaults to the one-series chart colour; a caller may pass a series colour. */
   color?: string;
   height?: number;
 }): JSX.Element {
   const { version: themeVersion } = useTheme();
   // Resolved here rather than as a default argument: a default is evaluated
   // against whichever theme was active at module load.
-  const stroke = color ?? token("accent");
+  const stroke = color ?? token("chart-primary");
   const data = points
     .filter((point) => isGoodQuality(point.quality) && point.value !== null)
     .map((point) => [point.bucket, point.value]);

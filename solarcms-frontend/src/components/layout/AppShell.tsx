@@ -10,7 +10,16 @@
  * left 166px for the page. A Single Line Diagram in 166px is not a diagram,
  * and the people most likely to open one on a phone are standing in the plant
  * looking for the box that has gone quiet. Below `lg` it becomes a slide-over
- * behind a menu button; from `lg` up nothing changes.
+ * behind a menu button.
+ *
+ * ── From `lg` up it can fold to an icon rail ────────────────────────────────
+ * 240px is a lot to give a menu on a laptop showing a Single Line Diagram, so
+ * the header's toggle narrows it to 72px of icons and remembers the choice per
+ * browser. The rail keeps everything that is not merely a label: the active
+ * row's marker, the open-Alarm count (see below — it matters most precisely
+ * when somebody has put the menu away), group breaks as rules, and Sign out.
+ * Labels become tooltips and stay the links' accessible names. Every rail class
+ * is `lg:`-prefixed, so the slide-over below `lg` always opens in full.
  *
  * ── The sidebar is exactly one viewport tall, and scrolls on its own ────────
  * It was a `lg:static` flex child, so it stretched to whatever the page beside
@@ -40,7 +49,8 @@ import { LiveIndicator } from "@/live/LiveIndicator";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { HeaderSlotProvider } from "@/components/layout/HeaderSlot";
 import { ThemeToggle } from "@/theme/ThemeToggle";
-import { IconLogout, IconMenu } from "@/components/icons";
+import { IconLogout, IconMenu, IconSidebar } from "@/components/icons";
+import { useSidebarCollapsed } from "@/state/useSidebarCollapsed";
 import {
   ADMIN_LINKS,
   DASHBOARD_ICONS,
@@ -48,21 +58,41 @@ import {
   groupDashboards,
 } from "./navigation";
 
-function navClass({ isActive }: { isActive: boolean }): string {
+function navClass(collapsed: boolean) {
   // The active row carries a left rail as well as a tint, so it stays
   // identifiable when the tint is close to a status colour. The sidebar is
   // navy in both themes, so every colour here is a `nav-*` token.
-  return `relative flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] font-medium transition ${
-    isActive
-      ? "bg-nav-accent/[0.14] text-nav-accent before:absolute before:inset-y-1.5 before:-left-2 before:w-[3px] before:rounded-full before:bg-nav-accent"
-      : "text-nav-muted hover:bg-nav-ink/[0.06] hover:text-nav-ink"
-  }`;
+  return ({ isActive }: { isActive: boolean }): string =>
+    `relative flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] font-medium transition ${
+      collapsed ? "lg:justify-center lg:px-0" : ""
+    } ${
+      isActive
+        ? "bg-nav-accent/[0.14] text-nav-accent before:absolute before:inset-y-1.5 before:-left-2 before:w-[3px] before:rounded-full before:bg-nav-accent"
+        : "text-nav-muted hover:bg-nav-ink/[0.06] hover:text-nav-ink"
+    }`;
 }
 
-function GroupHeading({ children }: { children: string }): JSX.Element {
+/** On the rail a label is a tooltip; `sr-only` keeps it the link's name. */
+function NavLabel({ collapsed, children }: { collapsed: boolean; children: string }): JSX.Element {
+  return <span className={`truncate ${collapsed ? "lg:sr-only" : ""}`}>{children}</span>;
+}
+
+function GroupHeading({
+  children,
+  collapsed,
+  leading,
+}: {
+  children: string;
+  collapsed: boolean;
+  /** The first group on the rail needs no rule above it. */
+  leading: boolean;
+}): JSX.Element {
   return (
     <div className="px-1 pb-1.5 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-nav-faint first:pt-1">
-      {children}
+      <span className={collapsed ? "lg:sr-only" : undefined}>{children}</span>
+      {collapsed && !leading ? (
+        <span aria-hidden className="mx-2 hidden border-t border-nav-line lg:block" />
+      ) : null}
     </div>
   );
 }
@@ -75,6 +105,7 @@ export function AppShell(): JSX.Element {
   // `has` is passed so the menu cannot offer a dashboard whose screen refuses.
   const groups = groupDashboards(dashboards, has);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { collapsed, toggle: toggleCollapsed } = useSidebarCollapsed();
   // State rather than a ref, so the page re-renders into the slot once it
   // exists. See `HeaderSlot` for why the first frame renders nothing.
   const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null);
@@ -84,6 +115,15 @@ export function AppShell(): JSX.Element {
   // badge that stays lit after that teaches people to stop looking at it.
   const alarmsQuery = useAlarms({ state: "active" });
   const openAlarms = alarmsQuery.data?.length ?? 0;
+
+  // A-1. The active Client is context, and switching resets everything. Named
+  // rather than numbered: "Client #2" tells someone their own company's row id
+  // and nothing else.
+  const clientLabel = `${
+    me?.client_name ??
+    me?.client_code ??
+    (me?.client_id != null ? `Client #${me.client_id}` : "no Client")
+  }${me?.platform_admin ? " · platform admin" : ""}`;
 
   // Navigating closes it. A drawer left open over the page you just asked for
   // is the single most irritating thing a mobile menu can do.
@@ -102,35 +142,58 @@ export function AppShell(): JSX.Element {
       ) : null}
 
       <aside
+        id="app-sidebar"
         className={`app-nav z-40 flex w-60 shrink-0 flex-col border-r border-nav-line transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
+          collapsed ? "lg:w-[4.5rem]" : ""
+        } ${
           menuOpen
             ? "fixed inset-y-0 left-0 translate-x-0"
             : "fixed inset-y-0 left-0 -translate-x-full lg:flex"
         }`}
       >
-        <div className="shrink-0 border-b border-nav-line px-4 py-4">
-          <BrandMark onNavy />
+        <div className={`shrink-0 border-b border-nav-line px-4 py-4 ${collapsed ? "lg:px-3" : ""}`}>
+          <div className={collapsed ? "lg:hidden" : undefined}>
+            <BrandMark onNavy />
+          </div>
+          {/* The same 44px as the full logo, so the rows below do not jump. */}
+          {collapsed ? (
+            <div className="hidden h-11 items-center justify-center lg:flex">
+              <BrandMark onNavy compact height={30} />
+            </div>
+          ) : null}
         </div>
 
         <nav className="flex-1 overflow-y-auto p-3">
           {dashboards.length === 0 ? (
-            <p className="px-3 py-2 text-xs leading-snug text-nav-faint">
+            <p className={`px-3 py-2 text-xs leading-snug text-nav-faint ${collapsed ? "lg:hidden" : ""}`}>
               No dashboards are assigned to this account. Dashboard access is granted
               explicitly by an administrator.
             </p>
           ) : (
-            groups.map((group) => (
+            groups.map((group, index) => (
               <div key={group.label}>
-                <GroupHeading>{group.label}</GroupHeading>
+                <GroupHeading collapsed={collapsed} leading={index === 0}>
+                  {group.label}
+                </GroupHeading>
                 {group.codes.map((code) => {
                   const Icon = DASHBOARD_ICONS[code] ?? DEFAULT_DASHBOARD_ICON;
+                  const label = dashboardLabel(code);
                   return (
-                    <NavLink key={code} to={`/d/${code}`} className={navClass}>
+                    <NavLink
+                      key={code}
+                      to={`/d/${code}`}
+                      className={navClass(collapsed)}
+                      title={collapsed ? label : undefined}
+                    >
                       <Icon size={17} />
-                      <span className="truncate">{dashboardLabel(code)}</span>
+                      <NavLabel collapsed={collapsed}>{label}</NavLabel>
                       {code === "alarms" && openAlarms > 0 ? (
+                        // On the rail it rides on the icon's corner: this count
+                        // is the reason to glance at a menu somebody put away.
                         <span
-                          className="ml-auto rounded-full bg-bad px-1.5 py-px text-[10px] font-semibold tabular-nums text-white"
+                          className={`ml-auto rounded-full bg-bad px-1.5 py-px text-[10px] font-semibold tabular-nums text-white ${
+                            collapsed ? "lg:absolute lg:right-1 lg:top-0.5 lg:ml-0 lg:px-1 lg:ring-2 lg:ring-nav" : ""
+                          }`}
                           title={`${openAlarms} Alarm(s) open and not yet acknowledged`}
                         >
                           {openAlarms}
@@ -145,11 +208,18 @@ export function AppShell(): JSX.Element {
 
           {adminLinks.length > 0 ? (
             <>
-              <GroupHeading>Administration</GroupHeading>
+              <GroupHeading collapsed={collapsed} leading={dashboards.length === 0}>
+                Administration
+              </GroupHeading>
               {adminLinks.map((link) => (
-                <NavLink key={link.to} to={link.to} className={navClass}>
+                <NavLink
+                  key={link.to}
+                  to={link.to}
+                  className={navClass(collapsed)}
+                  title={collapsed ? link.label : undefined}
+                >
                   <link.icon size={17} />
-                  <span className="truncate">{link.label}</span>
+                  <NavLabel collapsed={collapsed}>{link.label}</NavLabel>
                 </NavLink>
               ))}
             </>
@@ -157,8 +227,8 @@ export function AppShell(): JSX.Element {
         </nav>
 
         <div className="shrink-0 border-t border-nav-line p-3">
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
+          <div className={`flex items-center gap-2 ${collapsed ? "lg:justify-center" : ""}`}>
+            <div className={`min-w-0 flex-1 ${collapsed ? "lg:hidden" : ""}`}>
               <div className="truncate text-xs font-medium text-nav-ink">{me?.role ?? "—"}</div>
               <div
                 className="truncate text-[11px] text-nav-faint"
@@ -168,19 +238,15 @@ export function AppShell(): JSX.Element {
                     : `Client #${me.client_id}`
                 }
               >
-                {/* A-1. The active Client is context, and switching resets
-                    everything. Named rather than numbered: "Client #2" tells
-                    someone their own company's row id and nothing else. */}
-                {me?.client_name ?? me?.client_code ?? (
-                  me?.client_id != null ? `Client #${me.client_id}` : "no Client"
-                )}
-                {me?.platform_admin ? " · platform admin" : ""}
+                {clientLabel}
               </div>
             </div>
             <button
               type="button"
               onClick={() => void logout()}
-              title="Sign out"
+              // On the rail the account block is hidden, so the one control
+              // left says whose session it ends.
+              title={collapsed ? `Sign out (${me?.role ?? "—"} · ${clientLabel})` : "Sign out"}
               aria-label="Sign out"
               className="rounded-control border border-nav-line p-1.5 text-nav-muted transition hover:border-bad/60 hover:text-bad"
             >
@@ -200,6 +266,18 @@ export function AppShell(): JSX.Element {
             className="rounded-control border border-line p-1.5 text-ink-muted hover:text-ink lg:hidden"
           >
             <IconMenu size={16} />
+          </button>
+          {/* The same place from `lg` up, and a long way from Sign out. */}
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+            title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+            aria-expanded={!collapsed}
+            aria-controls="app-sidebar"
+            className="hidden rounded-control border border-line p-1.5 text-ink-muted hover:text-ink lg:inline-flex"
+          >
+            <IconSidebar size={16} />
           </button>
           {/* Filled by the page, if it has an identity worth pinning. */}
           <div ref={setHeaderSlot} className="flex min-w-0 flex-1 items-center" />

@@ -511,11 +511,12 @@ export function InverterMonitoringDashboard(): JSX.Element {
         />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <RailTile tone="info" icon={IconInverter} label="Inverters">
-              <RailFigure value={inverters.length} digits={0} />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <RailTile inline tone="info" icon={IconInverter} label="Inverters">
+              <RailFigure value={inverters.length} digits={0} size="sm" />
             </RailTile>
             <RailTile
+              inline
               tone="ok"
               icon={IconSignal}
               label="Reporting"
@@ -526,27 +527,29 @@ export function InverterMonitoringDashboard(): JSX.Element {
                   : `${inverters.length - onlineCount} late or silent. Communication, not equipment.`
               }
             >
-              <RailFigure value={onlineCount} digits={0} />
+              <RailFigure value={onlineCount} digits={0} size="sm" />
             </RailTile>
             <RailTile
+              inline
               tone="violet"
               icon={IconPortfolio}
               label="Variants"
-              footnote="Ranking happens inside a variant and nowhere else — the two have different Tag sets and different expected outputs."
+              hint="Ranking happens inside a variant and nowhere else — the two have different Tag sets and different expected outputs."
             >
-              <RailFigure value={grouped.length} digits={0} />
+              <RailFigure value={grouped.length} digits={0} size="sm" />
             </RailTile>
             <RailTile
+              inline
               tone="blue"
               icon={IconPower}
               label="Comparing on"
-              footnote={
+              hint={
                 metric
                   ? `From the catalogue's columns for ${INVERTER_TYPE_CODE}.`
                   : "No summary columns are configured for this Device Type."
               }
             >
-              <RailText value={metric?.name ?? UNDEFINED_DISPLAY} />
+              <RailText value={metric?.name ?? UNDEFINED_DISPLAY} size="sm" />
             </RailTile>
           </div>
 

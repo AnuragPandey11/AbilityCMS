@@ -53,9 +53,9 @@ import { useNavigate } from "react-router-dom";
 import {
   IconAlarm,
   IconAvailability,
-  IconCalendar,
   IconCapacity,
   IconClock,
+  IconEnergy,
   IconGauge,
   IconHealth,
   IconLeaf,
@@ -492,7 +492,7 @@ export function PortfolioDashboard(): JSX.Element {
             </div>
           </FleetTile>
           <FleetTile
-            icon={IconCalendar}
+            icon={IconEnergy}
             iconTone="accent"
             label={`Energy · ${period}`}
             footer="From hourly aggregates, never raw Readings"

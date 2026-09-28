@@ -14,6 +14,7 @@
 import type { ComponentType, ReactNode } from "react";
 import type { KpiFigure } from "@/api/schemas";
 import type { IconProps } from "@/components/icons";
+import { iconWell } from "@/components/icons/wells";
 import {
   UNDEFINED_DISPLAY,
   formatHeadline,
@@ -36,9 +37,9 @@ import { FittedFigure } from "./FittedFigure";
  * The mapping lives with each dashboard, because only the caller knows what the
  * number means.
  *
- * One hue — the brand accent — because status owns green, amber and red on this
- * platform and a tinted chip beside a figure would read as a judgement about it.
- * A `tone` is honoured only where the caller has *already* made a judgement.
+ * The hue is the icon's (`icons/wells.ts`) — in light mode a bolt is yellow
+ * wherever it appears — so it names the quantity and never judges it. A
+ * verdict `tone` replaces it only where the caller has *already* made one.
  */
 function TileIcon({
   icon: Icon,
@@ -55,7 +56,7 @@ function TileIcon({
         ? "bg-warn/12 text-warn"
         : tone === "ok"
           ? "bg-ok/12 text-ok"
-          : "icon-well";
+          : iconWell(Icon);
   return (
     <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${chrome}`}>
       <Icon size={12} />

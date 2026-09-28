@@ -35,7 +35,9 @@ export type TokenName =
   | "chart-grid"
   | "chart-axis"
   | "chart-tooltip-bg"
-  | "chart-tooltip-border";
+  | "chart-tooltip-border"
+  | "chart-primary"
+  | "chart-primary-strong";
 
 /**
  * Fallbacks for a render where the stylesheet has not applied — jsdom in the
@@ -47,16 +49,16 @@ export type TokenName =
  * Guardrail 4 rather than raise an error. The `format` tests assert they differ.
  */
 const FALLBACK: Record<string, string> = {
-  "--c-surface": "228 232 238",
-  "--c-surface-raised": "252 252 253",
-  "--c-surface-sunken": "239 242 246",
-  "--c-line": "218 223 231",
-  "--c-line-soft": "231 235 240",
-  "--c-line-strong": "196 203 214",
+  "--c-surface": "224 220 212",
+  "--c-surface-raised": "240 237 231",
+  "--c-surface-sunken": "231 227 220",
+  "--c-line": "212 206 197",
+  "--c-line-soft": "227 223 216",
+  "--c-line-strong": "192 185 174",
   "--c-ink": "33 38 59",
   "--c-ink-muted": "88 96 117",
   "--c-ink-faint": "122 130 150",
-  "--c-accent": "44 106 126",
+  "--c-accent": "38 97 116",
   "--c-accent-strong": "33 84 101",
   "--c-accent-soft": "216 238 241",
   "--c-on-accent": "255 255 255",
@@ -68,11 +70,13 @@ const FALLBACK: Record<string, string> = {
   "--c-q1": "224 152 42",
   "--c-q2": "122 130 150",
   "--c-q3": "223 75 75",
-  "--c-chart-grid": "231 235 240",
+  "--c-chart-grid": "227 223 216",
   "--c-chart-axis": "122 130 150",
-  "--c-chart-tooltip-bg": "252 252 253",
-  "--c-chart-tooltip-border": "218 223 231",
-  "--c-series-1": "42 120 214",
+  "--c-chart-tooltip-bg": "240 237 231",
+  "--c-chart-tooltip-border": "212 206 197",
+  "--c-chart-primary": "28 104 200",
+  "--c-chart-primary-strong": "24 86 168",
+  "--c-series-1": "28 104 200",
   "--c-series-2": "235 104 52",
   "--c-series-3": "27 175 122",
   "--c-series-4": "237 161 0",

@@ -58,11 +58,13 @@ export interface TrendChartProps {
   /** `area` for a rate (power, irradiance); `bar` for a per-bucket total. */
   shape?: "area" | "bar";
   /**
-   * Series colour. Defaults to the brand accent — this chart is one series.
-   * `neutral` is the muted ink, for a page of trends that has run out of
-   * hues clear of the ones status owns.
+   * Series colour. Defaults to `primary`, the one-series chart colour (blue in
+   * light, the accent in dark). `accent` is the brand teal, for a page of
+   * trends that needs one more hue beside the palette's; `neutral` is the
+   * muted ink, for a page that has run out of hues clear of the ones status
+   * owns.
    */
-  colorToken?: "series" | "accent" | "neutral";
+  colorToken?: "primary" | "series" | "accent" | "neutral";
   /**
    * A slot of the validated categorical palette instead, for a page of
    * several single-series charts that should be told apart at a glance — the
@@ -230,16 +232,18 @@ function axisGutter(points: TrendPoint[]): number {
 /**
  * The series colour, resolved at render so it follows the theme.
  *
- * The brand accent by default. This chart always draws exactly one series, so
- * its hue has nothing to be told apart from, and the categorical palette —
- * whose slot order is the colourblind-safety mechanism (see `index.css`) — is
- * for charts that do. `"series"` still selects slot 1 for a caller that sits a
- * trend beside a multi-series chart and wants them to agree.
+ * `chart-primary` by default: this chart always draws exactly one series, and
+ * that token is the one-series colour everywhere (`index.css`) — in light it
+ * is palette slot 1, so this trend and the first line of a multi-series chart
+ * agree. It was the brand accent until 28 Sep 2026, which in light mode read
+ * as a grey-teal smear on a grey card. `"series"` still selects slot 1
+ * explicitly, which differs only in dark.
  */
-function seriesColor(which: "series" | "accent" | "neutral", slot?: number): string {
-  if (slot !== undefined) return seriesPalette()[slot] ?? token("accent");
+function seriesColor(which: "primary" | "series" | "accent" | "neutral", slot?: number): string {
+  if (slot !== undefined) return seriesPalette()[slot] ?? token("chart-primary");
   if (which === "neutral") return token("ink-muted");
-  return which === "accent" ? token("accent") : (seriesPalette()[0] ?? token("accent"));
+  if (which === "accent") return token("accent");
+  return which === "series" ? (seriesPalette()[0] ?? token("chart-primary")) : token("chart-primary");
 }
 
 export function TrendChart({
@@ -251,7 +255,7 @@ export function TrendChart({
   timezone = DEFAULT_TIMEZONE,
   height = 200,
   shape = "area",
-  colorToken = "accent",
+  colorToken = "primary",
   paletteSlot,
   markPeak = true,
   flaggedCount = 0,
@@ -390,8 +394,10 @@ export function TrendChart({
         bottom: 2,
         borderColor: "transparent",
         backgroundColor: tokenAlpha("chart-grid", 0.45),
-        fillerColor: tokenAlpha("accent", 0.12),
-        handleStyle: { color: token("accent"), borderColor: token("accent") },
+        // The zoom window in the series' own colour, so the slider reads as
+        // part of this chart rather than as a control of a different one.
+        fillerColor: withAlpha(color, 0.12),
+        handleStyle: { color, borderColor: color },
         moveHandleStyle: { color: token("chart-grid") },
         dataBackground: {
           lineStyle: { color: tokenAlpha("ink-faint", 0.5), width: 1 },
@@ -437,8 +443,8 @@ export function TrendChart({
                 type: "linear",
                 x: 0, y: 0, x2: 0, y2: 1,
                 colorStops: [
-                  { offset: 0, color: tokenAlpha("accent", 0) },
-                  { offset: 1, color: tokenAlpha("accent", 0) },
+                  { offset: 0, color: tokenAlpha("chart-primary", 0) },
+                  { offset: 1, color: tokenAlpha("chart-primary", 0) },
                 ],
               },
               opacity: 1,

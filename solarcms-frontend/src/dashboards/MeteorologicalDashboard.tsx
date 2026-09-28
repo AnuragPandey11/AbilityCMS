@@ -290,13 +290,16 @@ export function MeteorologicalDashboard(): JSX.Element {
     <div className="flex flex-col gap-6">
       {header}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9">
+      {/* Nine readings divide evenly only as 3 × 3 or 9 × 1; any other count
+          of columns leaves a short last row. One row once each tile has room
+          for a figure like "730.2 W/m2" (~113px at 1400px with the sidebar). */}
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 min-[1400px]:grid-cols-9">
         {NOW.map((position, index) => (
           <ReadingTile key={position.label} icon={position.icon} label={position.label} filled={now[index] as Filled} />
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
         {SUMMARY.map((position, index) => (
           <ReadingTile key={position.label} icon={position.icon} label={position.label} filled={summary[index] as Filled} />
         ))}

@@ -129,10 +129,10 @@ function PhasePanel({
   fill: (position: Position) => Filled;
 }): JSX.Element {
   return (
-    <Panel title={<span className="text-base">{title}</span>} padding="p-4">
-      <div className="grid grid-cols-3 gap-3">
+    <Panel title={<span className="text-base">{title}</span>} padding="p-3">
+      <div className="grid grid-cols-3 gap-2">
         {positions.map((position) => (
-          <FigureTile key={position.label} filled={fill(position)} emphasis />
+          <FigureTile key={position.label} filled={fill(position)} />
         ))}
       </div>
     </Panel>
@@ -171,7 +171,7 @@ function MeterCard({
       }
       padding="p-4"
     >
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
         {CARD.map((position) => (
           <FigureTile key={position.label} filled={readings.fill(position)} />
         ))}

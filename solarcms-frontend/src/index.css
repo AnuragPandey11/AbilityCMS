@@ -21,10 +21,11 @@
  * one job:
  *
  *   navy    the ink in light mode, and the hue every dark ground is built on.
- *   plate   the light page.
- *   teal    the light accent — one step deeper than the logo's, so accent
- *           text clears 4.5:1 on every surface it sits on, including the tinted
- *           active menu item (4.9:1).
+ *   plate   the light page until 28 Sep 2026, when the user chose warm stone
+ *           grounds instead (see Grounds below).
+ *   teal    the light accent — two steps deeper than the logo's, so accent
+ *           text clears 4.5:1 on every surface it sits on, including an
+ *           accent tint over the sunken ground (4.7:1 on stone).
  *   cyan    the dark accent, exactly as drawn: 7.6:1 on a dark card.
  *   orange  **nothing.** It stays in the logo.
  *
@@ -48,23 +49,29 @@
 @layer base {
   :root {
     /* ── Grounds ─────────────────────────────────────────────────────────── */
-    /* Three distinct steps, none of them pure white. The page used to sit
-       ΔE 4.9 from a #FFFFFF card under a #FFFFFF header, so the whole screen
-       read as one glare of white with cards floating on it by shadow alone.
-       Now the page is a navy-tinted mist a clear step below the cards, the
-       cards are an off-white that does not glare, and a card's edge is its
-       border rather than a halo. */
-    --c-surface: 228 232 238; /* page */
-    --c-surface-raised: 252 252 253; /* cards, panels */
-    --c-surface-sunken: 239 242 246; /* tracks, table headers, wells */
+    /* Warm stone: paper-toned cards on a deeper stone page, chosen by the user
+       on 28 Sep 2026 from rendered alternatives (cool slate, teal mist, stone).
+       White glared (#FFFFFF, then #FCFCFD), and a cool grey-white (#F3F5F8)
+       was still too bright and read as a white that had gone slightly off;
+       a warm ground at L* 94 is the gentlest on the eye, and navy ink and the
+       teal accent sit well on it. The sidebar stays navy.
+
+       How far the card can go is set by the sunken ground under it: sunken
+       must stay a step darker than a card, and accent text on an accent tint
+       over sunken must clear 4.5:1 (`tests/brand.test.tsx`). Stone needed the
+       accent one notch deeper for that (#2C6A7E → #266174, 4.71:1). */
+    --c-surface: 224 220 212; /* page */
+    --c-surface-raised: 240 237 231; /* cards, panels */
+    --c-surface-sunken: 231 227 220; /* tracks, table headers, wells */
 
     /* ── Lines ───────────────────────────────────────────────────────────── */
-    --c-line: 218 223 231;
-    --c-line-soft: 231 235 240;
+    /* Warm like the grounds: a cool grey hairline on stone reads as dust. */
+    --c-line: 212 206 197;
+    --c-line-soft: 227 223 216;
     /* A line that must read as a deliberate edge rather than a divider: the
        dashed Collector outlines and the SLD connectors. One step darker than
        `line`, never `ink` — an enclosure is context, not content. */
-    --c-line-strong: 196 203 214;
+    --c-line-strong: 192 185 174;
 
     /* ── Text ────────────────────────────────────────────────────────────── */
     --c-ink: 33 38 59; /* the logo's navy: 15:1 on a card */
@@ -72,7 +79,7 @@
     --c-ink-faint: 122 130 150;
 
     /* ── Brand + status ──────────────────────────────────────────────────── */
-    --c-accent: 44 106 126;
+    --c-accent: 38 97 116;
     --c-accent-strong: 33 84 101;
     /* The logo's cyan at 25% over white: the ground of an icon well. */
     --c-accent-soft: 216 238 241;
@@ -83,6 +90,25 @@
     --c-warn: 224 152 42;
     --c-bad: 223 75 75;
     --c-info: 58 102 219;
+
+    /* ── Icon wells ──────────────────────────────────────────────────────── */
+    /* Light mode only, at the user's direction (28 Sep 2026): an icon well
+       takes a hue from what its icon *depicts*, so the same icon is the same
+       colour on every screen — the sun and the bolt yellow, an energy counter
+       and the CO₂ leaf green, the Alarm bell and the thermometer red, and
+       everything else the accent. The registry is `components/icons/wells.ts`.
+       ⚠ A well's hue names the quantity, never its condition: a figure's
+       verdict is still the figure's own colour, set by the caller.
+
+       Glyph over ground, each ≥ 3:1 (graphics) and grounds at the accent
+       well's lightness. The yellow is a true yellow, not amber: 13.7 ΔE from
+       `warn`, so a sun icon does not read as a warning. */
+    --c-well-yellow: 164 120 0;
+    --c-well-yellow-soft: 250 236 184;
+    --c-well-green: 22 135 68;
+    --c-well-green-soft: 214 240 223;
+    --c-well-red: 206 48 48;
+    --c-well-red-soft: 251 225 225;
 
     /* ── Navigation ──────────────────────────────────────────────────────── */
     /* The sidebar is navy in both themes — the one place the brand is a whole
@@ -107,10 +133,20 @@
     --c-q3: 223 75 75;
 
     /* ── Chart chrome, read at runtime by ECharts and the SLD ─────────────── */
-    --c-chart-grid: 231 235 240;
+    --c-chart-grid: 227 223 216;
     --c-chart-axis: 122 130 150;
-    --c-chart-tooltip-bg: 252 252 253;
-    --c-chart-tooltip-border: 218 223 231;
+    --c-chart-tooltip-bg: 240 237 231;
+    --c-chart-tooltip-border: 212 206 197;
+    /* A chart with one series, and every drawing of one quantity — a trend, a
+       bar per Device, a gauge's arc, a day's columns. It was the accent, and in
+       light mode a deep teal line over a teal wash on a grey card read as
+       grey-green mud (the user, 28 Sep 2026); it is now series slot 1's blue,
+       so a single series and the first of several are the same colour. 4.65:1
+       on the stone card and white text on it at 5.4:1, which is why slot 1
+       went two steps deeper the same day. Dark keeps the accent (see below).
+       `strong` is the emphasised step — today's column, a gauge's tip. */
+    --c-chart-primary: 28 104 200;
+    --c-chart-primary-strong: 24 86 168;
     /* Categorical series colours. Deliberately not semantic — a series identity
        must never be mistaken for a quality or a status.
 
@@ -122,12 +158,15 @@
        line to everybody and three of them were the same line to one reader in
        twelve. Re-verified with the palette validator on 23 Sep 2026 against the
        brand surfaces (#ffffff light, #181d2d and #0b0e18 dark): every check
-       passes in both, and the brand change needed no series change.
+       passes in both, and the brand change needed no series change. Again on
+       28 Sep 2026 against the stone card (#f0ede7), with slot 1 deeper
+       (#2a78d6 → #1c68c8) so it can carry text: all checks pass, worst
+       adjacent CVD ΔE 9.1, unchanged.
 
        Light-mode aqua, yellow and magenta sit just under 3:1 against white,
        which is a documented relief case — it obliges every chart carrying them
        to have visible labels or a legend, which `TimeSeriesChart` does. */
-    --c-series-1: 42 120 214; /* blue */
+    --c-series-1: 28 104 200; /* blue */
     --c-series-2: 235 104 52; /* orange */
     --c-series-3: 27 175 122; /* aqua */
     --c-series-4: 237 161 0; /* yellow */
@@ -174,13 +213,14 @@
     --art-shadow: 21 26 46;
     --art-shadow-alpha: 0.16;
 
-    /* Shadows are navy, not black: a neutral shadow on a cool page reads as
-       dirt, one in the page's own hue reads as depth. And they are contact
+    /* Shadows are in the page's own hue, never black: a neutral or navy
+       shadow on a stone page reads as dirt, a warm one reads as depth. (They
+       were navy while the page was cool.) And they are contact
        shadows, a pixel or two, not a 28px halo: a card that floats half an
        inch off the page is the look of a template, while one that sits on it
        with a firm edge is the look of an instrument. */
-    --shadow-card: 0 1px 0 rgb(21 26 46 / 0.03), 0 1px 3px rgb(21 26 46 / 0.07);
-    --shadow-soft: 0 1px 2px rgb(21 26 46 / 0.06);
+    --shadow-card: 0 1px 0 rgb(56 44 30 / 0.04), 0 1px 3px rgb(56 44 30 / 0.08);
+    --shadow-soft: 0 1px 2px rgb(56 44 30 / 0.07);
 
     color-scheme: light;
   }
@@ -213,6 +253,15 @@
       --c-bad: 239 68 68;
       --c-info: 120 145 250;
 
+      /* The per-icon hues are light mode's only: in dark every well stays
+         the accent, as the user asked (28 Sep 2026). */
+      --c-well-yellow: var(--c-accent);
+      --c-well-yellow-soft: var(--c-accent-soft);
+      --c-well-green: var(--c-accent);
+      --c-well-green-soft: var(--c-accent-soft);
+      --c-well-red: var(--c-accent);
+      --c-well-red-soft: var(--c-accent-soft);
+
       /* Navy on navy: the sidebar sits a step above the page, as it does in
          light, so the two read as the same object in either theme. */
       --c-nav: 19 23 38;
@@ -232,6 +281,9 @@
       --c-chart-axis: 139 148 172;
       --c-chart-tooltip-bg: 28 34 52;
       --c-chart-tooltip-border: 43 50 72;
+      /* Charts keep the accent in dark: the cyan reads well on navy. */
+      --c-chart-primary: var(--c-accent);
+      --c-chart-primary-strong: var(--c-accent-strong);
       --c-series-1: 57 135 229; /* blue */
       --c-series-2: 217 89 38; /* orange */
       --c-series-3: 25 158 112; /* aqua */
@@ -287,6 +339,15 @@
     --c-bad: 239 68 68;
     --c-info: 120 145 250;
 
+    /* The per-icon hues are light mode's only: in dark every well stays the
+       accent, as the user asked (28 Sep 2026). */
+    --c-well-yellow: var(--c-accent);
+    --c-well-yellow-soft: var(--c-accent-soft);
+    --c-well-green: var(--c-accent);
+    --c-well-green-soft: var(--c-accent-soft);
+    --c-well-red: var(--c-accent);
+    --c-well-red-soft: var(--c-accent-soft);
+
     /* Navy on navy: the sidebar sits a step above the page, as it does in
        light, so the two read as the same object in either theme. */
     --c-nav: 19 23 38;
@@ -306,6 +367,9 @@
     --c-chart-axis: 139 148 172;
     --c-chart-tooltip-bg: 28 34 52;
     --c-chart-tooltip-border: 43 50 72;
+    /* Charts keep the accent in dark: the cyan reads well on navy. */
+    --c-chart-primary: var(--c-accent);
+    --c-chart-primary-strong: var(--c-accent-strong);
     --c-series-1: 57 135 229; /* blue */
     --c-series-2: 217 89 38; /* orange */
     --c-series-3: 25 158 112; /* aqua */
@@ -435,15 +499,36 @@
   /**
    * The icon well: the square an identity icon sits in on every tile and card.
    *
-   * One class so every well on the platform is the same object — the logo's
-   * pale cyan in light, a dark teal in dark, the accent for the glyph, and a
-   * hairline ring that keeps its edge on a white card. Status wells (an open
-   * Alarm count) are the caller's, in the status hue, and never this.
+   * One class so every well on the platform is the same object — a pale
+   * ground, the glyph in the full hue, and a hairline ring in the glyph's hue
+   * that keeps its edge on a card. The hue is the accent unless a modifier
+   * names another; in light mode `components/icons/wells.ts` picks the
+   * modifier from the icon, so callers write `iconWell(Icon)` rather than
+   * choosing a colour. Status wells (an open Alarm count) are the caller's, in
+   * the status hue, and never this.
+   *
+   * ⚠ The modifiers are spelled out in full in `wells.ts` because Tailwind
+   * emits a `@layer components` class only if its literal name appears in the
+   * source — `icon-well-${hue}` would compile and ship no rule.
    */
   .icon-well {
-    background-color: rgb(var(--c-accent-soft));
-    color: rgb(var(--c-accent));
-    box-shadow: inset 0 0 0 1px rgb(var(--c-accent) / 0.14);
+    --well-ink: var(--c-accent);
+    --well-ground: var(--c-accent-soft);
+    background-color: rgb(var(--well-ground));
+    color: rgb(var(--well-ink));
+    box-shadow: inset 0 0 0 1px rgb(var(--well-ink) / 0.14);
+  }
+  .icon-well-yellow {
+    --well-ink: var(--c-well-yellow);
+    --well-ground: var(--c-well-yellow-soft);
+  }
+  .icon-well-green {
+    --well-ink: var(--c-well-green);
+    --well-ground: var(--c-well-green-soft);
+  }
+  .icon-well-red {
+    --well-ink: var(--c-well-red);
+    --well-ground: var(--c-well-red-soft);
   }
 
   /**

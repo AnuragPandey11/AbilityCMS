@@ -521,6 +521,14 @@ export const IconMenu = (p: IconProps) => (
   <Svg {...p}><path d="M3.6 6.6h16.8M3.6 12h16.8M3.6 17.4h16.8" /></Svg>
 );
 
+/** Collapse or expand the sidebar — a window with its left panel ruled off. */
+export const IconSidebar = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.4" y="4.4" width="17.2" height="15.2" rx="2.4" />
+    <path d="M9.4 4.4v15.2" />
+  </Svg>
+);
+
 export const IconLogout = (p: IconProps) => (
   <Svg {...p}>
     <path d="M9.6 3.8H5.8a1.8 1.8 0 0 0-1.8 1.8v12.8a1.8 1.8 0 0 0 1.8 1.8h3.8" />

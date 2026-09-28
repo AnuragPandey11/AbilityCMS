@@ -126,7 +126,7 @@ function FigureRow({
 }
 
 /** The height of a gauge inside its tile, matched to the Current Power dial. */
-const GAUGE_HEIGHT = 150;
+const GAUGE_HEIGHT = 120;
 
 const PERIOD_LABEL: Record<KpiPeriod, string> = {
   today: "Today",
@@ -150,6 +150,7 @@ function RatioTile({
 }): JSX.Element {
   return (
     <RailTile
+      dense
       icon={icon}
       label={label}
       visual={<Gauge figure={figure} label={label} height={GAUGE_HEIGHT} banded={banded} bare />}
@@ -188,7 +189,7 @@ export function PerformanceTiles({
     return (
       <>
         {Array.from({ length: 3 }, (_, index) => (
-          <Skeleton key={index} className="rounded-card" style={{ minHeight: GAUGE_HEIGHT + 120 }} />
+          <Skeleton key={index} className="rounded-card" style={{ minHeight: GAUGE_HEIGHT + 90 }} />
         ))}
       </>
     );
@@ -232,7 +233,7 @@ export function PerformanceDetailsButton({
   onOpen: () => void;
 }): JSX.Element {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       {/* Its own line, not inside the button: in a fifth of the row the badge
           and the label do not both fit, and the label is the one people use. */}
       <div className="flex items-center justify-between gap-2 text-xs text-ink-faint">
@@ -251,10 +252,10 @@ export function PerformanceDetailsButton({
           `PR, CUF and availability computed ${periodSince(kpis, period, timeZone) ?? "over the selected period"}, ` +
           "in the Plant's time, from aggregates. Every formula is provisional pending OPEN-16."
         }
-        className="flex w-full items-center justify-between gap-1 rounded-control border border-line px-3 py-1.5 text-sm font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
+        className="flex w-full items-center justify-between gap-1 rounded-control border border-line px-2.5 py-1 text-xs font-medium text-ink-muted transition hover:border-accent/50 hover:text-accent"
       >
         Performance details
-        <IconChevronRight size={14} />
+        <IconChevronRight size={12} />
       </button>
     </div>
   );

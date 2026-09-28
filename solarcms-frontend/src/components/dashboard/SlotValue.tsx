@@ -24,6 +24,7 @@ import {
 } from "@/format/value";
 import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "@/components/icons";
+import { iconWell } from "@/components/icons/wells";
 import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 import { RailTile, type RailTone } from "@/components/charts/RailTile";
@@ -172,6 +173,7 @@ export function SlotRailTile({
   figure = true,
   note,
   action,
+  dense,
 }: {
   slot: ResolvedSlot;
   icon: ComponentType<IconProps>;
@@ -185,6 +187,8 @@ export function SlotRailTile({
   note?: ReactNode;
   /** A control at the foot of the tile, passed to `RailTile`. */
   action?: ReactNode;
+  /** Passed to `RailTile`. */
+  dense?: boolean;
 }): JSX.Element {
   const isUndefined = slot.value === null;
   const explanation = undefinedExplanation(slot);
@@ -209,6 +213,7 @@ export function SlotRailTile({
       }
       visual={visual}
       action={action}
+      dense={dense}
     >
       {figure ? (
         <FittedFigure
@@ -262,17 +267,12 @@ export function SlotStat({
     <div className="surface-tile min-w-0 rounded-card border border-line px-3 py-2">
       <div className="flex items-center gap-1.5">
         {/*
-          The icon chip is the brand hue, and the brand hue only.
-          
-          It is tempting to tint each metric by kind — power amber, energy
-          blue — and it is a trap: this platform spends green, amber and red on
-          *status*, and a decorative tint sitting next to a figure would be read
-          as a judgement about that figure. One accent, used for "this is a
-          headline metric" and nothing else, adds the life a row of grey boxes
-          was missing without inventing a meaning.
+          The icon chip takes the icon's own hue (`icons/wells.ts`), so a bolt
+          is the same yellow here as on every other tile. It names the
+          quantity; a judgement about the figure is never the chip's to make.
         */}
         {Icon ? (
-          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-accent/10 text-accent">
+          <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded ${iconWell(Icon)}`}>
             <Icon size={11} />
           </span>
         ) : null}

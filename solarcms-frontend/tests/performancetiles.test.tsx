@@ -126,12 +126,12 @@ describe("Performance tiles", () => {
     expect(charts).toHaveLength(0);
   });
 
-  it("colours CUF with the accent, never by the 80/60 bands PR uses", () => {
+  it("colours CUF with the chart colour, never by the 80/60 bands PR uses", () => {
     band();
     const [pr, cuf, availability] = arcColours();
-    // Fallback palette (jsdom): warn, accent, ok.
+    // Fallback palette (jsdom): warn, chart-primary, ok.
     expect(pr).toBe("rgb(224,152,42)");
-    expect(cuf).toBe("rgb(44,106,126)");
+    expect(cuf).toBe("rgb(28,104,200)");
     expect(availability).toBe("rgb(18,164,90)");
   });
 

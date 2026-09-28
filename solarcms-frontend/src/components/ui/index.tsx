@@ -214,6 +214,7 @@ export function SelectBox({
   onChange,
   children,
   className = "",
+  size = "md",
 }: {
   label?: ReactNode;
   /** What the closed control shows — the chosen option, styled. */
@@ -223,17 +224,24 @@ export function SelectBox({
   /** `<option>` elements. */
   children: ReactNode;
   className?: string;
+  /** `sm` for a dense filter row, level with an `sm` segmented control. */
+  size?: "sm" | "md";
 }): JSX.Element {
+  const small = size === "sm";
   return (
-    <label className="inline-flex items-center gap-2.5">
+    <label className={`inline-flex items-center ${small ? "gap-2" : "gap-2.5"}`}>
       {label ? (
-        <span className="whitespace-nowrap text-sm font-medium text-ink-muted">{label}</span>
+        <span className={`whitespace-nowrap font-medium text-ink-muted ${small ? "text-xs" : "text-sm"}`}>
+          {label}
+        </span>
       ) : null}
       <span
-        className={`surface-tile relative inline-flex min-w-[13rem] items-center justify-between gap-3 rounded-control border border-line px-3.5 py-2 text-sm transition focus-within:ring-2 focus-within:ring-accent/40 hover:border-line-strong ${className}`}
+        className={`surface-tile relative inline-flex items-center justify-between rounded-control border border-line transition focus-within:ring-2 focus-within:ring-accent/40 hover:border-line-strong ${
+          small ? "min-w-[10rem] gap-2 px-2.5 py-1.5 text-xs" : "min-w-[13rem] gap-3 px-3.5 py-2 text-sm"
+        } ${className}`}
       >
         <span className="min-w-0 truncate font-semibold text-ink">{display}</span>
-        <IconChevronDown size={14} className="shrink-0 text-ink-muted" />
+        <IconChevronDown size={small ? 12 : 14} className="shrink-0 text-ink-muted" />
         <select
           value={value}
           onChange={(event) => onChange(event.target.value)}

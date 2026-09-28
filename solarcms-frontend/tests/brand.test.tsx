@@ -15,6 +15,17 @@
  *    primary button is readable in both themes.
  *  - `FALLBACK` in `theme/tokens.ts` must mirror the light palette; a stale
  *    entry paints jsdom and the first frame in last season's colours.
+ *  - Light-mode cards were dimmed from #FCFCFD on 28 Sep 2026. A card must
+ *    still sit above the page and above its own sunken tracks, or trays and
+ *    table headers vanish into it.
+ *  - Icon wells take a hue from their icon in light mode (the user's call,
+ *    28 Sep 2026) and stay the accent in dark. The yellow must stay apart from
+ *    `warn`, or every sun icon reads as a warning.
+ *  - One-series charts left the accent for blue in light mode the same day.
+ *    That blue carries text (the compared figure on a Device card, white
+ *    figures on a Portfolio bar), so it is held to text contrast, and it must
+ *    stay palette slot 1 or a lone trend and a multi-series chart's first
+ *    line drift into two nearly-equal blues.
  */
 
 import { describe, expect, it, beforeEach } from "vitest";
@@ -23,6 +34,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { BrandMark } from "@/components/layout/BrandMark";
+import { IconAlarm, IconEnergy, IconGauge, IconPower } from "@/components/icons";
+import { WELL_CLASS, iconWell } from "@/components/icons/wells";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import { seriesPalette, token, type TokenName } from "@/theme/tokens";
 
@@ -113,6 +126,15 @@ describe.each(Object.entries(BLOCKS))("brand palette — %s", (_name, block) => 
     expect(contrast(get("on-accent"), get("accent-strong"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("keeps a card above the page and above its own sunken tracks", () => {
+    const card = luminance(get("surface-raised"));
+    const lighter = ["surface", "surface-sunken"].filter((ground) => luminance(get(ground)) >= card);
+    // Order alone is not enough: at under 1.5 ΔE a tray is invisible.
+    const merged = ["surface", "surface-sunken"].filter((ground) => deltaE(get(ground), get("surface-raised")) < 1.5);
+    expect(lighter).toEqual([]);
+    expect(merged).toEqual([]);
+  });
+
   it("keeps body and secondary text readable on every ground", () => {
     for (const ground of ["surface", "surface-raised", "surface-sunken"]) {
       expect(contrast(get("ink"), get(ground))).toBeGreaterThanOrEqual(7);
@@ -131,6 +153,79 @@ describe.each(Object.entries(BLOCKS))("brand palette — %s", (_name, block) => 
     // The active item: accent text on its own 14% tint.
     const tint = over(get("nav-accent"), 0.14, get("nav"));
     expect(contrast(get("nav-accent"), tint)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("icon wells", () => {
+  const light = tokensOf(BLOCKS.light);
+  const get = (name: string): Rgb => {
+    const value = light.get(name);
+    if (!value) throw new Error(`--c-${name} is not defined in the light block`);
+    return value;
+  };
+  const HUES = ["yellow", "green", "red"] as const;
+
+  it("draws every light-mode glyph at 3:1 or better on its own ground", () => {
+    const weak = HUES.map((hue) => [hue, contrast(get(`well-${hue}`), get(`well-${hue}-soft`))] as const)
+      .filter(([, ratio]) => ratio < 3)
+      .map(([hue, ratio]) => `${hue} ${ratio.toFixed(2)}`);
+    expect(weak).toEqual([]);
+  });
+
+  it("keeps the yellow a yellow, not the warning amber", () => {
+    expect(deltaE(get("well-yellow"), get("warn"))).toBeGreaterThanOrEqual(10);
+  });
+
+  it.each(["dark (system)", "dark (chosen)"] as const)("stays the accent in %s", (block) => {
+    const text = BLOCKS[block];
+    for (const hue of HUES) {
+      expect(text).toMatch(new RegExp(`--c-well-${hue}:\\s*var\\(--c-accent\\);`));
+      expect(text).toMatch(new RegExp(`--c-well-${hue}-soft:\\s*var\\(--c-accent-soft\\);`));
+    }
+  });
+
+  it("names only modifier classes the stylesheet defines", () => {
+    // Tailwind ships a component class only if it is spelled out in source,
+    // and a modifier with no rule renders as the plain accent well silently.
+    const modifiers = Object.values(WELL_CLASS).flatMap((classes) =>
+      classes.split(" ").filter((name) => name.startsWith("icon-well-")),
+    );
+    expect(modifiers.length).toBe(HUES.length);
+    for (const name of modifiers) expect(css).toContain(`.${name} {`);
+  });
+
+  it("colours by the icon, and leaves an unmapped icon the accent", () => {
+    expect(iconWell(IconPower)).toBe("icon-well icon-well-yellow");
+    expect(iconWell(IconEnergy)).toBe("icon-well icon-well-green");
+    expect(iconWell(IconAlarm)).toBe("icon-well icon-well-red");
+    expect(iconWell(IconGauge)).toBe("icon-well");
+    expect(iconWell(undefined)).toBe("icon-well");
+  });
+});
+
+describe("the one-series chart colour", () => {
+  const light = tokensOf(BLOCKS.light);
+  const get = (name: string): Rgb => {
+    const value = light.get(name);
+    if (!value) throw new Error(`--c-${name} is not defined in the light block`);
+    return value;
+  };
+
+  it("is palette slot 1 in light, so a lone trend and a first series agree", () => {
+    expect(get("chart-primary")).toEqual(get("series-1"));
+  });
+
+  it("carries text in light: on a card, under white figures, and on its own tint", () => {
+    expect(contrast(get("chart-primary"), get("surface-raised"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(get("on-accent"), get("chart-primary"))).toBeGreaterThanOrEqual(4.5);
+    // The Inverter card's load pill: strong text on a chart/10 tint.
+    const tint = over(get("chart-primary"), 0.1, get("surface-raised"));
+    expect(contrast(get("chart-primary-strong"), tint)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(["dark (system)", "dark (chosen)"] as const)("stays the accent in %s", (block) => {
+    expect(BLOCKS[block]).toMatch(/--c-chart-primary:\s*var\(--c-accent\);/);
+    expect(BLOCKS[block]).toMatch(/--c-chart-primary-strong:\s*var\(--c-accent-strong\);/);
   });
 });
 

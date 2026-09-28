@@ -63,7 +63,7 @@ export function OverlayTrendChart({
   const { version: themeVersion } = useTheme();
   const theme = chartTheme();
   const palette = seriesPalette();
-  const colorOf = (index: number) => palette[index % palette.length] ?? token("accent");
+  const colorOf = (index: number) => palette[index % palette.length] ?? token("chart-primary");
 
   const plottable = series.reduce(
     (count, entry) => count + entry.points.filter((point) => point.value !== null).length,
@@ -155,8 +155,8 @@ export function OverlayTrendChart({
         bottom: 2,
         borderColor: "transparent",
         backgroundColor: tokenAlpha("chart-grid", 0.45),
-        fillerColor: tokenAlpha("accent", 0.12),
-        handleStyle: { color: token("accent"), borderColor: token("accent") },
+        fillerColor: tokenAlpha("chart-primary", 0.12),
+        handleStyle: { color: token("chart-primary"), borderColor: token("chart-primary") },
         moveHandleStyle: { color: token("chart-grid") },
         labelFormatter: "",
       },

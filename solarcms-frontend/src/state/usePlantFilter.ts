@@ -15,6 +15,7 @@ import { useMemo } from "react";
 import { useAuth } from "@/auth/AuthProvider";
 import { useAllPlants } from "@/api/hooks";
 import type { MePlant } from "@/api/schemas";
+import { rankMatches } from "./searchMatch";
 import { useSelection } from "./selection";
 
 export interface ClientOption {
@@ -41,11 +42,12 @@ export interface PlantFilter {
 }
 
 /**
- * Plants passing both the Client filter and the search.
+ * Plants passing both the Client filter and the search, best match first.
  *
- * Every whitespace-separated word must appear somewhere in the Plant's code or
- * name or its Client's code or name, case-insensitively — so "roofco wh" finds
- * WH1 and WH2 of ROOFCO and nothing of SUNFIELD. Order is preserved.
+ * Every whitespace-separated word must match the Plant's code or name or its
+ * Client's code or name — so "roofco wh" finds WH1 and WH2 of ROOFCO and
+ * nothing of SUNFIELD. Matching forgives separators and, when nothing matches
+ * as typed, a slip (`searchMatch`). With no search, order is preserved.
  */
 export function matchPlants(
   plants: MePlant[],
@@ -53,17 +55,21 @@ export function matchPlants(
   clientId: number | null,
   search: string,
 ): MePlant[] {
-  const words = search.toLowerCase().split(/\s+/).filter(Boolean);
-  return plants.filter((plant) => {
-    const client = clientOf(plant.id);
-    if (clientId !== null && client?.id !== clientId) return false;
-    if (words.length === 0) return true;
-    const haystack = [plant.code, plant.name, client?.code, client?.name]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return words.every((word) => haystack.includes(word));
-  });
+  const inClient =
+    clientId === null ? plants : plants.filter((plant) => clientOf(plant.id)?.id === clientId);
+  return rankMatches(
+    inClient,
+    (plant) => {
+      const client = clientOf(plant.id);
+      return [
+        { text: plant.code },
+        { text: plant.name },
+        { text: client?.code, secondary: true },
+        { text: client?.name, secondary: true },
+      ];
+    },
+    search,
+  );
 }
 
 export function usePlantFilter(): PlantFilter {

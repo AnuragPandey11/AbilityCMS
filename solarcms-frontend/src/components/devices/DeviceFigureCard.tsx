@@ -134,7 +134,7 @@ export function DeviceFigureCard({
                         value === undefined
                           ? "text-ink-faint"
                           : highlighted
-                            ? "text-accent"
+                            ? "text-chart"
                             : "text-ink"
                       }`}
                     >

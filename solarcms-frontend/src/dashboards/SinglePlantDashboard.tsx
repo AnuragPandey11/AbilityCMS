@@ -70,6 +70,7 @@ import type {
   SldStage,
 } from "@/api/schemas";
 import { Panel, SegmentedControl, Drawer } from "@/components/ui";
+import { FilterRowContent } from "@/components/layout/FilterRowSlot";
 import { useScrollPager } from "@/components/ui/Carousel";
 import { TrendChart, SmallMultiples } from "@/components/charts/TrendChart";
 import { CheckboxMenu } from "@/components/ui/CheckboxMenu";
@@ -928,26 +929,33 @@ export function SinglePlantDashboard(): JSX.Element {
         charts' `Window` is not here: each chart panel carries its own, inside
         the panel it scopes (see `ChartWindow`). "Today" and "the last 24
         hours" are not the same range and must not share a control.
+
+        For a platform administrator the route already draws a filter row
+        (Client and search), and the pickers join the end of it rather than
+        start a second line (`FilterRowContent`); for everyone else they stand
+        here.
       */}
-      <header className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
-        <div className="flex items-center gap-2.5">
-          <span
-            className="text-sm font-medium text-ink-muted"
-            title="Scopes the derived figures — PR, CUF, availability — which are computed over a calendar period."
-          >
-            Period
-          </span>
-          <PeriodPicker value={period} onChange={setPeriod} size="lg" />
-        </div>
-        {/* What the header had no room for at this width. */}
-        <div className="flex flex-wrap items-center gap-3 xl:hidden">
-          <div className="sm:hidden">
-            <PlantStatusControl plantId={plant.id} status={plant.status} />
+      <FilterRowContent>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
+          <div className="flex items-center gap-2">
+            <span
+              className="text-xs font-medium text-ink-muted"
+              title="Scopes the derived figures — PR, CUF, availability — which are computed over a calendar period."
+            >
+              Period
+            </span>
+            <PeriodPicker value={period} onChange={setPeriod} />
           </div>
-          <PlantNameplate plant={plant} timezone={timezone} />
         </div>
-      </header>
+      </FilterRowContent>
+      {/* What the header had no room for at this width. */}
+      <div className="flex flex-wrap items-center gap-3 xl:hidden">
+        <div className="sm:hidden">
+          <PlantStatusControl plantId={plant.id} status={plant.status} />
+        </div>
+        <PlantNameplate plant={plant} timezone={timezone} />
+      </div>
 
       {/*
         The headline strip: what the Plant is doing now, how well it did over
@@ -957,9 +965,9 @@ export function SinglePlantDashboard(): JSX.Element {
         detail carries their coverage, so it stays in the same row as the
         figures it qualifies (Guardrail 18).
       */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {dashboardQuery.isLoading ? (
-          <Skeleton className="rounded-card" style={{ minHeight: 270 }} />
+          <Skeleton className="rounded-card" style={{ minHeight: 210 }} />
         ) : dashboardQuery.isError ? (
           <ErrorState error={dashboardQuery.error} retry={() => void dashboardQuery.refetch()} />
         ) : currentPower ? (
@@ -968,6 +976,7 @@ export function SinglePlantDashboard(): JSX.Element {
             icon={SLOT_ICONS[currentPower.slot_code] ?? IconGauge}
             plantId={plant.id}
             acCapacityKw={plant.ac_capacity_kw}
+            dense
           />
         ) : null}
         <PerformanceTiles
@@ -981,7 +990,7 @@ export function SinglePlantDashboard(): JSX.Element {
             fifth tile — alone it would leave a hole beside it. */}
         <div className="flex sm:col-span-2 xl:col-span-1 [&>*]:flex-1">
           {dashboardQuery.isLoading ? (
-            <Skeleton className="rounded-card" style={{ minHeight: 270 }} />
+            <Skeleton className="rounded-card" style={{ minHeight: 210 }} />
           ) : energyToday ? (
             <HeadlineCard
               slot={energyToday}
@@ -990,12 +999,14 @@ export function SinglePlantDashboard(): JSX.Element {
               acCapacityKw={plant.ac_capacity_kw}
               action={performanceButton}
               compact
+              dense
             />
           ) : (
             // The slot never hides (it is a headline position), so this is the
             // dashboard request failing — the first tile says so. The way into
             // the performance detail must not go with it.
             <RailTile
+              dense
               icon={IconEnergy}
               label="Today's Energy"
               footnote="The dashboard could not be loaded."

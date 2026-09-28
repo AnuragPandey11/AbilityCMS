@@ -54,6 +54,7 @@ import { DEVICE_LOOKBACK_MINUTES, useDeviceLatest } from "@/api/useLatestValues"
 import { windowRange, type TrendWindow } from "@/api/trendWindow";
 import { Panel, SegmentedControl } from "@/components/ui";
 import { TrendChart } from "@/components/charts/TrendChart";
+import { FittedFigure } from "@/components/charts/FittedFigure";
 import { Skeleton } from "@/components/state";
 import { usePermission } from "@/auth/usePermission";
 import { UNDEFINED_DISPLAY, digitsForUnit, formatHeadline } from "@/format/value";
@@ -215,7 +216,7 @@ export function FigureTile({ filled, emphasis = false }: { filled: Filled; empha
   const missing = filled.value === null;
   return (
     <div
-      className="surface-tile min-w-0 rounded-card border border-line px-4 py-3"
+      className="surface-tile min-w-0 rounded-card border border-line px-3.5 py-2.5"
       title={
         missing
           ? (filled.reason ?? undefined)
@@ -223,13 +224,16 @@ export function FigureTile({ filled, emphasis = false }: { filled: Filled; empha
       }
     >
       <div className="truncate text-xs font-medium text-ink-muted">{filled.label}</div>
-      <div
-        className={`figure mt-1 truncate font-semibold leading-tight ${
-          emphasis ? "text-[1.6rem]" : "text-xl"
-        } ${missing ? "text-ink-faint" : "text-ink"}`}
-      >
-        {text}
-        {unit ? <span className="ml-1 text-xs font-medium text-ink-muted">{unit}</span> : null}
+      {/* Scaled to fit, never cut: `11.2…` reads as a different, real number. */}
+      <div className="mt-1">
+        <FittedFigure
+          value={text}
+          unit={unit}
+          className={`figure font-semibold ${emphasis ? "text-[1.6rem]" : "text-xl"} ${
+            missing ? "text-ink-faint" : "text-ink"
+          }`}
+          unitClassName="ml-0.5 text-xs font-medium text-ink-muted"
+        />
       </div>
     </div>
   );

@@ -227,7 +227,7 @@ export function PlantCard({
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-sunken">
           {capacityShare !== null && capacityShare > 0 ? (
             <div
-              className="h-full rounded-full bg-accent"
+              className="h-full rounded-full bg-chart"
               style={{ width: `max(${Math.min(1, capacityShare) * 100}%, 0.75rem)` }}
             />
           ) : null}

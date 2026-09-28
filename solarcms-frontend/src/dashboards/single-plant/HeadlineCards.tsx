@@ -52,6 +52,8 @@ interface CardProps {
   action?: ReactNode;
   /** Draw at the size of a fifth of a row rather than a third. */
   compact?: boolean;
+  /** The headline strip's tighter tile (`RailTile`'s `dense`). */
+  dense?: boolean;
 }
 
 export function HeadlineCard({
@@ -59,6 +61,7 @@ export function HeadlineCard({
   icon,
   action,
   compact,
+  dense,
   plantId,
   acCapacityKw,
 }: CardProps & {
@@ -67,20 +70,20 @@ export function HeadlineCard({
 }): JSX.Element {
   // No value, no drawing: the tile's explanation of *why* there is no value is
   // worth more than any picture of nothing.
-  if (slot.value === null) return <SlotRailTile slot={slot} icon={icon} action={action} />;
+  if (slot.value === null) return <SlotRailTile slot={slot} icon={icon} action={action} dense={dense} />;
   switch (slot.slot_code) {
     case "kpi.current_power":
-      return <PowerCard slot={slot} icon={icon} action={action} acCapacityKw={acCapacityKw} />;
+      return <PowerCard slot={slot} icon={icon} action={action} dense={dense} acCapacityKw={acCapacityKw} />;
     case "kpi.energy_today":
       return (
-        <SunClockCard slot={slot} icon={icon} action={action} compact={compact} plantId={plantId} />
+        <SunClockCard slot={slot} icon={icon} action={action} compact={compact} dense={dense} plantId={plantId} />
       );
     case "kpi.energy_month":
       return <DayColumnsCard slot={slot} icon={icon} action={action} plantId={plantId} />;
     case "kpi.energy_lifetime":
       return <OdometerCard slot={slot} icon={icon} action={action} />;
     default:
-      return <SlotRailTile slot={slot} icon={icon} action={action} />;
+      return <SlotRailTile slot={slot} icon={icon} action={action} dense={dense} />;
   }
 }
 
@@ -140,9 +143,11 @@ function arcPath(cx: number, cy: number, r: number, from: number, to: number): s
   return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${to - from > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
 }
 
-function PowerCard({ slot, icon, action, acCapacityKw }: CardProps & { acCapacityKw: number | null }): JSX.Element {
+function PowerCard({ slot, icon, action, dense, acCapacityKw }: CardProps & { acCapacityKw: number | null }): JSX.Element {
   if (acCapacityKw === null || acCapacityKw <= 0) {
-    return <SlotRailTile slot={slot} icon={icon} action={action} note="no AC capacity recorded to draw this against" />;
+    return (
+      <SlotRailTile slot={slot} icon={icon} action={action} dense={dense} note="no AC capacity recorded to draw this against" />
+    );
   }
   // The figure's unit comes from the Tag catalogue and the capacity's from the
   // column name. Where they differ they are not compared — dividing kW by MW is
@@ -153,6 +158,7 @@ function PowerCard({ slot, icon, action, acCapacityKw }: CardProps & { acCapacit
         slot={slot}
         icon={icon}
         action={action}
+        dense={dense}
         note={`reported in ${slot.unit ?? "no unit"}, and AC capacity is in kW — not compared`}
       />
     );
@@ -171,9 +177,10 @@ function PowerCard({ slot, icon, action, acCapacityKw }: CardProps & { acCapacit
       slot={slot}
       icon={icon}
       action={action}
+      dense={dense}
       figure={false}
       note={outside}
-      visual={<PowerDial slot={slot} fraction={fraction} capacity={acCapacityKw} />}
+      visual={<PowerDial slot={slot} fraction={fraction} capacity={acCapacityKw} dense={dense} />}
     />
   );
 }
@@ -182,10 +189,12 @@ function PowerDial({
   slot,
   fraction,
   capacity,
+  dense = false,
 }: {
   slot: ResolvedSlot;
   fraction: number;
   capacity: number;
+  dense?: boolean;
 }): JSX.Element {
   const gradient = useSvgId();
   const { text, title } = slotHeadline(slot);
@@ -198,13 +207,13 @@ function PowerDial({
   const end = start + sweep * clamped;
   const [tipX, tipY] = polar(cx, cy, r, end);
   return (
-    <div className="mx-auto w-full max-w-[15rem]">
+    <div className={`mx-auto w-full ${dense ? "max-w-[11rem]" : "max-w-[15rem]"}`}>
       <div className="relative" role="img" aria-label={`${title} of ${formatNumber(capacity, { digits: 0 })} kW AC capacity`}>
         <svg viewBox="0 0 200 150" className="block h-auto w-full" aria-hidden="true">
           <defs>
             <linearGradient id={gradient} x1="0" x2="1" y1="1" y2="0">
-              <stop offset="0" style={{ stopColor: "rgb(var(--c-accent))", stopOpacity: 0.55 }} />
-              <stop offset="1" style={{ stopColor: "rgb(var(--c-accent))" }} />
+              <stop offset="0" style={{ stopColor: "rgb(var(--c-chart-primary))", stopOpacity: 0.55 }} />
+              <stop offset="1" style={{ stopColor: "rgb(var(--c-chart-primary))" }} />
             </linearGradient>
           </defs>
           <path d={arcPath(cx, cy, r, start, start + sweep)} fill="none" strokeWidth={12} strokeLinecap="round" className="stroke-line" />
@@ -220,8 +229,8 @@ function PowerDial({
           {clamped > 0 ? (
             <>
               <path d={arcPath(cx, cy, r, start, Math.max(end, start + 0.5))} fill="none" strokeWidth={12} strokeLinecap="round" stroke={`url(#${gradient})`} />
-              <circle cx={tipX} cy={tipY} r={11} className="fill-accent" opacity={0.2} />
-              <circle cx={tipX} cy={tipY} r={4.5} className="fill-accent-strong" />
+              <circle cx={tipX} cy={tipY} r={11} className="fill-chart" opacity={0.2} />
+              <circle cx={tipX} cy={tipY} r={4.5} className="fill-chart-strong" />
             </>
           ) : null}
         </svg>
@@ -230,11 +239,13 @@ function PowerDial({
         <div className="absolute inset-x-[17%] top-[62%] flex -translate-y-1/2 flex-col items-center">
           <FittedFigure
             value={text}
-            className="figure text-[1.9rem] font-semibold leading-none tracking-tight text-ink"
+            className={`figure ${dense ? "text-2xl" : "text-[1.9rem]"} font-semibold leading-none tracking-tight text-ink`}
             title={title}
           />
-          {slot.unit ? <span className="mt-1 text-xs text-ink-muted">{slot.unit}</span> : null}
-          <span className="mt-0.5 text-xs font-semibold text-accent">
+          {slot.unit ? (
+            <span className={`${dense ? "mt-0.5 text-[10px]" : "mt-1 text-xs"} text-ink-muted`}>{slot.unit}</span>
+          ) : null}
+          <span className={`mt-0.5 ${dense ? "text-[10px]" : "text-xs"} font-semibold text-chart`}>
             {Math.round(fraction * 100)}% of AC
           </span>
         </div>
@@ -265,18 +276,19 @@ function periodLabel(period: PeriodEnergy, timeZone: string | undefined, unit: s
   }
 }
 
-function SunClockCard({ slot, icon, action, compact, plantId }: CardProps & { plantId: number }): JSX.Element {
+function SunClockCard({ slot, icon, action, compact, dense, plantId }: CardProps & { plantId: number }): JSX.Element {
   // "Today's energy" is a daily register by definition: its restart at midnight
   // is the day turning over, not an anomaly.
   const steps = useSlotSteps(plantId, slot.slot_code, "day", { resetsExpected: true });
   if (steps.unavailableReason) {
-    return <SlotRailTile slot={slot} icon={icon} action={action} note={steps.unavailableReason} />;
+    return <SlotRailTile slot={slot} icon={icon} action={action} dense={dense} note={steps.unavailableReason} />;
   }
   return (
     <SlotRailTile
       slot={slot}
       icon={icon}
       action={action}
+      dense={dense}
       figure={false}
       note={placementNote(slot, steps, "hour")}
       visual={<SunClock slot={slot} steps={steps} compact={compact} />}
@@ -304,7 +316,7 @@ function SunClock({
 
   return (
     <div
-      className={`relative mx-auto aspect-square w-full ${compact ? "max-w-[8.5rem]" : "max-w-[11rem]"}`}
+      className={`relative mx-auto aspect-square w-full ${compact ? "max-w-[7rem]" : "max-w-[11rem]"}`}
       role="img"
       aria-label={`${title} today, by hour`}
     >
@@ -339,10 +351,10 @@ function SunClock({
           const [x1, y1] = polar(c, c, inner + length, angle);
           const tone =
             period.state === "current"
-              ? "stroke-accent-strong"
+              ? "stroke-chart-strong"
               : period.state === "partial"
-                ? "stroke-accent/45"
-                : "stroke-accent";
+                ? "stroke-chart/45"
+                : "stroke-chart";
           return (
             <line key={period.start} x1={x0} y1={y0} x2={x1} y2={y1} strokeWidth={7} strokeLinecap="round" className={tone}>
               {label}
@@ -370,7 +382,7 @@ function SunClock({
             ring instead of reaching over the spokes it is the total of. */}
         <FittedFigure
           value={text}
-          className={`figure ${compact ? "text-lg" : "text-2xl"} font-semibold leading-none tracking-tight text-ink`}
+          className={`figure ${compact ? "text-base" : "text-2xl"} font-semibold leading-none tracking-tight text-ink`}
           title={title}
         />
         {slot.unit ? (
@@ -440,10 +452,10 @@ function DayColumns({ slot, steps }: { slot: ResolvedSlot; steps: ReturnType<typ
                 <div
                   className={`rounded-t-[3px] ${
                     day.state === "current"
-                      ? "bg-accent-strong"
+                      ? "bg-chart-strong"
                       : day.state === "partial"
-                        ? "bg-accent/45"
-                        : "bg-accent"
+                        ? "bg-chart/45"
+                        : "bg-chart"
                   }`}
                   style={{ height: `${Math.max(2, peak > 0 ? (day.energy / peak) * 100 : 2)}%` }}
                 />

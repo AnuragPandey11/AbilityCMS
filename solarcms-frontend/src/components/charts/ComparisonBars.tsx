@@ -25,7 +25,7 @@
  *
  * ── `gradient` is still one colour ──────────────────────────────────────────
  * The `gradient` appearance runs every bar through the *same* brand wash —
- * the accent into its strong step — along its length. It encodes nothing and differs between no two bars,
+ * the chart colour into its strong step — along its length. It encodes nothing and differs between no two bars,
  * so it is decoration of the one series rather than a second channel — the
  * objection above is to hue varying *between* categories, which this does not.
  *
@@ -82,10 +82,10 @@ export function ComparisonBars({
 }): JSX.Element {
   const { version: themeVersion } = useTheme();
   const theme = chartTheme();
-  // The brand accent, not categorical slot 1: this is one series, so its hue
-  // distinguishes it from nothing, and the figure being compared on each Device
-  // card takes the same colour (`DeviceFigureCard`, `InverterCard`).
-  const base = token("accent");
+  // The one-series chart colour (`chart-primary`): this is one series, and the
+  // figure being compared on each Device card takes the same colour
+  // (`DeviceFigureCard`, `InverterCard`), so the eye can go from bar to card.
+  const base = token("chart-primary");
   const gradient = appearance === "gradient";
   // One wash for every bar, left to right. Colours through `token`, which
   // emits the legacy syntax zrender can parse (Guardrail 28).
@@ -98,7 +98,7 @@ export function ComparisonBars({
         y2: 0,
         colorStops: [
           { offset: 0, color: base },
-          { offset: 1, color: token("accent-strong") },
+          { offset: 1, color: token("chart-primary-strong") },
         ],
       }
     : base;
