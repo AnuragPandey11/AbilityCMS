@@ -1,18 +1,126 @@
-"""Report definitions, runs and downloads."""
+"""Report definitions, runs and downloads; and the per-Plant report tables."""
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import text
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.domain.periods import report_window
+from solarcms.services import report_tables
 from solarcms.services.storage import LocalArtifactStore, get_store
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+# ── Report tables: one Plant, one period, answered while the reader waits ────
+
+async def _report_table(
+    session: SessionDep, kind: str, plant_id: int, period: str,
+    from_date: date | None, to_date: date | None,
+) -> tuple[report_tables.ReportTable, datetime]:
+    if kind not in report_tables.REPORT_KINDS:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"no report kind {kind!r}; expected one of "
+            f"{', '.join(report_tables.REPORT_KINDS)}")
+    plant = await report_tables.fetch_plant(session, plant_id)
+    if plant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+    now = datetime.now(UTC)
+    try:
+        # The days are the Plant's, not the browser's and not UTC's: "today"
+        # in Kolkata began at 18:30 UTC yesterday.
+        window = report_window(period, now, plant.zone, from_date, to_date)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return await report_tables.compose(session, kind, plant, window, now), now
+
+
+@router.get("/tables/{kind}")
+async def report_table(
+    kind: str, plant_id: int, session: SessionDep,
+    period: str = Query("today"),
+    from_date: date | None = None,
+    to_date: date | None = None,
+    _: CurrentUser = Depends(require_permission("report.generate")),
+) -> dict[str, Any]:
+    """The table a Report download would contain, as JSON — the screen's preview.
+
+    `period` is today, yesterday, last_7_days, last_30_days or custom (with
+    `from_date` and `to_date`, inclusive, as the Plant's own dates).
+    """
+    table, now = await _report_table(session, kind, plant_id, period, from_date, to_date)
+    return report_tables.to_payload(table, now)
+
+
+_MEDIA_TYPES = {
+    # UTF-8 with a byte-order mark, or Excel opens "°C" as "Â°C".
+    "csv": "text/csv; charset=utf-8",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pdf": "application/pdf",
+    "html": "text/html; charset=utf-8",
+}
+
+
+@router.get("/tables/{kind}/export")
+async def export_report_table(
+    kind: str, plant_id: int, session: SessionDep,
+    file_format: str = Query(..., alias="format", pattern="^(csv|xlsx|pdf|html)$"),
+    period: str = Query("today"),
+    from_date: date | None = None,
+    to_date: date | None = None,
+    user: CurrentUser = Depends(require_permission("report.generate")),
+) -> Response:
+    """The same table as a file. Computed afresh, never from the preview the
+    browser holds, so a file cannot carry figures the server did not make.
+
+    `html` is the printable page the PDF is rendered from, offered because PDF
+    rendering (WeasyPrint) is an optional extra: without it `pdf` is refused
+    with 503 and a browser can still print the page to PDF.
+    """
+    table, _now = await _report_table(session, kind, plant_id, period, from_date, to_date)
+
+    content: bytes
+    if file_format == "csv":
+        content = ("﻿" + report_tables.render_csv(table)).encode("utf-8")
+    elif file_format == "xlsx":
+        content = report_tables.render_xlsx(table)
+    elif file_format == "pdf":
+        pdf = report_tables.render_pdf(table)
+        if pdf is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "PDF rendering is not installed on this server; the Excel download "
+                "carries the same table, or print the page to PDF.")
+        content = pdf
+    else:
+        content = report_tables.render_html(table).encode("utf-8")
+
+    await session.execute(text("""
+        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
+        VALUES (:client_id, :user_id, 'report.export', 'plants', :plant_id,
+                CAST(:after AS jsonb))
+    """), {"client_id": table.plant.client_id, "user_id": user.user_id,
+           "plant_id": table.plant.id,
+           "after": json.dumps({"kind": kind, "format": file_format,
+                                "period": table.window.period,
+                                "first_day": table.window.first_day.isoformat(),
+                                "last_day": table.window.last_day.isoformat()})})
+
+    disposition = "inline" if file_format == "html" else "attachment"
+    return Response(
+        content=content, media_type=_MEDIA_TYPES[file_format],
+        headers={"Content-Disposition":
+                 f'{disposition}; filename="{table.filename_stem}.{file_format}"'},
+    )
+
+
+# ── Report definitions and runs: a Client's Reports, rendered by the scheduler
 
 
 @router.get("/definitions")

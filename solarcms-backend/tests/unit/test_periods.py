@@ -7,7 +7,7 @@ two-day-old Plant's CUF was divided by ten years of capacity.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -96,3 +96,66 @@ class TestMeasuredSince:
 
     def test_a_plant_that_never_reported_was_never_measured(self) -> None:
         assert measured_since(MORNING, None) is None
+
+
+class TestReportWindow:
+    """The Reports screen's presets are runs of whole days on the Plant's calendar."""
+
+    # 16:18 in Kolkata on 28 Sep 2026.
+    NOW = datetime(2026, 9, 28, 10, 48, tzinfo=UTC)
+
+    def test_today_runs_from_the_plants_midnight_to_now(self) -> None:
+        window = periods.report_window("today", self.NOW, KOLKATA)
+        assert window.first_day == window.last_day == date(2026, 9, 28)
+        assert window.start == datetime(2026, 9, 27, 18, 30, tzinfo=UTC)
+        # Not midnight tonight: nothing after now has been measured.
+        assert window.end == self.NOW
+
+    def test_yesterday_is_one_whole_local_day(self) -> None:
+        window = periods.report_window("yesterday", self.NOW, KOLKATA)
+        assert window.days == [date(2026, 9, 27)]
+        assert window.start == datetime(2026, 9, 26, 18, 30, tzinfo=UTC)
+        assert window.end == datetime(2026, 9, 27, 18, 30, tzinfo=UTC)
+
+    def test_last_7_days_is_today_and_the_six_before(self) -> None:
+        window = periods.report_window("last_7_days", self.NOW, KOLKATA)
+        assert len(window.days) == 7
+        assert window.first_day == date(2026, 9, 22)
+        assert window.last_day == date(2026, 9, 28)
+
+    def test_last_30_days(self) -> None:
+        window = periods.report_window("last_30_days", self.NOW, KOLKATA)
+        assert len(window.days) == 30
+        assert window.first_day == date(2026, 8, 30)
+
+    def test_the_day_is_the_plants_not_utcs(self) -> None:
+        # 00:30 on 29 Sep in Kolkata is still the 28th in UTC.
+        just_after = datetime(2026, 9, 28, 19, 0, tzinfo=UTC)
+        assert periods.report_window("today", just_after, KOLKATA).first_day == date(2026, 9, 29)
+
+    def test_custom_is_inclusive_of_both_days(self) -> None:
+        window = periods.report_window(
+            "custom", self.NOW, KOLKATA, date(2026, 9, 1), date(2026, 9, 3))
+        assert window.days == [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)]
+        assert window.end == datetime(2026, 9, 3, 18, 30, tzinfo=UTC)
+
+    def test_custom_ending_today_stops_at_now(self) -> None:
+        window = periods.report_window(
+            "custom", self.NOW, KOLKATA, date(2026, 9, 27), date(2026, 9, 28))
+        assert window.end == self.NOW
+
+    @pytest.mark.parametrize(("first", "last", "message"), [
+        (None, date(2026, 9, 3), "needs both"),
+        (date(2026, 9, 3), date(2026, 9, 1), "before the first"),
+        (date(2026, 9, 1), date(2026, 9, 29), "after today"),
+        (date(2025, 1, 1), date(2026, 9, 1), "at most"),
+    ])
+    def test_custom_refuses_with_a_sentence(
+        self, first: date | None, last: date | None, message: str,
+    ) -> None:
+        with pytest.raises(ValueError, match=message):
+            periods.report_window("custom", self.NOW, KOLKATA, first, last)
+
+    def test_an_unknown_preset_is_refused(self) -> None:
+        with pytest.raises(ValueError):
+            periods.report_window("fortnight", self.NOW, KOLKATA)

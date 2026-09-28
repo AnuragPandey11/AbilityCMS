@@ -55,10 +55,17 @@ class CounterSample:
 @dataclass(frozen=True, slots=True)
 class CounterStep:
     """An accepted increment, stamped with the later reading's time — the time
-    by which it had certainly accrued, which is how it is attributed to a day."""
+    by which it had certainly accrued, which is how it is attributed to a day.
+
+    `since` is the earlier reading's time. A step whose two readings fall on
+    different days accrued at some unknown point between them — across an
+    outage, on any of the days it spans — so a per-day breakdown must not hand
+    it all to the later day (`report_tables.split_steps`).
+    """
 
     at: datetime
     amount: float
+    since: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +144,7 @@ def integrate_counter(
 
         # Zero steps are kept: an hour whose readings did not move made nothing,
         # which is a different fact from an hour with no readings at all.
-        steps.append(CounterStep(current.at, delta))
+        steps.append(CounterStep(current.at, delta, previous.at))
         total += delta
 
     return CounterIntegral(

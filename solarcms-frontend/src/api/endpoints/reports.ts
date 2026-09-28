@@ -1,13 +1,83 @@
 import { z } from "zod";
-import { request } from "../client";
+import { request, requestBlob, requestText, type QueryParams } from "../client";
 import {
   ReportDefinitionSchema,
   ReportRunRequestSchema,
   ReportRunSchema,
+  ReportTableSchema,
   parse,
   type ReportDefinition,
   type ReportRun,
+  type ReportTable,
 } from "../schemas";
+
+// ── Report tables: one Plant, one period, answered while the reader waits ────
+
+export type ReportKind = "daily_plant" | "monthly_plant" | "inverter" | "weather" | "alarm";
+export type ReportPeriod = "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
+export type ReportFormat = "csv" | "xlsx" | "pdf";
+
+export interface ReportTableQuery {
+  kind: ReportKind;
+  plantId: number;
+  period: ReportPeriod;
+  /** The Plant's own dates, `YYYY-MM-DD`, inclusive. Custom periods only. */
+  fromDate?: string;
+  toDate?: string;
+}
+
+function tableParams(query: ReportTableQuery): QueryParams {
+  return {
+    plant_id: query.plantId,
+    period: query.period,
+    ...(query.period === "custom" ? { from_date: query.fromDate, to_date: query.toDate } : {}),
+  };
+}
+
+/**
+ * The table as JSON. The period is resolved on the server, in the Plant's own
+ * zone — "today" at a Plant in Kolkata began at its midnight, whatever the
+ * browser's clock says.
+ */
+export async function getReportTable(query: ReportTableQuery): Promise<ReportTable> {
+  const path = `/reports/tables/${query.kind}`;
+  return parse(ReportTableSchema, await request(path, { params: tableParams(query) }), `GET ${path}`);
+}
+
+/**
+ * The same table as a file, computed afresh on the server — never assembled
+ * from the preview this browser holds, so a download cannot carry a figure the
+ * server did not make. A PDF is refused with 503 when the server has no PDF
+ * renderer; the caller then offers `html` to print.
+ */
+export async function exportReportTable(
+  query: ReportTableQuery,
+  format: ReportFormat,
+): Promise<Blob> {
+  return requestBlob(`/reports/tables/${query.kind}/export`, {
+    ...tableParams(query),
+    format,
+  });
+}
+
+/**
+ * The printable page the PDF is rendered from — offered when the server has
+ * no PDF renderer, so the browser can print the same table to PDF instead.
+ */
+export async function reportTablePage(query: ReportTableQuery): Promise<string> {
+  return requestText(`/reports/tables/${query.kind}/export`, {
+    ...tableParams(query),
+    format: "html",
+  });
+}
+
+/** What the server names the file — the Plant, the kind and the days. */
+export function reportFilename(table: ReportTable, format: ReportFormat): string {
+  const day = (iso: string) => iso.replace(/-/g, "");
+  return `${table.plant.code}_${table.kind}_${day(table.first_day)}_${day(table.last_day)}.${format}`;
+}
+
+// ── Report definitions and runs: a Client's Reports, rendered by the scheduler
 
 export async function listDefinitions(): Promise<ReportDefinition[]> {
   return parse(

@@ -50,17 +50,19 @@ import { useBindings, useDevice, useDeviceOperatingStatus, useTags } from "@/api
 import { qk } from "@/api/queryKeys";
 import * as readingsApi from "@/api/endpoints/readings";
 import { withGaps, type TrendPoint } from "@/api/useSlotTrend";
+import { DEVICE_LOOKBACK_MINUTES, useDeviceLatest } from "@/api/useLatestValues";
+import { windowRange, type TrendWindow } from "@/api/trendWindow";
 import { Panel, SegmentedControl } from "@/components/ui";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { Skeleton } from "@/components/state";
 import { usePermission } from "@/auth/usePermission";
 import { UNDEFINED_DISPLAY, digitsForUnit, formatHeadline } from "@/format/value";
-import { dayInZone, formatDateTime, formatTime } from "@/format/datetime";
+import { formatDateTime, formatTime } from "@/format/datetime";
 
 // ── The layout ───────────────────────────────────────────────────────────────
 
 /** A position on the screen and the Tags that can fill it, preferred first. */
-interface Position {
+export interface Position {
   label: string;
   codes: string[];
 }
@@ -122,48 +124,12 @@ const stringCodes = (n: number) => ({
 });
 
 /** Units that are type names rather than units, and are not printed as one. */
-const NOT_A_UNIT = new Set(["ratio", "code", "bool"]);
+export const NOT_A_UNIT = new Set(["ratio", "code", "bool"]);
 
 // ── Values ───────────────────────────────────────────────────────────────────
 
 /** How far back a "current" value may come from, as `useLatestValues` uses. */
-const LOOKBACK_MINUTES = 30;
-
-/**
- * The last good value of every Tag this Device sent recently, keyed by Tag id.
- *
- * No Tag filter: the screen must be able to list what it did not expect, and a
- * filter built from the layout would make anything outside it invisible.
- */
-function useDeviceLatest(deviceId: number): { values: Map<number, number>; isLoading: boolean } {
-  const now = Math.floor(Date.now() / 60_000) * 60_000;
-  const query: readingsApi.ReadingsQuery = {
-    deviceIds: [deviceId],
-    from: new Date(now - LOOKBACK_MINUTES * 60_000).toISOString(),
-    to: new Date(now).toISOString(),
-    resolution: "agg_1m",
-  };
-  const readings = useQuery({
-    queryKey: qk.readings(query),
-    queryFn: () => readingsApi.getReadings(query),
-    retry: false,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-    placeholderData: (previous) => previous,
-  });
-  const values = useMemo(() => {
-    const out = new Map<number, number>();
-    for (const point of (readings.data?.items ?? []) as ReadingPoint[]) {
-      // A flagged value is not presented as a reading (Guardrail 4). Buckets
-      // arrive ascending, so the last write per Tag is the latest good value.
-      if (point.quality !== null && point.quality !== 0) continue;
-      if (point.value === null) continue;
-      out.set(point.tag_id, point.value);
-    }
-    return out;
-  }, [readings.data]);
-  return { values, isLoading: readings.isLoading };
-}
+const LOOKBACK_MINUTES = DEVICE_LOOKBACK_MINUTES;
 
 /** A position filled — or not, and why. */
 export interface Filled {
@@ -171,6 +137,48 @@ export interface Filled {
   tag: Tag | undefined;
   value: number | null;
   reason: string | null;
+}
+
+/**
+ * Fill a position: the first of its Tags the Device reported, else say why not.
+ *
+ * The reason is as specific as this session can know (Guardrail 26): "not
+ * bound" where bindings are readable, the weaker "nothing received" where they
+ * are not. `subject` names the Device in it — "this Inverter".
+ */
+export function fillPosition(
+  position: Position,
+  {
+    tagsByCode,
+    values,
+    bound,
+    isLoading,
+    subject,
+  }: {
+    tagsByCode: Map<string, Tag>;
+    values: Map<number, number>;
+    /** Enabled bindings by Tag code, or null where this session may not read them. */
+    bound: Set<string> | null;
+    isLoading: boolean;
+    subject: string;
+  },
+): Filled {
+  for (const code of position.codes) {
+    const tag = tagsByCode.get(code);
+    if (tag && values.has(tag.id)) return { label: position.label, tag, value: values.get(tag.id) ?? null, reason: null };
+  }
+  const boundCode = bound ? position.codes.find((code) => bound.has(code)) : undefined;
+  const tag = tagsByCode.get(boundCode ?? position.codes[0] ?? "");
+  const Subject = subject.charAt(0).toUpperCase() + subject.slice(1);
+  let reason: string;
+  if (isLoading) reason = "Loading…";
+  else if (bound && boundCode) reason = `Bound to ${boundCode}, but nothing received in the last ${LOOKBACK_MINUTES} minutes.`;
+  else if (bound) reason = `${Subject} is not bound to ${position.codes.join(" or ")}, so it does not report this.`;
+  else
+    reason =
+      `Nothing received in the last ${LOOKBACK_MINUTES} minutes — ${subject} may not report ` +
+      `${position.codes.join(" or ")}, or it has gone quiet.`;
+  return { label: position.label, tag, value: null, reason };
 }
 
 // ── Presentation ─────────────────────────────────────────────────────────────
@@ -186,7 +194,7 @@ const TONE: Record<Tone, string> = {
   faint: "text-ink-faint",
 };
 
-function valueText(filled: Filled): { text: string; unit: string | null; title: string | undefined } {
+export function valueText(filled: Filled): { text: string; unit: string | null; title: string | undefined } {
   const { tag, value } = filled;
   if (value === null || !tag) return { text: UNDEFINED_DISPLAY, unit: null, title: undefined };
   // A status code is an identifier the Device sent, not a quantity: printed
@@ -202,7 +210,7 @@ function valueText(filled: Filled): { text: string; unit: string | null; title: 
   };
 }
 
-function FigureTile({ filled, emphasis = false }: { filled: Filled; emphasis?: boolean }): JSX.Element {
+export function FigureTile({ filled, emphasis = false }: { filled: Filled; emphasis?: boolean }): JSX.Element {
   const { text, unit, title } = valueText(filled);
   const missing = filled.value === null;
   return (
@@ -458,8 +466,6 @@ export function StringGrid({ strings }: { strings: StringReading[] }): JSX.Eleme
 
 // ── Trends ───────────────────────────────────────────────────────────────────
 
-type TrendWindow = "today" | "yesterday" | "7d" | "30d";
-
 const WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
   { value: "today", label: "Today", hint: "The Plant's day so far, per minute." },
   { value: "yesterday", label: "Yesterday", hint: "The Plant's previous day, per minute." },
@@ -474,34 +480,6 @@ const WINDOW_TIER: Record<TrendWindow, Tier> = {
   "7d": "agg_15m",
   "30d": "agg_1h",
 };
-
-function trendRange(
-  span: TrendWindow,
-  now: number,
-  timeZone: string,
-): { from: string; to: string; day: { start: number; end: number } | null } {
-  const today = dayInZone(now, timeZone);
-  switch (span) {
-    case "today":
-      return { from: new Date(today.start).toISOString(), to: new Date(now).toISOString(), day: today };
-    case "yesterday": {
-      const yesterday = dayInZone(today.start - 1, timeZone);
-      return {
-        from: new Date(yesterday.start).toISOString(),
-        to: new Date(yesterday.end).toISOString(),
-        day: yesterday,
-      };
-    }
-    default: {
-      const days = span === "7d" ? 7 : 30;
-      return {
-        from: new Date(now - days * 86_400_000).toISOString(),
-        to: new Date(now).toISOString(),
-        day: null,
-      };
-    }
-  }
-}
 
 // ── The view ─────────────────────────────────────────────────────────────────
 
@@ -549,23 +527,14 @@ export function InverterView({
   }, [latest.values, live]);
 
   /** Fill a position: the first Tag this Inverter reports, else say why not. */
-  const fill = (position: Position): Filled => {
-    for (const code of position.codes) {
-      const tag = tagsByCode.get(code);
-      if (tag && values.has(tag.id)) return { label: position.label, tag, value: values.get(tag.id) ?? null, reason: null };
-    }
-    const boundCode = bound ? position.codes.find((code) => bound.has(code)) : undefined;
-    const tag = tagsByCode.get(boundCode ?? position.codes[0]);
-    let reason: string;
-    if (latest.isLoading) reason = "Loading…";
-    else if (bound && boundCode) reason = `Bound to ${boundCode}, but nothing received in the last ${LOOKBACK_MINUTES} minutes.`;
-    else if (bound) reason = `This Inverter is not bound to ${position.codes.join(" or ")}, so it does not report this.`;
-    else
-      reason =
-        `Nothing received in the last ${LOOKBACK_MINUTES} minutes — this Inverter may not report ` +
-        `${position.codes.join(" or ")}, or it has gone quiet.`;
-    return { label: position.label, tag, value: null, reason };
-  };
+  const fill = (position: Position): Filled =>
+    fillPosition(position, {
+      tagsByCode,
+      values,
+      bound,
+      isLoading: latest.isLoading,
+      subject: "this Inverter",
+    });
 
   const ac = AC_SIDE.map(fill);
   const dc = DC_SIDE.map(fill);
@@ -614,7 +583,7 @@ export function InverterView({
   // ── Trends
   const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
   const now = Math.floor(Date.now() / 60_000) * 60_000;
-  const range = trendRange(trendWindow, now, timeZone);
+  const range = windowRange(trendWindow, now, timeZone);
   const trendFills = TRENDS.map(fill);
   const trendTagIds = trendFills
     .map((filled) => filled.tag?.id)

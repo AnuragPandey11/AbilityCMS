@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { DASHBOARD_CODES, dashboardLabel } from "@/auth/useDashboard";
 
 describe("dashboard codes", () => {
-  it("matches the eight seeded in the database", () => {
+  it("matches the eleven seeded in the database", () => {
     expect([...DASHBOARD_CODES]).toEqual([
       "portfolio",
       "plant_overview",
@@ -15,6 +15,9 @@ describe("dashboard codes", () => {
       "single_plant",
       "sld",
       "inverter_monitoring",
+      "meteorological",
+      "energy_analytics",
+      "grid_monitoring",
       "alarms",
       "reports",
     ]);

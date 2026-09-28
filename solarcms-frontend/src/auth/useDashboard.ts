@@ -16,6 +16,9 @@ export const DASHBOARD_CODES = [
   "single_plant",
   "sld",
   "inverter_monitoring",
+  "meteorological",
+  "energy_analytics",
+  "grid_monitoring",
   "alarms",
   "reports",
 ] as const;
@@ -30,6 +33,9 @@ export const DASHBOARD_LABELS: Record<string, string> = {
   single_plant: "Single Plant",
   sld: "Single Line Diagram",
   inverter_monitoring: "Inverter Monitoring",
+  meteorological: "Meteorological",
+  energy_analytics: "Energy Analytics",
+  grid_monitoring: "MFM / Grid",
   alarms: "Alarms",
   reports: "Reports",
 };

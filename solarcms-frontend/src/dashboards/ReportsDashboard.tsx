@@ -1,343 +1,494 @@
 /**
  * `reports` (§6.7).
  *
- * List definitions, request a run, poll it, download.
+ * Laid out after the client's reference screen: pick a report type and a
+ * period — today, yesterday, the last 7 or 30 days, or a custom range — and the
+ * preview below answers at once; CSV, Excel and PDF download the same table.
  *
- * Two failures are rendered specifically rather than as generic errors:
+ * ── The preview is the file ─────────────────────────────────────────────────
+ * The server builds the preview and every download from one computation
+ * (`services/report_tables`), and a download is computed afresh rather than
+ * assembled from the rows this browser holds. So the file carries the same
+ * figures, units and precision as the screen, and nothing the server did not
+ * make. The preview decides only how a cell looks (`reports/format.ts`).
  *
- * - **409 on a Financial Report**: no ABT Meter is registered. I-11 forbids
- *   computing one from an MFM — the ABT Meter is the sealed settlement
- *   instrument. Saying "report failed" invites someone to retry forever.
- * - **`artifact_urls.pdf_unavailable`**: the run succeeded and the XLSX is
- *   there; PDF rendering is not installed. Offer the XLSX.
+ * ── Periods are the Plant's days ────────────────────────────────────────────
+ * The period is sent by name and resolved on the server in the Plant's zone:
+ * "today" at a Plant in Kolkata began at its midnight, whatever the browser's
+ * clock says. The custom range is the Plant's own dates too, and its "today"
+ * limit is read in the Plant's zone for the same reason.
  *
- * `artifact_urls` carries **signed, expiring** URLs. They are used directly,
- * never re-signed and never cached past their expiry.
+ * Below the preview, a Client's scheduled Reports (`ClientReportRuns`) — a
+ * different job: every Plant in one workbook, including the settlement Report
+ * that only the ABT Meter may produce.
  */
 
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useReportDefinitions, useReportRun } from "@/api/hooks";
-import { qk } from "@/api/queryKeys";
-import * as clientsApi from "@/api/endpoints/clients";
+import { useMemo, useState } from "react";
+import { usePlant, useReportTable } from "@/api/hooks";
 import * as reportsApi from "@/api/endpoints/reports";
-import { artifactHref } from "@/api/client";
+import type { ReportFormat, ReportKind, ReportPeriod } from "@/api/endpoints/reports";
+import type { ReportCellValue, ReportColumn, ReportTable } from "@/api/schemas";
+import { triggerDownload } from "@/api/client";
 import { isApiError } from "@/api/problem";
-import { Button, Field, Panel, Badge, inputClass } from "@/components/ui";
-import { EmptyState, ErrorState, ForbiddenState, LoadingState } from "@/components/state";
-import { formatDateTime, toDateInput } from "@/format/datetime";
-import { formatNumber } from "@/format/value";
 import { usePermission } from "@/auth/usePermission";
-import { useAuth } from "@/auth/AuthProvider";
+import { usePlantScope } from "@/state/usePlantScope";
+import { PlantPicker } from "@/components/domain";
+import { Button, Panel, SegmentedControl, inputClass } from "@/components/ui";
+import { DataTable, type Column } from "@/components/tables/DataTable";
+import { EmptyState, ErrorState, ForbiddenState, SkeletonTable } from "@/components/state";
+import { IconExport, IconWarning } from "@/components/icons";
+import { DEFAULT_TIMEZONE, dateInputInZone, timezoneLabel } from "@/format/datetime";
+import {
+  columnHeading,
+  customRangeProblem,
+  formatDayRange,
+  formatReportCell,
+  isNumericColumn,
+  shiftDate,
+} from "./reports/format";
+import { printHtml } from "./reports/printHtml";
+import { ClientReportRuns } from "./reports/ClientReportRuns";
+
+const KINDS: { value: ReportKind; label: string; hint: string }[] = [
+  {
+    value: "daily_plant",
+    label: "Daily Plant Report",
+    hint: "One row per day: power, energy, import and grid frequency.",
+  },
+  {
+    value: "monthly_plant",
+    label: "Monthly Plant Report",
+    hint: "One row per month: energy, irradiation, PR and CUF.",
+  },
+  {
+    value: "inverter",
+    label: "Inverter Report",
+    hint: "One row per Inverter: energy, peaks, temperature and availability.",
+  },
+  {
+    value: "weather",
+    label: "Weather Report",
+    hint: "One row per day from the Weather Station.",
+  },
+  { value: "alarm", label: "Alarm Report", hint: "Every Alarm opened in the period." },
+];
+
+const PERIODS: { value: ReportPeriod; label: string; hint?: string }[] = [
+  { value: "today", label: "Today", hint: "Since the Plant's midnight." },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "last_7_days", label: "Last 7 Days", hint: "Today and the six days before it." },
+  { value: "last_30_days", label: "Last 30 Days", hint: "Today and the 29 days before it." },
+  { value: "custom", label: "Custom" },
+];
+
+// Mirrors `domain/periods.MAX_REPORT_DAYS`; the server enforces it regardless.
+const MAX_CUSTOM_DAYS = 366;
+
+const FORMATS: { format: ReportFormat; label: string; hint: string }[] = [
+  { format: "csv", label: "CSV", hint: "The rows only — opens as a table anywhere." },
+  { format: "xlsx", label: "Excel", hint: "The table, with its Plant, period and notes." },
+  { format: "pdf", label: "PDF", hint: "A printable page of the table and its notes." },
+];
+
+// A segment's label never breaks inside its pill; on a narrow screen the
+// track scrolls sideways instead ("Last / 7 / Days" read as three options).
+function unbroken<T extends { label: string }>(options: T[]): (T & { label: JSX.Element })[] {
+  return options.map((option) => ({
+    ...option,
+    label: <span className="whitespace-nowrap">{option.label}</span>,
+  }));
+}
+
+const KIND_OPTIONS = unbroken(KINDS);
+const PERIOD_OPTIONS = unbroken(PERIODS);
+
+interface PreviewRow {
+  index: number;
+  cells: Record<string, ReportCellValue>;
+  flags: Record<string, string>;
+}
+
+type Notice = { tone: "info" | "bad"; text: string };
 
 export function ReportsDashboard(): JSX.Element {
   const canGenerate = usePermission("report.generate");
-  const definitionsQuery = useReportDefinitions(canGenerate);
-  const { me } = useAuth();
-  // A Super Admin belongs to no Client, and every Report run is filed under one.
-  const needsClient = me?.platform_admin === true && me.client_id === null;
-  const clientsQuery = useQuery({
-    queryKey: qk.clients(),
-    queryFn: clientsApi.listClients,
-    enabled: needsClient,
-    retry: false,
-  });
-  const [clientId, setClientId] = useState<number | null>(null);
+  const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
+  const plantQuery = usePlant(plantId);
+  const zone = plantQuery.data?.timezone ?? DEFAULT_TIMEZONE;
+  const today = dateInputInZone(Date.now(), zone);
 
-  const monthAgo = new Date(Date.now() - 30 * 86400_000);
-  const [definitionId, setDefinitionId] = useState<number | null>(null);
-  const [periodStart, setPeriodStart] = useState(toDateInput(monthAgo));
-  const [periodEnd, setPeriodEnd] = useState(toDateInput(new Date()));
-  const [runId, setRunId] = useState<number | null>(null);
-  const [abtRefusal, setAbtRefusal] = useState<string | null>(null);
-  const [genericError, setGenericError] = useState<string | null>(null);
+  const [kind, setKind] = useState<ReportKind>("daily_plant");
+  const [period, setPeriod] = useState<ReportPeriod>("today");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [exporting, setExporting] = useState<ReportFormat | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
-  const runQuery = useReportRun(runId);
+  const choosePeriod = (next: ReportPeriod) => {
+    // Custom opens on the last seven days rather than two empty inputs: a
+    // range to adjust is quicker than one to invent.
+    if (next === "custom" && (!fromDate || !toDate)) {
+      setToDate(today);
+      setFromDate(shiftDate(today, -6));
+    }
+    setPeriod(next);
+    setNotice(null);
+  };
 
-  const requestRun = useMutation({
-    mutationFn: () =>
-      reportsApi.requestRun(
-        definitionId as number,
-        new Date(`${periodStart}T00:00:00`).toISOString(),
-        new Date(`${periodEnd}T23:59:59`).toISOString(),
-        needsClient ? clientId : null,
-      ),
-    onMutate: () => {
-      setAbtRefusal(null);
-      setGenericError(null);
-    },
-    onSuccess: (result) => setRunId(result.run_id),
-    onError: (error) => {
-      if (isApiError(error) && error.isConflict) {
-        // The 409 that means "no ABT Meter". Rendered as the rule it is.
-        setAbtRefusal(error.problem.detail);
-        return;
+  const rangeProblem =
+    period === "custom" ? customRangeProblem(fromDate, toDate, today, MAX_CUSTOM_DAYS) : null;
+  const query: reportsApi.ReportTableQuery | null =
+    canGenerate && plantId !== null && rangeProblem === null
+      ? { kind, plantId, period, ...(period === "custom" ? { fromDate, toDate } : {}) }
+      : null;
+  // Today's row is still being written; a past range is not.
+  const live = period !== "yesterday" && (period !== "custom" || toDate >= today);
+  const tableQuery = useReportTable(query, live);
+  const table = tableQuery.data;
+  // A table for the previous choice, kept on screen while this one loads.
+  const stale = tableQuery.isPlaceholderData;
+
+  const download = async (format: ReportFormat) => {
+    if (!query || !table || stale) return;
+    setExporting(format);
+    setNotice(null);
+    try {
+      const blob = await reportsApi.exportReportTable(query, format);
+      triggerDownload(blob, reportsApi.reportFilename(table, format));
+    } catch (error) {
+      if (format === "pdf" && isApiError(error) && error.status === 503) {
+        // No PDF renderer on the server. The printable page it would have
+        // rendered goes to the browser's print dialog instead — same table.
+        try {
+          printHtml(await reportsApi.reportTablePage(query));
+          setNotice({
+            tone: "info",
+            text: "This server has no PDF renderer installed, so the report opened in your browser's print dialog — choose “Save as PDF” as the destination.",
+          });
+        } catch (inner) {
+          setNotice({ tone: "bad", text: describe(inner) });
+        }
+      } else {
+        setNotice({ tone: "bad", text: describe(error) });
       }
-      setGenericError(
-        isApiError(error) ? error.displayMessage : "Could not request the Report.",
-      );
-    },
-  });
+    } finally {
+      setExporting(null);
+    }
+  };
 
   if (!canGenerate) {
-    return (
-      <ForbiddenState detail="Running Reports requires the report.generate permission." />
-    );
+    return <ForbiddenState detail="Reports require the report.generate permission." />;
   }
-  if (definitionsQuery.isLoading) return <LoadingState label="Loading definitions" />;
-  if (definitionsQuery.isError) {
-    return (
-      <ErrorState
-        error={definitionsQuery.error}
-        retry={() => void definitionsQuery.refetch()}
-      />
-    );
-  }
-
-  const definitions = definitionsQuery.data ?? [];
-  const selected = definitions.find((definition) => definition.id === definitionId);
-  const run = runQuery.data;
-  const artifacts = run ? reportsApi.splitArtifacts(run) : { links: [], notes: [] };
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="page-title">Reports</h1>
-        <p className="mt-1.5 text-sm text-ink-muted">
-          Reports are rendered asynchronously by the scheduler and read from aggregate
-          tiers, never from raw Readings.
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="page-title">Reports</h1>
+          <p className="mt-1.5 text-sm text-ink-muted">
+            Generate and export Plant reports (CSV / Excel / PDF).
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
+          <PlantPicker
+            plants={plants}
+            value={plantId}
+            onChange={setPlantId}
+            label="Plant"
+            size="lg"
+          />
+        </div>
+      </header>
 
-      {definitions.length === 0 ? (
+      {hasNoPlants ? (
         <EmptyState
-          title="No Report definitions"
-          detail="No platform or Client Report definitions are available to this account."
+          title="No Plants assigned"
+          detail="A report is about one Plant, and this account has none. An administrator assigns Plants under Users."
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[20rem_1fr]">
-          <Panel title="Request a Report">
-            <div className="space-y-3">
-              {needsClient ? (
-                <Field label="Client" required>
-                  <select
-                    value={clientId ?? ""}
-                    onChange={(event) =>
-                      setClientId(event.target.value ? Number(event.target.value) : null)
-                    }
-                    className={inputClass}
-                    disabled={clientsQuery.isLoading}
-                  >
-                    <option value="">
-                      {clientsQuery.isLoading ? "Loading…" : "Choose…"}
-                    </option>
-                    {(clientsQuery.data ?? []).map((client) => (
-                      <option key={client.id} value={client.id}>
-                        {client.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              ) : null}
+        <>
+          <Panel title="Report generator">
+            <div className="space-y-5">
+              <div>
+                <p className="field-label mb-2">Report type</p>
+                <div className="max-w-full overflow-x-auto">
+                  <SegmentedControl
+                    label="Report type"
+                    value={kind}
+                    onChange={(next) => {
+                      setKind(next);
+                      setNotice(null);
+                    }}
+                    options={KIND_OPTIONS}
+                  />
+                </div>
+              </div>
 
-              <Field label="Definition" required>
-                <select
-                  value={definitionId ?? ""}
-                  onChange={(event) =>
-                    setDefinitionId(event.target.value ? Number(event.target.value) : null)
-                  }
-                  className={inputClass}
-                >
-                  <option value="">Choose…</option>
-                  {definitions.map((definition) => (
-                    <option key={definition.id} value={definition.id}>
-                      {definition.name}
-                      {definition.is_financial ? " (financial)" : ""}
-                    </option>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div className="min-w-0">
+                  <p className="field-label mb-2">Period</p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="max-w-full overflow-x-auto">
+                      <SegmentedControl
+                        label="Period"
+                        value={period}
+                        onChange={choosePeriod}
+                        options={PERIOD_OPTIONS}
+                      />
+                    </div>
+                    {period === "custom" ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Sized by a wrapper: the shared input class is full-width. */}
+                        <div className="w-40">
+                          <input
+                            type="date"
+                            aria-label="First day"
+                            value={fromDate}
+                            max={toDate || today}
+                            onChange={(event) => setFromDate(event.target.value)}
+                            className={inputClass}
+                          />
+                        </div>
+                        <span className="text-xs text-ink-muted">to</span>
+                        <div className="w-40">
+                          <input
+                            type="date"
+                            aria-label="Last day"
+                            value={toDate}
+                            min={fromDate || undefined}
+                            max={today}
+                            onChange={(event) => setToDate(event.target.value)}
+                            className={inputClass}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  {rangeProblem ? (
+                    <p className="mt-2 text-xs text-bad">{rangeProblem}</p>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap gap-2 lg:shrink-0">
+                  {FORMATS.map(({ format, label, hint }) => (
+                    <Button
+                      key={format}
+                      onClick={() => void download(format)}
+                      disabled={!table || stale || exporting !== null || query === null}
+                      title={hint}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm"
+                    >
+                      <IconExport size={15} />
+                      {exporting === format ? "Preparing…" : label}
+                    </Button>
                   ))}
-                </select>
-              </Field>
+                </div>
+              </div>
 
-              {selected?.description ? (
-                <p className="text-[11px] leading-snug text-ink-faint">
-                  {selected.description}
+              {notice ? (
+                <p
+                  role={notice.tone === "bad" ? "alert" : "status"}
+                  className={`rounded-control border px-3 py-2 text-xs ${
+                    notice.tone === "bad"
+                      ? "border-bad/30 bg-bad/10 text-bad"
+                      : "border-line bg-surface-sunken text-ink-muted"
+                  }`}
+                >
+                  {notice.text}
                 </p>
               ) : null}
-
-              {selected?.is_financial ? (
-                <div className="rounded border border-warn/30 bg-warn/10 px-2.5 py-2 text-[11px] leading-snug text-ink-muted">
-                  <Badge tone="warn">Financial</Badge>
-                  <p className="mt-1.5">
-                    Computed only from the ABT Meter — the sealed, revenue-grade
-                    settlement instrument. It cannot be derived from an MFM, so this
-                    will be refused if no ABT Meter is registered.
-                  </p>
-                </div>
-              ) : null}
-
-              <Field label="Period start" required>
-                <input
-                  type="date"
-                  value={periodStart}
-                  onChange={(event) => setPeriodStart(event.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="Period end" required>
-                <input
-                  type="date"
-                  value={periodEnd}
-                  onChange={(event) => setPeriodEnd(event.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-
-              <Button
-                variant="primary"
-                className="w-full"
-                disabled={
-                  definitionId === null ||
-                  (needsClient && clientId === null) ||
-                  requestRun.isPending
-                }
-                onClick={() => requestRun.mutate()}
-              >
-                {requestRun.isPending ? "Requesting…" : "Generate"}
-              </Button>
             </div>
           </Panel>
 
-          <div className="space-y-4">
-            {abtRefusal ? (
-              // Not a failure to retry — a rule. Say which rule.
-              <div className="rounded border border-warn/40 bg-warn/10 p-4">
-                <p className="text-sm font-medium text-warn">
-                  No ABT Meter is registered
-                </p>
-                <p className="mt-1 text-xs text-ink-muted">{abtRefusal}</p>
-                <p className="mt-2 text-xs text-ink-faint">
-                  A Financial Report has commercial standing only when it comes from
-                  the sealed settlement meter. Deriving one from an operational MFM is
-                  forbidden, so retrying will not help — register the ABT Meter for
-                  this Plant first.
-                </p>
-              </div>
-            ) : null}
-
-            {genericError ? (
-              <div className="rounded border border-bad/30 bg-bad/10 px-3 py-2 text-xs text-bad">
-                {genericError}
-              </div>
-            ) : null}
-
-            <Panel title="Run">
-              {runId === null ? (
-                <p className="text-xs text-ink-faint">
-                  No run requested in this session.
-                </p>
-              ) : runQuery.isLoading ? (
-                <LoadingState label="Reading run status" />
-              ) : runQuery.isError ? (
-                <ErrorState error={runQuery.error} />
-              ) : run ? (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <Badge
-                      tone={
-                        run.state === "succeeded"
-                          ? "ok"
-                          : run.state === "failed"
-                            ? "bad"
-                            : "warn"
-                      }
-                    >
-                      {run.state}
-                    </Badge>
-                    <span className="text-ink-muted">Run #{run.id}</span>
-                    <span className="text-ink-faint">
-                      {formatDateTime(run.period_start)} → {formatDateTime(run.period_end)}
-                    </span>
-                    {run.row_count !== null ? (
-                      <span className="text-ink-faint">
-                        {formatNumber(run.row_count, { digits: 0 })} rows
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {run.state === "queued" || run.state === "running" ? (
-                    <p className="text-xs text-ink-muted">
-                      The scheduler renders Reports out of band; this polls until it
-                      settles.
-                    </p>
-                  ) : null}
-
-                  {run.state === "failed" ? (
-                    <div className="rounded border border-bad/30 bg-bad/10 px-3 py-2">
-                      <p className="text-xs font-medium text-bad">Run failed</p>
-                      <p className="mt-1 text-xs text-ink-muted">
-                        {run.error ?? "No reason was recorded."}
-                      </p>
-                    </div>
-                  ) : null}
-
-                  {artifacts.links.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {artifacts.links.map((artifact) => (
-                        <a
-                          key={artifact.format}
-                          href={artifactHref(artifact.url)}
-                          className="rounded border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20"
-                          // The signed URL is itself the credential and expires;
-                          // it is used as given, never re-signed or stored.
-                          title="Signed link, valid for a limited time."
-                        >
-                          Download {artifact.format.toUpperCase()}
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {artifacts.notes.map((note) => (
-                    // pdf_unavailable: the run succeeded. Not a failure.
-                    <p
-                      key={note}
-                      className="rounded border border-line bg-surface px-3 py-2 text-[11px] text-ink-muted"
-                    >
-                      {note} The spreadsheet above is complete and unaffected.
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-            </Panel>
-
-            <Panel title="Available definitions">
-              <ul className="space-y-2">
-                {definitions.map((definition) => (
-                  <li
-                    key={definition.id}
-                    className="flex items-start justify-between gap-3 rounded border border-line bg-surface px-3 py-2"
-                  >
-                    <div>
-                      <div className="text-xs font-medium text-ink">{definition.name}</div>
-                      <div className="text-[11px] text-ink-faint">
-                        {definition.description ?? definition.code}
-                      </div>
-                    </div>
-                    {definition.is_financial ? (
-                      <Badge
-                        tone="warn"
-                        title="Requires the ABT Meter. Never computed from an MFM."
-                      >
-                        financial
-                      </Badge>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          </div>
-        </div>
+          <ReportPreview
+            table={table}
+            loading={tableQuery.isLoading}
+            fetching={tableQuery.isFetching}
+            stale={stale}
+            error={tableQuery.isError ? tableQuery.error : null}
+            retry={() => void tableQuery.refetch()}
+            waitingForRange={rangeProblem !== null}
+          />
+        </>
       )}
+
+      <ClientReportRuns />
     </div>
   );
+}
+
+function describe(error: unknown): string {
+  return isApiError(error) ? error.displayMessage : "Could not download the report.";
+}
+
+function ReportPreview({
+  table,
+  loading,
+  fetching,
+  stale,
+  error,
+  retry,
+  waitingForRange,
+}: {
+  table: ReportTable | undefined;
+  loading: boolean;
+  fetching: boolean;
+  stale: boolean;
+  error: unknown;
+  retry: () => void;
+  waitingForRange: boolean;
+}): JSX.Element {
+  const zone = table?.plant.timezone ?? DEFAULT_TIMEZONE;
+
+  const rows = useMemo<PreviewRow[]>(() => {
+    if (!table) return [];
+    const flags = new Map<number, Record<string, string>>();
+    for (const flag of table.flags) {
+      flags.set(flag.row, { ...(flags.get(flag.row) ?? {}), [flag.key]: flag.reason });
+    }
+    return table.rows.map((cells, index) => ({ index, cells, flags: flags.get(index) ?? {} }));
+  }, [table]);
+
+  const columns = useMemo<Column<PreviewRow>[]>(
+    () =>
+      (table?.columns ?? []).map((column) => ({
+        key: column.key,
+        header: columnHeading(column),
+        align: isNumericColumn(column) ? "right" : "left",
+        render: (row) => (
+          <ReportCell
+            column={column}
+            value={row.cells[column.key]}
+            flag={row.flags[column.key]}
+            zone={zone}
+          />
+        ),
+        sortValue: (row) => row.cells[column.key] ?? null,
+        filterValue: (row) => formatReportCell(column, row.cells[column.key], zone),
+      })),
+    [table, zone],
+  );
+
+  const count = table?.rows.length ?? 0;
+  const title = table
+    ? `${table.title} — preview (${count} ${count === 1 ? "row" : "rows"})`
+    : "Preview";
+  const subtitle = table
+    ? `${table.plant.name} (${table.plant.code}) · ${formatDayRange(
+        table.first_day,
+        table.last_day,
+      )} · ${timezoneLabel(table.plant.timezone)} time`
+    : undefined;
+
+  let body: JSX.Element;
+  if (error && !table) {
+    body = (
+      <div className="p-4">
+        <ErrorState error={error} retry={retry} />
+      </div>
+    );
+  } else if (!table) {
+    body = waitingForRange ? (
+      <p className="p-4 text-xs text-ink-faint">Choose a valid range to see the report.</p>
+    ) : loading ? (
+      <div className="p-4">
+        <SkeletonTable rows={6} columns={6} />
+      </div>
+    ) : (
+      <p className="p-4 text-xs text-ink-faint">Choose a Plant to see the report.</p>
+    );
+  } else {
+    body = (
+      <>
+        {error ? (
+          // The last good table stays, marked as not the one asked for.
+          <div className="border-b border-line p-4">
+            <ErrorState error={error} retry={retry} />
+          </div>
+        ) : null}
+        <div
+          className={`p-4 transition-opacity ${stale ? "opacity-50" : ""}`}
+          aria-busy={stale}
+        >
+          <DataTable
+            rows={rows}
+            columns={columns}
+            rowKey={(row) => row.index}
+            emptyMessage="No rows for this period."
+            filterPlaceholder="Filter rows…"
+            minColumnWidth={120}
+          />
+        </div>
+        {table.notes.length > 0 ? (
+          <div className="border-t border-line px-4 py-3">
+            <p className="text-xs font-medium text-ink-muted">How these figures were made</p>
+            <ul className="mt-1.5 list-disc space-y-1 pl-4 text-xs leading-snug text-ink-faint">
+              {table.notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <Panel
+      title={title}
+      subtitle={subtitle}
+      padding="p-0"
+      actions={
+        fetching ? (
+          <span className="text-xs text-ink-faint" role="status">
+            Updating…
+          </span>
+        ) : null
+      }
+    >
+      {body}
+    </Panel>
+  );
+}
+
+function ReportCell({
+  column,
+  value,
+  flag,
+  zone,
+}: {
+  column: ReportColumn;
+  value: ReportCellValue | undefined;
+  flag: string | undefined;
+  zone: string;
+}): JSX.Element {
+  const text = formatReportCell(column, value, zone);
+  const numeric = isNumericColumn(column);
+  if (value === null || value === undefined) {
+    return (
+      <span className="whitespace-nowrap text-ink-faint" title="Nothing to read — not zero.">
+        {text}
+      </span>
+    );
+  }
+  if (flag) {
+    // Shown unaltered and marked, never clamped (Guardrail 33).
+    return (
+      <span
+        className="inline-flex items-center gap-1 whitespace-nowrap text-warn tabular-nums"
+        title={flag}
+      >
+        <IconWarning size={12} />
+        {text}
+      </span>
+    );
+  }
+  // Figures, dates and times never break across lines; only a long sentence
+  // (an Alarm's message) wraps, at a width it can be read at.
+  const layout = numeric
+    ? "whitespace-nowrap tabular-nums"
+    : column.kind === "text" && text.length > 40
+      ? "block min-w-[18rem] whitespace-normal"
+      : "whitespace-nowrap";
+  return <span className={layout}>{text}</span>;
 }

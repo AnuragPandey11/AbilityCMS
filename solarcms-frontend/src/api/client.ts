@@ -136,6 +136,18 @@ export async function requestBlob(
   path: string,
   params?: QueryParams,
 ): Promise<Blob> {
+  return (await sendForFile(path, params)).blob();
+}
+
+/** A text document (a printable page) that still needs the bearer token. */
+export async function requestText(
+  path: string,
+  params?: QueryParams,
+): Promise<string> {
+  return (await sendForFile(path, params)).text();
+}
+
+async function sendForFile(path: string, params?: QueryParams): Promise<Response> {
   const response = await send(path, { params });
   if (!response.ok) {
     let body: unknown = null;
@@ -146,7 +158,7 @@ export async function requestBlob(
     }
     throw new ApiError(toProblem(response.status, body, path));
   }
-  return response.blob();
+  return response;
 }
 
 /**

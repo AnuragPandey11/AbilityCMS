@@ -93,6 +93,32 @@ export const COMM_TITLE: Record<CommStatus, string> = {
   unknown: "No health record yet; the Device has not reported since registration.",
 };
 
+const COMM_WORD: Record<CommStatus, string> = {
+  online: "Online",
+  degraded: "Degraded",
+  offline: "Offline",
+  unknown: "Unknown",
+};
+
+/**
+ * A Device's communication status as a pill with a dot — for a title band.
+ * Communication, never equipment: an offline Device has stopped reporting,
+ * which alone never proves it stopped working (Guardrail 16).
+ */
+export function CommStatusPill({ status }: { status: CommStatus | null | undefined }): JSX.Element {
+  const value = status ?? "unknown";
+  const style = STATUS_PILL[COMM_TONE[value]];
+  return (
+    <span
+      title={COMM_TITLE[value]}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-semibold ${style.frame}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+      {COMM_WORD[value]}
+    </span>
+  );
+}
+
 export function CommStatusBadge({
   status,
 }: {

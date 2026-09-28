@@ -55,6 +55,13 @@ export const qk = {
 
   reportDefinitions: () => ["reports", "definitions"] as const,
   reportRun: (id: number) => ["reports", "runs", id] as const,
+  reportTable: (
+    kind: string,
+    plantId: number,
+    period: string,
+    fromDate: string | null,
+    toDate: string | null,
+  ) => ["reports", "tables", kind, plantId, period, fromDate, toDate] as const,
 
   users: () => ["users"] as const,
   clients: () => ["clients"] as const,

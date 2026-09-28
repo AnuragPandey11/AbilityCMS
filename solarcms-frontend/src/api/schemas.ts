@@ -873,6 +873,53 @@ export const ReportRunSchema = z.object({
 });
 export type ReportRun = z.infer<typeof ReportRunSchema>;
 
+/**
+ * One Plant's report table — the Reports screen's preview, and exactly what its
+ * CSV, Excel and PDF downloads contain, since the server builds all four from
+ * the same computation.
+ *
+ * Every figure arrives with its column's unit and precision; nothing about a
+ * value is decided here. `null` is "nothing to read", never zero. Dates are the
+ * Plant's own (`YYYY-MM-DD`), datetimes ISO with the Plant's offset.
+ */
+export const ReportColumnSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  kind: z
+    .enum(["date", "month", "datetime", "text", "number", "percent", "count"])
+    .catch("text"),
+  unit: z.string(),
+  digits: z.number(),
+});
+export type ReportColumn = z.infer<typeof ReportColumnSchema>;
+
+export const ReportTableSchema = z.object({
+  kind: z.string(),
+  title: z.string(),
+  plant: z.object({
+    id: z.number(),
+    code: z.string(),
+    name: z.string(),
+    timezone: z.string(),
+  }),
+  period: z.string(),
+  first_day: z.string(),
+  last_day: z.string(),
+  start: z.string(),
+  end: z.string(),
+  source_tier: z.string().nullable(),
+  columns: z.array(ReportColumnSchema),
+  rows: z.array(z.record(z.union([z.number(), z.string(), z.null()]))),
+  // A figure shown unaltered but outside what its quantity can physically be
+  // (Guardrail 33): the cell is marked and the reason travels with it.
+  flags: z.array(z.object({ row: z.number(), key: z.string(), reason: z.string() })),
+  notes: z.array(z.string()),
+  truncated: z.boolean(),
+  generated_at: z.string(),
+});
+export type ReportTable = z.infer<typeof ReportTableSchema>;
+export type ReportCellValue = ReportTable["rows"][number][string];
+
 // ── Users, Clients, Audit ───────────────────────────────────────────────────
 
 export const UserSchema = z.object({

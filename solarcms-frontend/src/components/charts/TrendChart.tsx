@@ -134,6 +134,8 @@ function dayTicks(day: DayFrame): number[] {
   return ticks;
 }
 
+const DAY_MS = 86_400_000;
+
 /**
  * The time-axis label, with the day's closing midnight written `24:00`.
  *
@@ -145,9 +147,21 @@ export function timeAxisLabel(
   tier: Tier | null | undefined,
   timezone: string,
   day: DayFrame | null | undefined,
+  /**
+   * How much time the series covers. Over a day, a sub-hourly label carries
+   * its date, or a week at fifteen minutes reads `16:00 20:00 00:00` seven
+   * times over and the reader cannot tell which Tuesday a dip was on.
+   */
+  spanMs = 0,
 ): string {
   if (day && value >= day.end) return "24:00";
-  return formatAxisLabel(new Date(value), tier ?? "agg_1h", timezone);
+  return formatAxisLabel(new Date(value), tier ?? "agg_1h", timezone, !day && spanMs > DAY_MS);
+}
+
+/** First to last point, in ms — what `timeAxisLabel` needs to know. */
+export function pointsSpan(points: { at: string }[]): number {
+  if (points.length < 2) return 0;
+  return Date.parse(points[points.length - 1]!.at) - Date.parse(points[0]!.at);
 }
 
 /** The x-axis bounds and labels for a day frame; nothing when there is none. */
@@ -350,7 +364,7 @@ export function TrendChart({
         hideOverlap: true,
         color: token("ink-faint"),
         customValues: dayAxis(day).customValues,
-        formatter: (value: number) => timeAxisLabel(value, tier, timezone, day),
+        formatter: (value: number) => timeAxisLabel(value, tier, timezone, day, pointsSpan(points)),
       },
     },
     yAxis: {

@@ -13,7 +13,8 @@ the tz database, which is I/O (Guardrail 9).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, tzinfo
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta, tzinfo
 
 from solarcms.domain.assumptions import KPI_YEAR_START_MONTH
 
@@ -56,3 +57,85 @@ def measured_since(start: datetime | None, first_reading: datetime | None) -> da
     if start is None or first_reading is None:
         return None
     return max(start, first_reading)
+
+
+# ── Report periods ──────────────────────────────────────────────────────────
+#
+# The Reports screen offers presets the way the client's reference does —
+# today, yesterday, the last 7 or 30 days, or a custom range of dates — and
+# every one of them is a run of whole days on the Plant's calendar. "Last 7
+# days" is today and the six days before it, so its first row is a full day and
+# its last is the day in progress; a Report is never cut at a clock time the
+# reader did not choose.
+
+REPORT_PERIODS = ("today", "yesterday", "last_7_days", "last_30_days", "custom")
+
+# The longest custom range, in days. A product limit rather than an assumption
+# about the data: a year of days is 366 rows, and a per-day Report is read from
+# the hourly tier (a daily bucket is cut at UTC midnight, not the Plant's), so
+# the range bounds how many hourly rows one request reads.
+MAX_REPORT_DAYS = 366
+
+
+@dataclass(frozen=True, slots=True)
+class ReportWindow:
+    """A run of Plant-local days, and the UTC span that reads them.
+
+    `end` is the local midnight after `last_day`, or `now` while that day is
+    still in progress — nothing after `now` has been measured, and a span that
+    ran on to midnight would divide by hours that have not happened.
+    """
+
+    period: str
+    first_day: date
+    last_day: date
+    start: datetime
+    end: datetime
+
+    @property
+    def days(self) -> list[date]:
+        """Every local day in the window, first to last."""
+        count = (self.last_day - self.first_day).days + 1
+        return [self.first_day + timedelta(days=offset) for offset in range(count)]
+
+
+def local_midnight(day: date, zone: tzinfo) -> datetime:
+    """The UTC instant a Plant-local day begins."""
+    return datetime(day.year, day.month, day.day, tzinfo=zone).astimezone(UTC)
+
+
+def report_window(
+    period: str, now: datetime, zone: tzinfo,
+    first_day: date | None = None, last_day: date | None = None,
+) -> ReportWindow:
+    """The days `period` covers on the Plant's calendar.
+
+    Raises ValueError with a sentence for the reader — a custom range with no
+    dates, backwards, longer than `MAX_REPORT_DAYS`, or reaching past today.
+    """
+    if period not in REPORT_PERIODS:
+        raise ValueError(f"unknown report period {period!r}")
+    today = now.astimezone(zone).date()
+    if period == "today":
+        first, last = today, today
+    elif period == "yesterday":
+        first = last = today - timedelta(days=1)
+    elif period == "last_7_days":
+        first, last = today - timedelta(days=6), today
+    elif period == "last_30_days":
+        first, last = today - timedelta(days=29), today
+    else:
+        if first_day is None or last_day is None:
+            raise ValueError("a custom period needs both a first and a last day")
+        if last_day < first_day:
+            raise ValueError("the last day is before the first")
+        if last_day > today:
+            # Nothing has been measured there, and a row for it would read as
+            # a day the Plant made nothing.
+            raise ValueError(f"the last day cannot be after today ({today.isoformat()})")
+        if (last_day - first_day).days + 1 > MAX_REPORT_DAYS:
+            raise ValueError(f"a custom period is at most {MAX_REPORT_DAYS} days")
+        first, last = first_day, last_day
+    start = local_midnight(first, zone)
+    end = min(local_midnight(last + timedelta(days=1), zone), now.astimezone(UTC))
+    return ReportWindow(period, first, last, start, end)

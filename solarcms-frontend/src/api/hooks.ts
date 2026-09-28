@@ -488,6 +488,36 @@ export function useReportDefinitions(enabled = true) {
 }
 
 /**
+ * One Plant's report table for the preview.
+ *
+ * The previous table stays on screen while the next loads — switching the
+ * period swaps the rows in place rather than blanking the panel — but only for
+ * the same Plant: another Plant's rows under this one's name, even for a
+ * moment, would be a figure attributed to the wrong equipment.
+ *
+ * `live` refetches every minute while the period includes today, since today's
+ * row is still being written. It is a refresh interval, not a `staleTime`: the
+ * latter only permits a refetch that nothing here would ever ask for.
+ */
+export function useReportTable(query: reportsApi.ReportTableQuery | null, live: boolean) {
+  return useQuery({
+    queryKey: qk.reportTable(
+      query?.kind ?? "",
+      query?.plantId ?? 0,
+      query?.period ?? "",
+      query?.period === "custom" ? (query.fromDate ?? null) : null,
+      query?.period === "custom" ? (query.toDate ?? null) : null,
+    ),
+    queryFn: () => reportsApi.getReportTable(query as reportsApi.ReportTableQuery),
+    enabled: query !== null,
+    retry: false,
+    placeholderData: (previous) =>
+      previous && query && previous.plant.id === query.plantId ? previous : undefined,
+    refetchInterval: live ? 60_000 : false,
+  });
+}
+
+/**
  * Poll a run until it settles. `202` means queued; the scheduler renders it, so
  * there is no completion push to wait on (§6.7).
  */

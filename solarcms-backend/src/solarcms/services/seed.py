@@ -149,6 +149,13 @@ DASHBOARDS: Final[tuple[tuple[str, str, int], ...]] = (
     ("single_plant", "Single Plant", 40),
     ("sld", "Single Line Diagram", 50),
     ("inverter_monitoring", "Inverter Monitoring", 60),
+    # Not tender §7 — the client's reference screens (28 Sep 2026): the Weather
+    # Station's readings and trends, historical Plant trends over a chosen
+    # window, and the Plant's meters. Granted like any other: a Client Admin
+    # sees them at once, anyone else once an administrator assigns them.
+    ("meteorological", "Meteorological", 62),
+    ("energy_analytics", "Energy Analytics", 64),
+    ("grid_monitoring", "MFM / Grid", 66),
     ("alarms", "Alarms", 70),
     ("reports", "Reports", 80),
 )

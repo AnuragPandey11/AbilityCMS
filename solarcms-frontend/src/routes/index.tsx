@@ -22,6 +22,9 @@ import { PlantsDashboard } from "@/dashboards/PlantsDashboard";
 import { SinglePlantDashboard } from "@/dashboards/SinglePlantDashboard";
 import { SldDashboard } from "@/dashboards/SldDashboard";
 import { InverterMonitoringDashboard } from "@/dashboards/InverterMonitoringDashboard";
+import { MeteorologicalDashboard } from "@/dashboards/MeteorologicalDashboard";
+import { EnergyAnalyticsDashboard } from "@/dashboards/EnergyAnalyticsDashboard";
+import { GridMonitoringDashboard } from "@/dashboards/GridMonitoringDashboard";
 import { AlarmsDashboard } from "@/dashboards/AlarmsDashboard";
 import { ReportsDashboard } from "@/dashboards/ReportsDashboard";
 
@@ -51,6 +54,9 @@ const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
   single_plant: SinglePlantDashboard,
   sld: SldDashboard,
   inverter_monitoring: InverterMonitoringDashboard,
+  meteorological: MeteorologicalDashboard,
+  energy_analytics: EnergyAnalyticsDashboard,
+  grid_monitoring: GridMonitoringDashboard,
   alarms: AlarmsDashboard,
   reports: ReportsDashboard,
 };
@@ -60,7 +66,15 @@ const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
  * a platform administrator narrows by Client and search. The bar is rendered
  * here, outside the page, so it survives the page's own loading states.
  */
-const PLANT_FILTERED_DASHBOARDS = new Set(["single_plant", "sld", "inverter_monitoring", "alarms"]);
+const PLANT_FILTERED_DASHBOARDS = new Set([
+  "single_plant",
+  "sld",
+  "inverter_monitoring",
+  "meteorological",
+  "energy_analytics",
+  "grid_monitoring",
+  "alarms",
+]);
 
 function DashboardRoute(): JSX.Element {
   const { code = "" } = useParams();

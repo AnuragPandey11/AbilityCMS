@@ -22,11 +22,14 @@ import type { IconProps } from "@/components/icons";
 import type { Permission } from "@/auth/usePermission";
 import {
   IconAlarm,
+  IconAnalytics,
   IconClient,
   IconDevices,
   IconGauge,
   IconInverter,
+  IconIrradiance,
   IconMapping,
+  IconMeter,
   IconOverview,
   IconPlant,
   IconPortfolio,
@@ -82,6 +85,9 @@ export const DASHBOARD_ICONS: Record<string, IconComponent> = {
   single_plant: IconPlant,
   sld: IconSld,
   inverter_monitoring: IconInverter,
+  meteorological: IconIrradiance,
+  energy_analytics: IconAnalytics,
+  grid_monitoring: IconMeter,
   alarms: IconAlarm,
   reports: IconReport,
 };
@@ -106,7 +112,17 @@ export interface NavGroup {
  */
 export const NAV_GROUPS: NavGroup[] = [
   { label: "Fleet", codes: ["portfolio", "plant_overview", "plant_list"] },
-  { label: "This Plant", codes: ["single_plant", "sld", "inverter_monitoring"] },
+  {
+    label: "This Plant",
+    codes: [
+      "single_plant",
+      "sld",
+      "inverter_monitoring",
+      "meteorological",
+      "energy_analytics",
+      "grid_monitoring",
+    ],
+  },
   { label: "Operations", codes: ["alarms", "reports"] },
 ];
 

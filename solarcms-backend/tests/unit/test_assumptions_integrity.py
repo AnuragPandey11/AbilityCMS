@@ -123,5 +123,11 @@ class TestEnergyPrecedence:
         assert daily == lifetime
 
     def test_every_counter_in_the_precedence_is_a_cumulative_tag(self) -> None:
-        for _type_code, tag_code in a.PLANT_ENERGY_COUNTER_PRECEDENCE:
+        for _type_code, tag_code in (*a.PLANT_ENERGY_COUNTER_PRECEDENCE,
+                                     *a.PLANT_IMPORT_COUNTER_PRECEDENCE):
             assert a.TAG_SPECS[tag_code].cumulative, tag_code
+
+    def test_import_is_read_from_the_same_meters_in_the_same_order(self) -> None:
+        # No Inverter: it measures generation, never what the Plant drew.
+        export = [t for t, _tag in a.PLANT_ENERGY_COUNTER_PRECEDENCE if t != "INVERTER"]
+        assert [t for t, _tag in a.PLANT_IMPORT_COUNTER_PRECEDENCE] == export

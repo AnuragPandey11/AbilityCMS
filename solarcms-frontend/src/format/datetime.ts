@@ -106,11 +106,17 @@ export function formatAxisLabel(
   value: Timestamp,
   tier: string,
   timeZone: string = DEFAULT_TIMEZONE,
+  /**
+   * Put the date on a sub-hourly label too. For an axis spanning more than one
+   * day, where `16:00 20:00 00:00 04:00` repeats once per day and names none.
+   */
+  withDate = false,
 ): string {
   const p = parts(value, timeZone);
   if (!p) return "";
   if (tier === "agg_1d") return `${p.day}-${p.month}`;
   if (tier === "agg_1h") return `${p.day}-${p.month} ${p.hour}:00`;
+  if (withDate) return `${p.day}-${p.month} ${p.hour}:${p.minute}`;
   if (tier === "readings") return `${p.hour}:${p.minute}:${p.second}`;
   return `${p.hour}:${p.minute}`;
 }
@@ -166,23 +172,61 @@ export function ageSeconds(value: Timestamp | null | undefined): number | null {
 export function startOfDayInZone(value: Timestamp, timeZone: string = DEFAULT_TIMEZONE): number {
   const p = parts(value, timeZone);
   if (!p) return Number.NaN;
-  const midnightAsUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day));
-  const offsetAt = (instant: number): number => {
-    const q = parts(instant, timeZone);
-    if (!q) return 0;
-    // `hour` can read "24" at midnight in some engines' en-GB output.
-    const wall = Date.UTC(
-      Number(q.year),
-      Number(q.month) - 1,
-      Number(q.day),
-      Number(q.hour) % 24,
-      Number(q.minute),
-      Number(q.second),
-    );
-    return wall - instant;
-  };
-  const first = midnightAsUtc - offsetAt(midnightAsUtc);
-  return midnightAsUtc - offsetAt(first);
+  return wallClockToInstant(
+    Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)),
+    timeZone,
+  );
+}
+
+/** The zone's wall clock minus UTC at `instant`, in ms. */
+function offsetAt(instant: number, timeZone: string): number {
+  const q = parts(instant, timeZone);
+  if (!q) return 0;
+  // `hour` can read "24" at midnight in some engines' en-GB output.
+  const wall = Date.UTC(
+    Number(q.year),
+    Number(q.month) - 1,
+    Number(q.day),
+    Number(q.hour) % 24,
+    Number(q.minute),
+    Number(q.second),
+  );
+  return wall - instant;
+}
+
+/**
+ * The instant at which the zone's wall clock reads `wallAsUtc` — a wall time
+ * written as though it were UTC. Checked twice, so a wall time on a
+ * daylight-saving change still lands on its own offset.
+ */
+function wallClockToInstant(wallAsUtc: number, timeZone: string): number {
+  const first = wallAsUtc - offsetAt(wallAsUtc, timeZone);
+  return wallAsUtc - offsetAt(first, timeZone);
+}
+
+/**
+ * What a `<input type="datetime-local">` shows for an instant, in the Plant's
+ * zone: `YYYY-MM-DDTHH:MM`. Never a display format.
+ */
+export function toDateTimeInput(value: Timestamp, timeZone: string = DEFAULT_TIMEZONE): string {
+  const p = parts(value, timeZone);
+  if (!p) return "";
+  return `${p.year}-${p.month}-${p.day}T${String(Number(p.hour) % 24).padStart(2, "0")}:${p.minute}`;
+}
+
+/**
+ * The instant a `<input type="datetime-local">` value names, read as the
+ * Plant's wall clock rather than the browser's — an operator abroad typing
+ * 06:00 means sunrise at the Plant. `NaN` for anything unparseable.
+ */
+export function fromDateTimeInput(value: string, timeZone: string = DEFAULT_TIMEZONE): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!match) return Number.NaN;
+  const [, year, month, day, hour, minute] = match.map(Number) as number[];
+  return wallClockToInstant(
+    Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1, hour ?? 0, minute ?? 0),
+    timeZone,
+  );
 }
 
 /**
@@ -253,6 +297,20 @@ export function daysOfMonthInZone(
   return days;
 }
 
+/**
+ * The latest of several instants, any of which may be missing — "last heard"
+ * from both the health sweep's `last_seen_at` and the last live frame, either
+ * of which can be the fresher.
+ */
+export function latestOf(...values: (string | null | undefined)[]): string | null {
+  let best: string | null = null;
+  for (const value of values) {
+    if (!value || Number.isNaN(Date.parse(value))) continue;
+    if (best === null || Date.parse(value) > Date.parse(best)) best = value;
+  }
+  return best;
+}
+
 /** ISO 8601 with offset — the only form ever sent to the API. */
 export function toApiInstant(value: Date): string {
   return value.toISOString();
@@ -261,6 +319,19 @@ export function toApiInstant(value: Date): string {
 /** The `YYYY-MM-DD` a `<input type="date">` wants. Never a display format. */
 export function toDateInput(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+/**
+ * The Plant's calendar date containing `value`, as the `YYYY-MM-DD` a date
+ * input wants. `toDateInput` gives the UTC date, which in Kolkata is yesterday
+ * until 05:30.
+ */
+export function dateInputInZone(
+  value: Timestamp,
+  timeZone: string = DEFAULT_TIMEZONE,
+): string {
+  const p = parts(value, timeZone);
+  return p ? `${p.year}-${p.month}-${p.day}` : "";
 }
 
 /** A short label naming the zone, so a shifted curve is at least attributable. */

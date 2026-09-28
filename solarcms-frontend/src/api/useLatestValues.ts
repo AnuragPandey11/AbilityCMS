@@ -105,3 +105,48 @@ export function useLatestValues(
 
   return { byDevice, isLoading: readingsQuery.isLoading };
 }
+
+/** How far back a single Device's "current" values may come from. */
+export const DEVICE_LOOKBACK_MINUTES = LOOKBACK_MINUTES;
+
+/**
+ * The last good value of every Tag one Device sent recently, keyed by Tag id.
+ *
+ * **No Tag filter**, unlike `useLatestValues`: a screen about one Device must
+ * be able to list what it did not expect, and a filter built from its layout
+ * would make anything outside the layout invisible. It also works for a
+ * session that may not read bindings (`config.modify`), because it asks what
+ * the Device *reported* rather than what it is bound to.
+ */
+export function useDeviceLatest(
+  deviceId: number | null,
+): { values: Map<number, number>; isLoading: boolean } {
+  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  const query: readingsApi.ReadingsQuery = {
+    deviceIds: deviceId === null ? [] : [deviceId],
+    from: new Date(now - LOOKBACK_MINUTES * 60_000).toISOString(),
+    to: new Date(now).toISOString(),
+    resolution: "agg_1m",
+  };
+  const readings = useQuery({
+    queryKey: qk.readings(query),
+    queryFn: () => readingsApi.getReadings(query),
+    enabled: deviceId !== null,
+    retry: false,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    placeholderData: (previous) => previous,
+  });
+  const values = useMemo(() => {
+    const out = new Map<number, number>();
+    for (const point of (readings.data?.items ?? []) as ReadingPoint[]) {
+      // A flagged value is not presented as a reading (Guardrail 4). Buckets
+      // arrive ascending, so the last write per Tag is the latest good value.
+      if (point.quality !== null && point.quality !== 0) continue;
+      if (point.value === null) continue;
+      out.set(point.tag_id, point.value);
+    }
+    return out;
+  }, [readings.data]);
+  return { values, isLoading: deviceId !== null && readings.isLoading };
+}

@@ -175,6 +175,33 @@ export const IconIrradiance = (p: IconProps) => (
   </Svg>
 );
 
+/**
+ * Energy Analytics — history over a window you choose. A trend on axes, not a
+ * bar series: `IconEnergy` is an accumulation, and this screen is about how a
+ * figure moved.
+ */
+export const IconAnalytics = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.6 3.4v17h17" />
+    <path d="m7.2 15.4 3.6-4.6 3.2 2.8 5.4-6.6" />
+    <path d="M7.2 15.4h.01M10.8 10.8h.01M14 13.6h.01" strokeWidth={2.6} />
+  </Svg>
+);
+
+/**
+ * MFM / Grid — a meter: a cased instrument with its register window, cabled
+ * below. Not the bolt, which is instantaneous power and nothing else; this
+ * screen is about the instruments at the Plant's boundary.
+ */
+export const IconMeter = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4.4" y="2.8" width="15.2" height="15.2" rx="2.2" />
+    <rect x="7.4" y="5.8" width="9.2" height="4.2" rx="0.8" />
+    <path d="M8.6 13.8h6.8" />
+    <path d="M8.6 18v3.2M15.4 18v3.2" />
+  </Svg>
+);
+
 // ── Administration ─────────────────────────────────────────────────────────
 
 /** Clients. A building, because a Client is an organisation, not a person. */
@@ -380,6 +407,89 @@ export const IconLeaf = (p: IconProps) => (
   <Svg {...p}>
     <path d="M4.6 19.4c-1.8-5.2.4-10.6 5-13 2.6-1.4 6-1.6 9.4-1.2.5 3.6.2 7.2-1.4 10-2.3 4-6.6 5.8-11 4.6Z" />
     <path d="M4.6 19.4c1.6-4.6 4.6-8 8.6-10.2" />
+  </Svg>
+);
+
+// ── The Weather Station's quantities ───────────────────────────────────────
+//
+// One per *quantity*, never per sensor, so two temperatures share the
+// thermometer and the three irradiances differ by the plane they are measured
+// on — which is the difference that matters when one of them is the PR
+// denominator and another is not.
+
+/** GHI — irradiance on the horizontal plane: the sun over a level line. */
+export const IconIrradianceHorizontal = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="9" r="3.4" />
+    <path d="M12 2.6v1.2M5.6 9H4.4M19.6 9h-1.2M7.5 4.5l.9.9M16.5 4.5l-.9.9M12 14.2v1.6" />
+    <path d="M3.4 18.6h17.2" />
+  </Svg>
+);
+
+/** GTI — irradiance on the plane of the array: the sun over a tilted module. */
+export const IconIrradianceTilted = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="8.4" cy="7.6" r="3.2" />
+    <path d="M8.4 2.4v1.2M3.2 7.6h1.2M4.7 3.9l.9.9M12.1 3.9l-.9.9M4.7 11.3l.9-.9" />
+    <path d="m8.8 19.6 12-6.8" />
+    <path d="M17 15v5.4M12.6 17.5v2.9" />
+  </Svg>
+);
+
+/** Direct (beam) radiation — parallel rays straight to the ground. */
+export const IconBeam = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="5.8" r="2.8" />
+    <path d="M7 11v6.2M12 11v6.2M17 11v6.2" />
+    <path d="m5.5 15.8 1.5 1.6 1.5-1.6M10.5 15.8l1.5 1.6 1.5-1.6M15.5 15.8l1.5 1.6 1.5-1.6" />
+    <path d="M3.4 20.6h17.2" />
+  </Svg>
+);
+
+/** Diffuse radiation — light scattered out from under a cloud. */
+export const IconDiffuse = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M15.2 13.4H8.4a4.8 4.8 0 1 1 4.6-6.2h2.2a3.1 3.1 0 1 1 0 6.2Z" />
+    <path d="m7.4 16.4-1.2 2.6M11.8 16.4l-.4 3.2M16 16.4l1 2.6" />
+  </Svg>
+);
+
+/** Cloud cover. */
+export const IconCloud = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M17.2 18H8.8a6.6 6.6 0 1 1 6.3-8.6h2.1a4.3 4.3 0 1 1 0 8.6Z" />
+  </Svg>
+);
+
+/** Frequency — two cycles of the waveform it counts. */
+export const IconFrequency = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 12c1.5-4.5 3-4.5 4.5 0s3 4.5 4.5 0 3-4.5 4.5 0 3 4.5 4.5 0" />
+  </Svg>
+);
+
+/** Wind speed — moving air. */
+export const IconWind = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 8.8h10.4a2.6 2.6 0 1 0-2.6-2.6" />
+    <path d="M3 12.6h14.8a2.6 2.6 0 1 1-2.6 2.6" />
+    <path d="M3 16.4h7" />
+  </Svg>
+);
+
+/** Wind direction — a compass needle, because it is a bearing. */
+export const IconCompass = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8.6" />
+    <path d="m15.6 8.4-2.3 4.9-4.9 2.3 2.3-4.9Z" />
+  </Svg>
+);
+
+/** A temperature — ambient air or the module's back sheet alike. */
+export const IconThermometer = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10 14.2V5a2 2 0 1 1 4 0v9.2a4 4 0 1 1-4 0Z" />
+    <path d="M12 8.6v8" />
   </Svg>
 );
 

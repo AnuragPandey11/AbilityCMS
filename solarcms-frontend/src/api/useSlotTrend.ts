@@ -214,6 +214,51 @@ function combine(values: number[], aggregate: string): number | null {
   }
 }
 
+/**
+ * One series from a readings response: each bucket's Devices combined the way
+ * the source says, flagged readings counted and left out, holes made breaks.
+ *
+ * ⚠ A flagged value is not plotted as data (§4.2, Guardrail 4). Dropping it
+ * from the bucket is right here rather than re-drawing it in the quality
+ * colour, which is what the detailed chart does: this is an aggregate across
+ * Devices, and one denormalised float inside a `sum` would move the whole
+ * curve with nothing on screen to say so. The count is returned so the chart
+ * can say how many — seventeen Inverters each flagged once reads as seventeen.
+ */
+export function seriesFromReadings(
+  items: ReadingPoint[],
+  aggregate: string,
+  tier: Tier | null,
+  sampleEveryMs = 0,
+): { points: TrendPoint[]; flaggedCount: number } {
+  let flagged = 0;
+  // Bucket → the Devices that reported in it. A Map preserves insertion
+  // order, and the server returns buckets ascending, so no sort is needed.
+  const byBucket = new Map<string, number[]>();
+  for (const point of items) {
+    if (point.quality !== null && point.quality !== 0) {
+      flagged += 1;
+      continue;
+    }
+    if (point.value === null) continue;
+    const bucket = byBucket.get(point.bucket);
+    if (bucket) bucket.push(point.value);
+    else byBucket.set(point.bucket, [point.value]);
+  }
+  return {
+    points: withGaps(
+      [...byBucket].map(([at, values]) => ({
+        at,
+        value: combine(values, aggregate),
+        contributors: values.length,
+      })),
+      tier,
+      sampleEveryMs,
+    ),
+    flaggedCount: flagged,
+  };
+}
+
 export function provenanceOf(slot: ResolvedSlot | undefined): string | null {
   const source = slot?.source;
   if (!source) return null;
@@ -284,7 +329,10 @@ export function useSlotSource(plantId: number | null, slotCode: string): SlotSou
 
   const unavailableReason = (() => {
     if (!dashboardQuery.data) return null;
-    if (!slot) return `No slot "${slotCode}" is configured.`;
+    // The server leaves a slot out when nothing at the Plant can answer it
+    // (`hide_when_unresolved`) or an override hides it — not only when it does
+    // not exist, so "not configured" would usually be false.
+    if (!slot) return "Nothing at this Plant answers this figure, so its dashboard leaves it out.";
     if (!source) {
       return slot.undefined_reason === "no_source"
         ? "No Device at this Plant can answer this figure."
@@ -365,42 +413,17 @@ export function useSlotTrend(
     placeholderData: (previous) => previous,
   });
 
-  const { points, flaggedCount } = useMemo<{ points: TrendPoint[]; flaggedCount: number }>(() => {
-    const items = readingsQuery.data?.items;
-    if (!items || !source) return { points: [], flaggedCount: 0 };
-    let flagged = 0;
-    // Bucket → the Devices that reported in it. A Map preserves insertion
-    // order, and the server returns buckets ascending, so no sort is needed.
-    const byBucket = new Map<string, number[]>();
-    for (const point of items as ReadingPoint[]) {
-      // A flagged value is not plotted as data (§4.2, Guardrail 4). Dropping it
-      // from the bucket is right here rather than re-drawing it in the quality
-      // colour, which is what the detailed chart does: this is an aggregate
-      // across Devices, and one denormalised float inside a `sum` would move
-      // the whole curve with nothing on screen to say so.
-      if (point.quality !== null && point.quality !== 0) {
-        flagged += 1;
-        continue;
-      }
-      if (point.value === null) continue;
-      const bucket = byBucket.get(point.bucket);
-      if (bucket) bucket.push(point.value);
-      else byBucket.set(point.bucket, [point.value]);
-    }
-    return {
-      points: withGaps(
-        [...byBucket].map(([at, values]) => ({
-          at,
-          value: combine(values, source.aggregate),
-          contributors: values.length,
-        })),
-        readingsQuery.data?.tier ?? null,
-      ),
-      // Counted across every Device, so seventeen Inverters each flagged once
-      // reads as seventeen flagged readings, which is what happened.
-      flaggedCount: flagged,
-    };
-  }, [readingsQuery.data, source]);
+  const { points, flaggedCount } = useMemo<{ points: TrendPoint[]; flaggedCount: number }>(
+    () =>
+      source
+        ? seriesFromReadings(
+            (readingsQuery.data?.items ?? []) as ReadingPoint[],
+            source.aggregate,
+            readingsQuery.data?.tier ?? null,
+          )
+        : { points: [], flaggedCount: 0 },
+    [readingsQuery.data, source],
+  );
 
   return {
     points,

@@ -506,6 +506,36 @@ PLANT_ENERGY_COUNTER_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
     ("INVERTER", "ENERGY_TOTAL"),
 )
 
+# ── Energy imported from the grid, from lifetime counters — ⚠ PROPOSED (OPEN-14).
+#
+# The meters in the same order as export. No Inverter fallback: an Inverter
+# measures what it generates, not what the Plant draws from the grid, so a
+# Plant without a meter has no import figure rather than a zero.
+PLANT_IMPORT_COUNTER_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
+    ("ABT_METER", "ENERGY_IMPORT_TOTAL"),
+    ("MFM", "ENERGY_IMPORT_TOTAL"),
+)
+
+# ── A ratio a Report flags as implausible — ⚠ ASSUMED.
+#
+# A PR or CUF above this, or below zero, means the numerator and denominator
+# covered different spans (a month of energy over a week of irradiation). The
+# Report shows it unaltered and flags it (Guardrail 33). Loose on purpose, and
+# the same ceiling the screen's `ratioIsImplausible` uses: a PR slightly above 1
+# is real in cold, bright conditions, and flagging good data is its own lie.
+REPORT_RATIO_CEILING: Final = 1.2
+
+# ── Grid frequency for a Report — ⚠ PROPOSED.
+#
+# Every one of these measures the same grid, so the order only decides whose
+# reading is quoted: the meter at the point of connection first, then the
+# Inverters. Their frequencies are averaged together rather than summed.
+PLANT_FREQUENCY_SOURCE_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
+    ("ABT_METER", "FREQUENCY"),
+    ("MFM", "FREQUENCY"),
+    ("INVERTER", "FREQUENCY"),
+)
+
 # ── Counter plausibility — ⚠ ASSUMED.
 #
 # A step in a lifetime energy counter is refused, and reported, when it goes
