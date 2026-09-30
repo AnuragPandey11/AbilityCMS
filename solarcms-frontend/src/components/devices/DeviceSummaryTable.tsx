@@ -30,7 +30,7 @@
 
 import type { DeviceListItem, DeviceTableColumn } from "@/api/schemas";
 import { CommStatusBadge } from "@/components/domain";
-import { UNDEFINED_DISPLAY, formatDigital, formatNumber } from "@/format/value";
+import { UNDEFINED_DISPLAY, formatDigital, formatNumber, isDigital } from "@/format/value";
 import { EmptyState } from "@/components/state";
 
 export function DeviceSummaryTable({
@@ -119,7 +119,7 @@ export function DeviceSummaryTable({
                         : // A Digital Input is a two-state contact, not a
                           // quantity (§4.5). Rendering a trip contact as "1.00"
                           // hides the only thing that matters about it.
-                          column.category === "status"
+                          isDigital(column)
                           ? formatDigital(value)
                           : formatNumber(value, { digits: 2 })}
                     </td>

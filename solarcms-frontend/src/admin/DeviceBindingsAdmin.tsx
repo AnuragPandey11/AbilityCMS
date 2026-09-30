@@ -21,11 +21,13 @@
  * needs a backend endpoint over `mqtt_raw_v` that does not exist yet.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useBindings,
   useDevice,
+  useDeviceModels,
   useDeviceModelTags,
   usePlantDevices,
   useTags,
@@ -44,8 +46,20 @@ import { PlantPicker } from "@/components/domain";
 import { usePermission } from "@/auth/usePermission";
 import { usePlantScope } from "@/state/usePlantScope";
 import { useLiveSocket } from "@/live/LiveSocket";
-import { formatValue, formatDigital } from "@/format/value";
+import { formatValue, formatDigital, isDigital } from "@/format/value";
 import { formatAge } from "@/format/datetime";
+import type { DeviceModel } from "@/api/schemas";
+
+/**
+ * How a Model reads in the picker: its variant first, because for an Inverter
+ * String or Central is the choice being made, and the model code is only which
+ * row carries it. A Model with no variant says so rather than showing a blank.
+ */
+export function modelLabel(model: Pick<DeviceModel, "model_code" | "manufacturer" | "variant">): string {
+  const name = [model.manufacturer, model.model_code].filter(Boolean).join(" ");
+  if (!model.variant) return `${name} (no variant)`;
+  return `${model.variant.charAt(0).toUpperCase()}${model.variant.slice(1)} — ${name}`;
+}
 
 interface DraftBinding {
   source_key: string;
@@ -65,7 +79,13 @@ export function DeviceBindingsAdmin(): JSX.Element {
   const tagsQuery = useTags();
   const { devices: liveDevices } = useLiveSocket();
 
-  const [deviceId, setDeviceId] = useState<number | null>(null);
+  // `?device=` preselects a Device, so a screen that says "record it in Tag
+  // Mapping" can land on the Device it was talking about rather than on a picker.
+  const [searchParams] = useSearchParams();
+  const [deviceId, setDeviceId] = useState<number | null>(() => {
+    const requested = Number(searchParams.get("device"));
+    return Number.isInteger(requested) && requested > 0 ? requested : null;
+  });
   const [draft, setDraft] = useState<DraftBinding[]>([]);
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -73,6 +93,17 @@ export function DeviceBindingsAdmin(): JSX.Element {
 
   const bindingsQuery = useBindings(deviceId, canConfigure);
   const deviceQuery = useDevice(deviceId);
+
+  // A linked Device may belong to another Plant than the one last selected;
+  // follow it once, so the Device picker names it. Once only — after that the
+  // Plant picker is the operator's again.
+  const followedLink = useRef(deviceId === null);
+  useEffect(() => {
+    const linked = deviceQuery.data;
+    if (followedLink.current || !linked) return;
+    followedLink.current = true;
+    if (linked.plant_id !== plantId) setPlantId(linked.plant_id);
+  }, [deviceQuery.data, plantId, setPlantId]);
   const modelTagsQuery = useDeviceModelTags(
     deviceQuery.data?.device_model_id ?? null,
   );
@@ -165,6 +196,22 @@ export function DeviceBindingsAdmin(): JSX.Element {
     (highest, tag) => Math.max(highest, tag.repeat_index ?? 0),
     0,
   );
+  // ⚠ An Inverter registered from the broker has the placeholder Model
+  // `REF-INVERTER`, which carries no PV group, so gating on the Model alone hid
+  // the string count from every such Inverter — the client's among them — and
+  // String Analysis sent people here to set a field that was not on the page.
+  // An Inverter always has PV inputs; the registry says how many there can be.
+  const pvInputSlots = (tagsQuery.data ?? []).filter((tag) =>
+    /^PV\d+_CURRENT$/.test(tag.code),
+  ).length;
+  const stringMax =
+    modelRepeatMax > 0
+      ? modelRepeatMax
+      : // The Device itself, not the Plant's list: a linked Device is known
+        // before the list for its Plant has loaded.
+        (deviceQuery.data?.type_code ?? device?.type_code) === "INVERTER"
+        ? pvInputSlots
+        : 0;
 
   const removedCount = useMemo(() => {
     const existing = new Set((bindingsQuery.data ?? []).map((b) => b.tag_code));
@@ -193,7 +240,7 @@ export function DeviceBindingsAdmin(): JSX.Element {
     if (!tag || !liveFrame) return "—";
     const value = liveFrame.values[tag.id];
     if (value === undefined) return "—";
-    return tag.category === "status"
+    return isDigital(tag)
       ? formatDigital(value)
       : formatValue(value, tag.unit);
   };
@@ -244,7 +291,11 @@ export function DeviceBindingsAdmin(): JSX.Element {
       </Panel>
 
       {deviceId !== null ? (
-        <DeviceSettings deviceId={deviceId} modelRepeatMax={modelRepeatMax} />
+        <DeviceSettings
+          deviceId={deviceId}
+          stringMax={stringMax}
+          modelHasStrings={modelRepeatMax > 0}
+        />
       ) : null}
 
       {deviceId !== null ? (
@@ -559,20 +610,38 @@ function UnmappedSignals({
   });
 
   if (keysQuery.isLoading || keys.length === 0) return null;
+  const suggested = keys.filter((key) => key.suggested_tag_code);
 
   return (
     <Panel
       title={`${keys.length} unmapped signal(s)`}
       subtitle="This Device is publishing these, and they are being discarded."
       actions={
-        <button
-          type="button"
-          onClick={() => forget.mutate()}
-          className="text-[11px] text-ink-muted hover:text-ink hover:underline"
-          title="Clears the list so it rebuilds from what arrives next. Use after binding them."
-        >
-          Clear list
-        </button>
+        <div className="flex items-center gap-3">
+          {suggested.length > 1 ? (
+            // An Inverter's PV inputs arrive as three keys per string — 48 for
+            // sixteen strings — each with the obvious suggestion. Drafts only,
+            // exactly as one click each would make them.
+            <button
+              type="button"
+              onClick={() =>
+                suggested.forEach((key) => onBind(key.source_key, key.suggested_tag_code as string))
+              }
+              className="text-[11px] font-medium text-accent hover:underline"
+              title="Adds a draft binding for every key that has a suggestion. Nothing is saved until you press Save bindings."
+            >
+              Bind all {suggested.length} suggested
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => forget.mutate()}
+            className="text-[11px] text-ink-muted hover:text-ink hover:underline"
+            title="Clears the list so it rebuilds from what arrives next. Use after binding them."
+          >
+            Clear list
+          </button>
+        </div>
       }
     >
       <div className="flex flex-wrap gap-2">
@@ -620,10 +689,14 @@ function UnmappedSignals({
  */
 function DeviceSettings({
   deviceId,
-  modelRepeatMax,
+  stringMax,
+  modelHasStrings,
 }: {
   deviceId: number;
-  modelRepeatMax: number;
+  /** How many PV inputs this Device can have; 0 hides the string count. */
+  stringMax: number;
+  /** Whether its Model lists the PV inputs, so re-seeding can bind them. */
+  modelHasStrings: boolean;
 }): JSX.Element | null {
   const queryClient = useQueryClient();
   const deviceQuery = useDevice(deviceId);
@@ -633,10 +706,18 @@ function DeviceSettings({
   const [error, setError] = useState<string | null>(null);
 
   const device = deviceQuery.data;
+  // Only Models of this Device's own Type: the server refuses any other, and
+  // offering them would be offering an Inverter the chance to become a meter.
+  const modelsQuery = useDeviceModels(device?.type_code ?? null);
+  const models = (modelsQuery.data ?? []).filter(
+    (model) => !device || model.device_type_code === device.type_code,
+  );
+  const isInverter = device?.type_code === "INVERTER";
 
   useEffect(() => {
     if (!device) return;
     setForm({
+      device_model_id: String(device.device_model_id),
       name: device.name,
       source_address: device.source_address ?? "",
       expected_interval_s: String(device.expected_interval_s),
@@ -658,6 +739,11 @@ function DeviceSettings({
           ? Number(form.rated_capacity_kw)
           : undefined,
         string_count: form.string_count ? Number(form.string_count) : undefined,
+        // Sent only when it changed, so an unrelated edit never re-asserts it.
+        device_model_id:
+          form.device_model_id && Number(form.device_model_id) !== device?.device_model_id
+            ? Number(form.device_model_id)
+            : undefined,
         // Emptying a box means "remove this", which a PATCH cannot express by
         // omission — `null` and "unchanged" are the same JSON.
         clear: [
@@ -672,6 +758,11 @@ function DeviceSettings({
           "takes effect on the next message.",
       );
       void queryClient.invalidateQueries({ queryKey: ["devices", deviceId] });
+      // The Plant's Device list carries each Device's variant, which is what
+      // Inverter Monitoring groups and ranks by.
+      if (device) {
+        void queryClient.invalidateQueries({ queryKey: ["plants", device.plant_id, "devices"] });
+      }
     },
     onError: (err) => {
       setNote(null);
@@ -685,9 +776,16 @@ function DeviceSettings({
     mutationFn: () => devicesApi.bindFromModel(deviceId, false),
     onSuccess: (result) => {
       setError(null);
+      // `strings` is the Device's string count, not how many were bound — so it
+      // is mentioned only when something was. A broker-registered Device's
+      // placeholder Model lists nothing, and "0 seeded including 16 PV strings"
+      // read as though the strings had been bound.
       setNote(
-        `${result.bound} Tag(s) seeded from the Model` +
-          (result.strings ? ` including ${result.strings} PV string(s).` : "."),
+        result.bound === 0
+          ? "Nothing to seed: this Device's Model lists no Tags that are not already bound. " +
+              "Bind its keys from the unmapped signals instead, once it sends them."
+          : `${result.bound} Tag(s) seeded from the Model` +
+              (result.strings ? `, for ${result.strings} PV string(s).` : "."),
       );
       void queryClient.invalidateQueries({
         queryKey: ["devices", deviceId, "bindings"],
@@ -718,6 +816,13 @@ function DeviceSettings({
       {!open ? (
         <div className="flex flex-wrap gap-4 text-[11px] text-ink-muted">
           <span>
+            Model{" "}
+            <span className="text-ink">
+              {device.model_code ?? `#${device.device_model_id}`}
+              {device.variant ? ` (${device.variant})` : isInverter ? " (no variant)" : ""}
+            </span>
+          </span>
+          <span>
             Topic{" "}
             <span className="font-mono text-ink">
               {device.source_address ?? "not set"}
@@ -732,11 +837,11 @@ function DeviceSettings({
               {device.rated_capacity_kw ?? "not set"} kW
             </span>
           </span>
-          {modelRepeatMax > 0 ? (
+          {stringMax > 0 ? (
             <span>
               PV strings{" "}
               <span className="text-ink">{device.string_count ?? "not set"}</span>{" "}
-              of {modelRepeatMax}
+              of {stringMax}
             </span>
           ) : null}
         </div>
@@ -751,6 +856,29 @@ function DeviceSettings({
                 }
                 className={inputClass}
               />
+            </Field>
+            <Field
+              label={isInverter ? "Model — String or Central" : "Device Model"}
+              hint={
+                isInverter
+                  ? "Inverter Monitoring ranks Inverters only against others of the same kind, so one with no variant is never ranked. Changing it keeps every binding — but seeding from the new Model afterwards adds every Tag on its list, including any this Inverter never sends."
+                  : "Only Models of this Device's own Type. Changing it keeps every binding."
+              }
+            >
+              <select
+                value={form.device_model_id ?? ""}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, device_model_id: event.target.value }))
+                }
+                className={inputClass}
+                data-testid="device-model"
+              >
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {modelLabel(model)}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field
               label="MQTT topic"
@@ -797,15 +925,19 @@ function DeviceSettings({
                 className={inputClass}
               />
             </Field>
-            {modelRepeatMax > 0 ? (
+            {stringMax > 0 ? (
               <Field
                 label="PV strings on this unit"
-                hint={`Up to ${modelRepeatMax}. Re-seed from the Model after changing it.`}
+                hint={
+                  modelHasStrings
+                    ? `Up to ${stringMax}. Re-seed from the Model after changing it.`
+                    : `Up to ${stringMax}. This Device's Model lists no PV inputs, so re-seeding adds none — bind its PV keys from the unmapped signals below once it publishes them.`
+                }
               >
                 <input
                   type="number"
                   min={0}
-                  max={modelRepeatMax}
+                  max={stringMax}
                   value={form.string_count ?? ""}
                   onChange={(event) =>
                     setForm((f) => ({ ...f, string_count: event.target.value }))

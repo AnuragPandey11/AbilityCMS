@@ -27,13 +27,9 @@
  */
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { usePlant, usePlantDevices } from "@/api/hooks";
-import { qk } from "@/api/queryKeys";
-import * as readingsApi from "@/api/endpoints/readings";
-import type { DeviceListItem, ReadingPoint, Tag } from "@/api/schemas";
-import { seriesFromReadings, type TrendPoint } from "@/api/useSlotTrend";
-import { tierWithin, windowRange, type TrendWindow } from "@/api/trendWindow";
+import type { DeviceListItem, Tag } from "@/api/schemas";
+import type { TrendWindow } from "@/api/trendWindow";
 import { Panel, SegmentedControl, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
@@ -42,6 +38,7 @@ import { OverlayTrendChart } from "@/components/charts/OverlayTrendChart";
 import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
 import { ReadingTile } from "@/components/devices/ReadingTile";
 import { useDeviceReadings } from "@/components/devices/useDeviceReadings";
+import { TREND_WINDOWS, useDeviceTrends } from "@/components/devices/useDeviceTrends";
 import type { IconComponent } from "@/components/layout/navigation";
 import {
   IconBeam,
@@ -94,13 +91,6 @@ const [GHI, GTI, WIND_SPEED, , AMBIENT, MODULE] = NOW as [
   WeatherPosition,
 ];
 
-const WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
-  { value: "today", label: "Today", hint: "The Plant's day so far, midnight to midnight." },
-  { value: "yesterday", label: "Yesterday", hint: "The Plant's previous day." },
-  { value: "7d", label: "Last 7 days", hint: "The last seven days, ending now." },
-  { value: "30d", label: "Last 30 days", hint: "The last thirty days, ending now." },
-];
-
 /** INVERTER_2 before INVERTER_10 — codes carry numbers, and people count. */
 const byCode = (a: DeviceListItem, b: DeviceListItem) =>
   a.code.localeCompare(b.code, undefined, { numeric: true });
@@ -140,10 +130,6 @@ export function MeteorologicalDashboard(): JSX.Element {
   // ── Trends
   const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
   const timezone = plantQuery.data?.timezone;
-  const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
-  // Waits for the Plant's zone: "today" framed on the browser's day first
-  // would be a request answering a question nobody asked.
-  const range = timezone ? windowRange(trendWindow, nowMs, timezone) : null;
 
   const trendFills = {
     ghi: fill(GHI),
@@ -152,55 +138,15 @@ export function MeteorologicalDashboard(): JSX.Element {
     module: fill(MODULE),
     wind: fill(WIND_SPEED),
   };
-  const trendTagIds = [
-    ...new Set(
-      Object.values(trendFills)
-        .map((filled) => filled.tag?.id)
-        .filter((id): id is number => id !== undefined),
-    ),
-  ].sort((a, b) => a - b);
-  // One Device, one request for every trend: the tier is the finest that fits
-  // all of them under the server's point cap.
-  const tier = range ? tierWithin(range, trendTagIds.length, nowMs) : "agg_1m";
-  const trendQueryArgs: readingsApi.ReadingsQuery = {
-    deviceIds: station ? [station.id] : [],
-    tagIds: trendTagIds,
-    from: range?.from ?? "",
-    to: range?.to ?? "",
-    resolution: tier,
-  };
-  const trendsEnabled = station !== null && range !== null && trendTagIds.length > 0;
-  const trendQuery = useQuery({
-    queryKey: qk.readings(trendQueryArgs),
-    queryFn: () => readingsApi.getReadings(trendQueryArgs),
-    enabled: trendsEnabled,
-    retry: false,
-    staleTime: 60_000,
-    refetchInterval: trendWindow === "yesterday" ? false : 60_000,
-    placeholderData: (previous) => previous,
-  });
-
-  const seriesByTag = useMemo(() => {
-    const byTag = new Map<number, ReadingPoint[]>();
-    for (const point of (trendQuery.data?.items ?? []) as ReadingPoint[]) {
-      const list = byTag.get(point.tag_id);
-      if (list) list.push(point);
-      else byTag.set(point.tag_id, [point]);
-    }
-    const out = new Map<number, { points: TrendPoint[]; flaggedCount: number }>();
-    const servedTier = trendQuery.data?.tier ?? null;
-    for (const [tagId, items] of byTag) {
-      // How often this Tag is stored when all is well — its throttle or the
-      // station's cycle, whichever is longer, plus one more cycle.
-      const cycle = station?.expected_interval_s ?? 0;
-      const throttle = tagsById.get(tagId)?.min_interval_s ?? 0;
-      out.set(tagId, seriesFromReadings(items, "first", servedTier, (Math.max(throttle, cycle) + cycle) * 1000));
-    }
-    return out;
-  }, [trendQuery.data, tagsById, station?.expected_interval_s]);
-
-  const seriesOf = (filled: Filled) =>
-    (filled.tag ? seriesByTag.get(filled.tag.id) : undefined) ?? { points: [], flaggedCount: 0 };
+  const trends = useDeviceTrends(
+    station,
+    Object.values(trendFills).map((filled) => filled.tag),
+    trendWindow,
+    timezone,
+    tagsById,
+  );
+  const range = trends.range;
+  const seriesOf = (filled: Filled) => trends.seriesOf(filled.tag);
 
   // ── Rendering
   if (hasNoPlants) {
@@ -283,8 +229,8 @@ export function MeteorologicalDashboard(): JSX.Element {
   }
 
   const chartHeight = 220;
-  const trendTier = trendQuery.data?.tier ?? null;
-  const trendLoading = trendsEnabled && trendQuery.isLoading;
+  const trendTier = trends.tier;
+  const trendLoading = trends.isLoading;
 
   return (
     <div className="flex flex-col gap-6">
@@ -318,13 +264,13 @@ export function MeteorologicalDashboard(): JSX.Element {
             label="Weather trend window"
             value={trendWindow}
             onChange={setTrendWindow}
-            options={WINDOWS}
+            options={TREND_WINDOWS}
           />
         }
         padding="p-4"
       >
-        {trendQuery.isError ? (
-          <ErrorState error={trendQuery.error} retry={() => void trendQuery.refetch()} />
+        {trends.isError ? (
+          <ErrorState error={trends.error} retry={trends.refetch} />
         ) : (
           <div className="grid gap-x-6 gap-y-6 lg:grid-cols-2">
             {[

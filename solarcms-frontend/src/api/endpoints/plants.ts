@@ -9,6 +9,7 @@ import {
   PlantDetailSchema,
   PlantKpisSchema,
   PlantPageSchema,
+  PlantStringsSchema,
   SldSchema,
   parse,
   type Block,
@@ -20,6 +21,7 @@ import {
   type PlantDetail,
   type PlantKpis,
   type PlantPage,
+  type PlantStrings,
   type Sld,
 } from "../schemas";
 
@@ -78,8 +80,13 @@ export async function getPlant(plantId: number): Promise<PlantDetail> {
 export async function plantKpis(
   plantId: number,
   period: KpiPeriod = "today",
+  compare = false,
 ): Promise<PlantKpis> {
-  const body = await request(`/plants/${plantId}/kpis`, { params: { period } });
+  // `compare` adds the previous period to the same point (`previous`). Only
+  // the single-Plant dials ask: the Portfolio fans this out across every Plant.
+  const body = await request(`/plants/${plantId}/kpis`, {
+    params: { period, compare: compare || undefined },
+  });
   return parse(PlantKpisSchema, body, `GET /plants/${plantId}/kpis`);
 }
 
@@ -89,6 +96,15 @@ export async function plantOperatingStatus(plantId: number): Promise<OperatingSt
     OperatingStatusSchema,
     await request(`/plants/${plantId}/operating-status`),
     `GET /plants/${plantId}/operating-status`,
+  );
+}
+
+/** Every PV string of every Inverter, with a verdict (`domain/strings.py`, ⚠ PROPOSED). */
+export async function plantStrings(plantId: number): Promise<PlantStrings> {
+  return parse(
+    PlantStringsSchema,
+    await request(`/plants/${plantId}/strings`),
+    `GET /plants/${plantId}/strings`,
   );
 }
 

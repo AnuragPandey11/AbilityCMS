@@ -27,6 +27,7 @@ import { TimeSeriesChart, toChartSeries } from "./TimeSeriesChart";
 import { StatusTimeline } from "./DigitalStatus";
 import { triggerDownload } from "@/api/client";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
+import { isDigital } from "@/format/value";
 
 const RANGES = [
   { label: "1h", hours: 1 },
@@ -126,7 +127,7 @@ export function ReadingsPanel({
 
   const selectedTags = allTags.filter((tag) => tagIds.includes(tag.id));
   const digitalTagIds = new Set(
-    selectedTags.filter((tag) => tag.category === "status").map((tag) => tag.id),
+    selectedTags.filter((tag) => isDigital(tag)).map((tag) => tag.id),
   );
 
   const points = readingsQuery.data?.items ?? [];

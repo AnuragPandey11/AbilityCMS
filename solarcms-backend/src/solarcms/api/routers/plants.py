@@ -14,7 +14,7 @@ from sqlalchemy import text
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.api.patching import patch_assignments
 from solarcms.cache import live
-from solarcms.domain.absence import assess_coverage
+from solarcms.domain.absence import Coverage, assess_coverage
 from solarcms.domain.assumptions import (
     AVAILABILITY_VARIANT,
     PLANT_ENERGY_COUNTER_PRECEDENCE,
@@ -31,7 +31,12 @@ from solarcms.domain.formulas import (
     specific_yield,
 )
 from solarcms.domain.health_logic import uptime_seconds_from_events
-from solarcms.domain.periods import measured_since, period_start
+from solarcms.domain.periods import (
+    ComparisonWindow,
+    measured_since,
+    period_start,
+    previous_window,
+)
 from solarcms.domain.sld import SldDevice, build_sld
 from solarcms.domain.sld_conflicts import (
     WiredDevice,
@@ -56,6 +61,7 @@ from solarcms.services.energy import (
     split_by_pair,
 )
 from solarcms.services.operating import operating_status
+from solarcms.services.strings import plant_strings
 
 router = APIRouter(prefix="/plants", tags=["plants"])
 # Block routes addressed by their own id sit at /blocks/{id}, not under
@@ -279,7 +285,7 @@ async def _first_reading(session: SessionDep, plant_id: int) -> datetime | None:
 async def _counter_series(
     session: SessionDep, plant_id: int, tier: Tier, start: datetime, lifetime: bool,
     pairs: list[tuple[str, str]] | tuple[tuple[str, str], ...],
-    *, block_id: int | None = None,
+    *, block_id: int | None = None, end: datetime | None = None,
 ) -> list[DeviceSeries]:
     """One Plant's (or Block's) register series from `tier`, from `start`.
 
@@ -288,15 +294,184 @@ async def _counter_series(
     and its hour is lost again. Nothing precedes a first reading, so the floor
     admits nothing from outside the period. Calendar periods begin at the
     Plant's midnight and are not floored: that would admit the evening before.
+
+    `end` bounds a window in the past — the previous period a KPI is compared
+    against. None reads up to now.
     """
     from_ = bucket_start(start, tier) if lifetime else start
     if block_id is not None:
         found = await read_counter_series(
-            session, tier=tier, block_id=block_id, start=from_, pairs=pairs)
+            session, tier=tier, block_id=block_id, start=from_, end=end, pairs=pairs)
     else:
         found = await read_counter_series(
-            session, tier=tier, plant_ids=[plant_id], start=from_, pairs=pairs)
+            session, tier=tier, plant_ids=[plant_id], start=from_, end=end, pairs=pairs)
     return found.get(plant_id, [])
+
+
+async def _meters_and_stations(
+    session: SessionDep, plant_id: int, tier: Tier, start: datetime, lifetime: bool,
+    end: datetime | None = None,
+) -> tuple[list[DeviceSeries], list[DeviceSeries]]:
+    """The energy meters' and weather stations' register series over a window.
+
+    Energy from each meter's own counter, and irradiation from the weather
+    stations — aggregates, never raw readings (MASTER §6.6).
+
+    ⚠ Irradiation is never read coarser than hourly. Its register restarts
+    at the Plant's midnight, and a daily bucket is cut at UTC midnight — for
+    Kolkata, 05:30 local — so every day's `last` is taken after the restart
+    and each day's sun reads as nothing. Only a lifetime over a year old
+    selects the daily tier, which is why this never showed on a young fleet.
+    """
+    irradiation_tier = Tier.AGG_1H if tier == Tier.AGG_1D else tier
+    if irradiation_tier == tier:
+        series = await _counter_series(
+            session, plant_id, tier, start, lifetime,
+            [*PLANT_ENERGY_COUNTER_PRECEDENCE, PLANT_IRRADIATION_SOURCE], end=end)
+        stations, meters = split_by_pair(series, PLANT_IRRADIATION_SOURCE)
+        return meters, stations
+    meters = await _counter_series(
+        session, plant_id, tier, start, lifetime, PLANT_ENERGY_COUNTER_PRECEDENCE, end=end)
+    stations = await _counter_series(
+        session, plant_id, irradiation_tier, start, lifetime, [PLANT_IRRADIATION_SOURCE],
+        end=end)
+    return meters, stations
+
+
+async def _coverage(
+    session: SessionDep, plant_id: int, tier: Tier, start: datetime, end: datetime,
+    lifetime: bool,
+) -> Coverage:
+    """How much of `start`..`end` the Plant's figures actually saw.
+
+    A gap does not make a figure look wrong; it makes it look *low*. An
+    average over fewer samples is still an average and a total over a hole is
+    simply smaller, so a communication outage reads as underperformance — and
+    for availability, as nothing having happened. Reporting coverage beside
+    the value is what makes the difference visible. It never corrects the
+    figure: correcting it would be inventing data.
+
+    ⚠ Per *binding*, and against the Tag's own throttle — not per Device.
+    A Device publishing every 86 s does not store 86 s of every Tag: ingest
+    throttles each Tag to its `min_interval_s`, so a Tag throttled to 300 s
+    stores one sample in every three or four messages. Counting one sample per
+    Tag per message expected 367k readings a day from this Plant against
+    26.6k stored and reported 7% coverage on a Plant that was entirely
+    healthy — a false alarm of exactly the kind this is meant to remove.
+
+    `created_at` clamps the window too: a Device registered an hour ago owes
+    nothing for the twenty-three before it existed. For a window in the past
+    the Devices and bindings are today's — the history of bindings is not
+    kept — so a Device retired since is not owed for, and one added since owes
+    nothing.
+    """
+    expected = (await session.execute(text("""
+        SELECT coalesce(sum(
+                   GREATEST(0, EXTRACT(EPOCH FROM (
+                       CAST(:end AS timestamptz)
+                       - GREATEST(CAST(:start AS timestamptz), d.created_at)
+                   )))
+                   / GREATEST(d.expected_interval_s,
+                              coalesce(t.min_interval_s, 0), 1)
+               ), 0)::bigint AS expected,
+               min(GREATEST(CAST(:start AS timestamptz), d.created_at)) AS expected_since
+          FROM device_tag_bindings b
+          JOIN devices d ON d.id = b.device_id
+          JOIN tags t    ON t.id = b.tag_id
+         WHERE d.plant_id = :plant_id AND d.status = 'active'
+           AND d.source_address IS NOT NULL AND b.enabled
+    """), {"plant_id": plant_id, "start": start, "end": end})).first()
+    expected_row = expected.expected if expected else 0
+    # ⚠ Missing time is measured over the span readings were expected in, the
+    # same span the count above covers — not the whole period. Measured over
+    # the period, a Plant registered two days ago reported "3,075.9 days of
+    # the period missing" under lifetime.
+    coverage_since = min((expected.expected_since if expected else None) or end, end)
+
+    received_row = (await session.execute(text(f"""
+        SELECT coalesce(sum(a.sample_count), 0)::bigint AS received
+          FROM {tier.value}_v a JOIN devices d ON d.id = a.device_id
+         WHERE d.plant_id = :plant_id AND a.bucket >= :start AND a.bucket < :end
+    """), {"plant_id": plant_id, "end": end,
+          "start": bucket_start(start, tier) if lifetime else start})).scalar()
+
+    # Planned work is an *explained* absence and must not count against the
+    # Plant. A gap is an unexplained one and must stay visible. A window not
+    # yet begun contributes nothing, rather than a negative span.
+    excluded_s = (await session.execute(text("""
+        SELECT coalesce(sum(EXTRACT(EPOCH FROM (
+                   least(coalesce(w.ends_at, CAST(:end AS timestamptz)),
+                         CAST(:end AS timestamptz))
+                 - greatest(w.starts_at, CAST(:start AS timestamptz))))), 0)
+          FROM maintenance_windows w
+         WHERE w.plant_id = :plant_id AND w.device_id IS NULL
+           AND coalesce(w.ends_at, CAST(:end AS timestamptz)) > CAST(:start AS timestamptz)
+           AND w.starts_at < CAST(:end AS timestamptz)
+    """), {"plant_id": plant_id, "start": coverage_since, "end": end})).scalar()
+
+    return assess_coverage(
+        int(expected_row or 0), int(received_row or 0),
+        max(0.0, (end - coverage_since).total_seconds()),
+        excluded_seconds=float(excluded_s or 0.0),
+    )
+
+
+def _coverage_payload(coverage: Coverage) -> dict[str, Any]:
+    return {
+        "ratio": coverage.ratio,
+        "complete": coverage.complete,
+        "expected_samples": coverage.expected_samples,
+        "received_samples": coverage.received_samples,
+        "missing_seconds": round(coverage.missing_seconds),
+        "excluded_seconds": round(coverage.excluded_seconds),
+    }
+
+
+def _render(result: FormulaResult) -> dict[str, Any]:
+    return {"value": result.value, "variant": result.variant,
+            "undefined_reason": result.undefined_reason}
+
+
+async def _previous_figures(
+    session: SessionDep, plant_id: int, window: ComparisonWindow, now: datetime,
+    dc_kwp: float, ac_kw: float,
+) -> dict[str, Any]:
+    """PR and CUF over the previous period, to the same point — what the
+    dials compare today's figures against.
+
+    Computed exactly as the current figures are: the same counters, the same
+    precedence, the same formulas, its own tier and its own coverage. ⚠ Never
+    the Plant KPI panel's YESTERDAY Tags: the scheduler computes PR from GHI and
+    CUF over a whole 24 hours, so comparing those with these puts two different
+    calculations on one dial and reads their difference as a change in the
+    Plant.
+    """
+    tier = select_tier(window.start, window.end, now, finest=Tier.AGG_1M)
+    meters, stations = await _meters_and_stations(
+        session, plant_id, tier, window.start, False, end=window.end)
+    energy_result = plant_energy(
+        meters, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac_kw or None)
+    irradiation = plant_irradiation(stations)
+    if energy_result.value is None:
+        reason = energy_result.undefined_reason
+        pr = FormulaResult(None, performance_ratio(0.0, 0.0, 0.0).variant, reason)
+        cuf_result = FormulaResult(None, cuf(0.0, 0.0, 0.0).variant, reason)
+    else:
+        hours = (window.end - window.measured_since).total_seconds() / 3600.0
+        pr = performance_ratio(
+            energy_result.value, (irradiation.value or 0.0) * 1000.0, dc_kwp)
+        cuf_result = cuf(energy_result.value, ac_kw, hours)
+    coverage = await _coverage(session, plant_id, tier, window.start, window.end, False)
+    return {
+        "period_start": window.start,
+        "period_end": window.end,
+        "measured_since": window.measured_since,
+        "source_tier": tier.value,
+        "performance_ratio": _render(pr),
+        "cuf": _render(cuf_result),
+        "counter_anomalies": counter_anomalies_payload(energy_result),
+        "coverage": _coverage_payload(coverage),
+    }
 
 
 async def _availability(
@@ -356,6 +531,15 @@ async def plant_kpis(
     plant_id: int, session: SessionDep,
     _: CurrentUser = Depends(require_permission("dashboard.view")),
     period: str = Query("today", pattern="^(today|month|year|lifetime)$"),
+    compare: bool = Query(
+        False,
+        description=(
+            "Also compute PR and CUF over the previous period up to the same "
+            "point (yesterday to this time of day, last month to this date). "
+            "Opt-in: the Portfolio fans this endpoint out across every Plant "
+            "and has no use for it."
+        ),
+    ),
 ) -> dict[str, Any]:
     """PR, CUF, availability, CO2 — each reported with the formula variant used.
 
@@ -373,11 +557,12 @@ async def plant_kpis(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
 
     now = datetime.now(UTC)
+    zone = _plant_zone(plant.timezone)
     # A calendar period in the Plant's own zone — today since its midnight, the
     # month since the 1st, the year since 1 January — and lifetime since its
     # first reading. See `domain/periods`.
     first_reading = await _first_reading(session, plant_id)
-    start = period_start(period, now, _plant_zone(plant.timezone), first_reading) or now
+    start = period_start(period, now, zone, first_reading) or now
     since = measured_since(start, first_reading)
 
     # ⚠ The tier is *selected*, not hardcoded. It used to be `agg_1h_v` for
@@ -396,14 +581,7 @@ async def plant_kpis(
     # calendar "today" is under six hours old until dawn, which would select
     # `readings` and fail every query on it.
     tier = select_tier(start, now, now, finest=Tier.AGG_1M)
-    # The `_v` security_barrier view, never the aggregate itself: the API holds
-    # no privilege at all on the telemetry relations (migrations 0008/0010), and
-    # reaching for the bare name here would fail — which is the design working.
-    relation = f"{tier.value}_v"
 
-    # Energy from each meter's own counter, and irradiation from the weather
-    # stations — aggregates, never raw readings (MASTER §6.6).
-    #
     # ⚠ This used to be `max(last_value) - min(last_value)` across every Device
     # at the Plant. That subtracted the MFM's reading from the ABT Meter's on a
     # Plant with both (56,602 kWh in four minutes), and counted every counter
@@ -411,24 +589,8 @@ async def plant_kpis(
     # now integrated step by step, one Device Type answers by precedence, and a
     # step that goes backwards or exceeds what the Plant could produce is
     # refused and reported in `counter_anomalies` — see `domain/counters`.
-    #
-    # ⚠ Irradiation is never read coarser than hourly. Its register restarts
-    # at the Plant's midnight, and a daily bucket is cut at UTC midnight — for
-    # Kolkata, 05:30 local — so every day's `last` is taken after the restart
-    # and each day's sun reads as nothing. Only a lifetime over a year old
-    # selects the daily tier, which is why this never showed on a young fleet.
-    irradiation_tier = Tier.AGG_1H if tier == Tier.AGG_1D else tier
     lifetime = period == "lifetime"
-    if irradiation_tier == tier:
-        series = await _counter_series(
-            session, plant_id, tier, start, lifetime,
-            [*PLANT_ENERGY_COUNTER_PRECEDENCE, PLANT_IRRADIATION_SOURCE])
-        stations, meters = split_by_pair(series, PLANT_IRRADIATION_SOURCE)
-    else:
-        meters = await _counter_series(
-            session, plant_id, tier, start, lifetime, PLANT_ENERGY_COUNTER_PRECEDENCE)
-        stations = await _counter_series(
-            session, plant_id, irradiation_tier, start, lifetime, [PLANT_IRRADIATION_SOURCE])
+    meters, stations = await _meters_and_stations(session, plant_id, tier, start, lifetime)
 
     dc_kwp = float(plant.dc_capacity_kwp or 0.0)
     ac_kw = float(plant.ac_capacity_kw or 0.0)
@@ -460,74 +622,17 @@ async def plant_kpis(
         yield_result = specific_yield(energy_kwh, dc_kwp)
 
     avail = await _availability(session, plant_id, start, now)
+    coverage = await _coverage(session, plant_id, tier, start, now, lifetime)
 
-    # ── How much of the period these figures actually saw ───────────────────
-    # A gap does not make a figure look wrong; it makes it look *low*. An
-    # average over fewer samples is still an average and a total over a hole is
-    # simply smaller, so a communication outage reads as underperformance — and
-    # for availability, as nothing having happened. Reporting coverage beside
-    # the value is what makes the difference visible. It never corrects the
-    # figure: correcting it would be inventing data.
-    # ⚠ Per *binding*, and against the Tag's own throttle — not per Device.
-    #
-    # A Device publishing every 86 s does not store 86 s of every Tag: ingest
-    # throttles each Tag to its `min_interval_s`, so a Tag throttled to 300 s
-    # stores one sample in every three or four messages. Counting one sample per
-    # Tag per message expected 367k readings a day from this Plant against
-    # 26.6k stored and reported 7% coverage on a Plant that was entirely
-    # healthy — a false alarm of exactly the kind this is meant to remove.
-    #
-    # `created_at` clamps the window too: a Device registered an hour ago owes
-    # nothing for the twenty-three before it existed.
-    expected = (await session.execute(text("""
-        SELECT coalesce(sum(
-                   GREATEST(0, EXTRACT(EPOCH FROM (
-                       now() - GREATEST(:start, d.created_at)
-                   )))
-                   / GREATEST(d.expected_interval_s,
-                              coalesce(t.min_interval_s, 0), 1)
-               ), 0)::bigint AS expected,
-               min(GREATEST(:start, d.created_at)) AS expected_since
-          FROM device_tag_bindings b
-          JOIN devices d ON d.id = b.device_id
-          JOIN tags t    ON t.id = b.tag_id
-         WHERE d.plant_id = :plant_id AND d.status = 'active'
-           AND d.source_address IS NOT NULL AND b.enabled
-    """), {"plant_id": plant_id, "start": start})).first()
-    expected_row = expected.expected if expected else 0
-    # ⚠ Missing time is measured over the span readings were expected in, the
-    # same span the count above covers — not the whole period. Measured over
-    # the period, a Plant registered two days ago reported "3,075.9 days of
-    # the period missing" under lifetime.
-    coverage_since = (expected.expected_since if expected else None) or now
-
-    received_row = (await session.execute(text(f"""
-        SELECT coalesce(sum(a.sample_count), 0)::bigint AS received
-          FROM {relation} a JOIN devices d ON d.id = a.device_id
-         WHERE d.plant_id = :plant_id AND a.bucket >= :start
-    """), {"plant_id": plant_id,
-          "start": bucket_start(start, tier) if lifetime else start})).scalar()
-
-    # Planned work is an *explained* absence and must not count against the
-    # Plant. A gap is an unexplained one and must stay visible.
-    excluded_s = (await session.execute(text("""
-        SELECT coalesce(sum(EXTRACT(EPOCH FROM (
-                   least(coalesce(w.ends_at, now()), now())
-                 - greatest(w.starts_at, :start)))), 0)
-          FROM maintenance_windows w
-         WHERE w.plant_id = :plant_id AND w.device_id IS NULL
-           AND coalesce(w.ends_at, now()) > :start
-    """), {"plant_id": plant_id, "start": coverage_since})).scalar()
-
-    coverage = assess_coverage(
-        int(expected_row or 0), int(received_row or 0),
-        max(0.0, (now - coverage_since).total_seconds()),
-        excluded_seconds=float(excluded_s or 0.0),
-    )
-
-    def render(result: Any) -> dict[str, Any]:
-        return {"value": result.value, "variant": result.variant,
-                "undefined_reason": result.undefined_reason}
+    # The same figures over the previous period to the same point, for the
+    # dials to compare against. None when there is no previous period
+    # (lifetime) or the Plant had not reported before it ended.
+    previous: dict[str, Any] | None = None
+    if compare:
+        window = previous_window(period, now, zone, first_reading)
+        if window is not None:
+            previous = await _previous_figures(
+                session, plant_id, window, now, dc_kwp, ac_kw)
 
     return {
         "plant_id": plant_id, "period": period,
@@ -552,24 +657,21 @@ async def plant_kpis(
             "station_count": len(irradiation.stations),
             "undefined_reason": irradiation.undefined_reason,
         },
-        "performance_ratio": render(pr),
-        "cuf": render(cuf_result),
-        "availability": render(avail),
-        "co2_avoided_kg": render(co2),
+        "performance_ratio": _render(pr),
+        "cuf": _render(cuf_result),
+        "availability": _render(avail),
+        "co2_avoided_kg": _render(co2),
         # The period's energy over DC capacity — the same energy PR and CUF are
         # computed from, so the three cannot disagree about how much was made.
-        "specific_yield": render(yield_result),
+        "specific_yield": _render(yield_result),
         # ⚠ Read this before the figures above. A period with a hole in it
         # produces numbers that look plausible and are low, and nothing else on
         # the response can tell you that happened.
-        "coverage": {
-            "ratio": coverage.ratio,
-            "complete": coverage.complete,
-            "expected_samples": coverage.expected_samples,
-            "received_samples": coverage.received_samples,
-            "missing_seconds": round(coverage.missing_seconds),
-            "excluded_seconds": round(coverage.excluded_seconds),
-        },
+        "coverage": _coverage_payload(coverage),
+        # Only with `compare=true`; see `_previous_figures`. It carries its own
+        # coverage, because a comparison against a day with a hole in it moves
+        # the delta as surely as a hole today moves the figure.
+        "previous": previous,
         "assumptions_note": (
             "All KPI formulas are provisional pending OPEN-16. The client's own "
             "definitions may differ by percentage points."
@@ -596,6 +698,25 @@ async def plant_operating_status(
     if plant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
     return await operating_status(session, plant_id, plant.timezone)
+
+
+@router.get("/{plant_id}/strings")
+async def plant_strings_route(
+    plant_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> dict[str, Any]:
+    """Every PV string of every Inverter, its latest current and a verdict.
+
+    For the String Analysis screen: one request for the whole Plant, with the
+    rule (`domain/strings.py`, ⚠ PROPOSED) applied here so its thresholds stay
+    in `domain/assumptions.py` and are echoed back under `rule`.
+    """
+    plant = (await session.execute(
+        text("SELECT timezone FROM plants WHERE id = :plant_id"), {"plant_id": plant_id}
+    )).first()
+    if plant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+    return await plant_strings(session, plant_id, plant.timezone)
 
 
 @router.get("/{plant_id}/sld")

@@ -510,10 +510,13 @@ export function SinglePlantDashboard(): JSX.Element {
   // says "there is something new to ask for".
   useLiveRefresh(plantId);
 
-  const kpisQuery = usePlantKpis(plantId, period);
-  // Energy Summary is about today whatever the Period says. When the Period is
-  // today this is the same cache entry as the gauges', so the two PRs are one.
-  const kpisTodayQuery = usePlantKpis(plantId, "today");
+  // With the previous period to the same point, which the PR and CUF dials
+  // mark and measure against.
+  const kpisQuery = usePlantKpis(plantId, period, { compare: true });
+  // Energy Summary is about today whatever the Period says. It asks for the
+  // comparison too, so when the Period is today this is the same cache entry as
+  // the dials' — the two PRs are one figure, and one request.
+  const kpisTodayQuery = usePlantKpis(plantId, "today", { compare: true });
   const operatingQuery = usePlantOperatingStatus(plantId);
   const dashboardQuery = usePlantDashboard(plantId);
   const columnsQuery = useDeviceTableColumns();
@@ -985,6 +988,7 @@ export function SinglePlantDashboard(): JSX.Element {
           isLoading={kpisQuery.isLoading}
           error={kpisQuery.error}
           retry={() => void kpisQuery.refetch()}
+          timeZone={timezone}
         />
         {/* Spans the row at `sm`, where the strip is two columns and it is the
             fifth tile — alone it would leave a hole beside it. */}

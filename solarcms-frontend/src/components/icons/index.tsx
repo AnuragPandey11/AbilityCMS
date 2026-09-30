@@ -136,6 +136,19 @@ export const IconInverter = (p: IconProps) => (
   </Svg>
 );
 
+/**
+ * String Analysis — three PV strings in parallel, each a run of modules, meeting
+ * at the Inverter input they share. Not a grid: `IconOverview` is already four
+ * cards, and this screen is about what feeds one machine.
+ */
+export const IconStrings = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2.8 5.4h9.4l5.2 6.6M2.8 12h14.6M2.8 18.6h9.4l5.2-6.6" />
+    <path d="M5.6 3.8v3.2M9 3.8v3.2M5.6 10.4v3.2M9 10.4v3.2M5.6 17v3.2M9 17v3.2" />
+    <circle cx="19.4" cy="12" r="2" />
+  </Svg>
+);
+
 /** Alarms. A bell with a clapper — never a triangle, which means "caution". */
 export const IconAlarm = (p: IconProps) => (
   <Svg {...p}>
@@ -199,6 +212,43 @@ export const IconMeter = (p: IconProps) => (
     <rect x="7.4" y="5.8" width="9.2" height="4.2" rx="0.8" />
     <path d="M8.6 13.8h6.8" />
     <path d="M8.6 18v3.2M15.4 18v3.2" />
+  </Svg>
+);
+
+/**
+ * Transformer — two interlocking circles, a winding each: the single-line
+ * diagram's own symbol, which is what an operator reads it as. The coupled
+ * windings `DeviceIcon` draws read as an eye at menu size.
+ */
+export const IconTransformer = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="8.9" r="4.6" />
+    <circle cx="12" cy="15.1" r="4.6" />
+    <path d="M12 1.8v2.5M12 19.7v2.5" />
+  </Svg>
+);
+
+/** VCB — a breaker is a gap in a conductor; the open contact is the icon, as in the diagram. */
+export const IconBreaker = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 17h5M16 17h5" />
+    <circle cx="8" cy="17" r="1.5" />
+    <circle cx="16" cy="17" r="1.5" />
+    <path d="M9.2 16 16 8.5" />
+    <path d="M14.2 5.8h3.4v3.4" />
+  </Svg>
+);
+
+/**
+ * PPC — sliders. What a Power Plant Controller carries is setpoints, each a
+ * level somebody set, and whether it is being held to.
+ */
+export const IconController = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.6 6.4h6.2M14.2 6.4h6.2M3.6 12h11M19 12h1.4M3.6 17.6h3.2M11.2 17.6h9.2" />
+    <circle cx="12" cy="6.4" r="2.2" />
+    <circle cx="16.8" cy="12" r="2.2" />
+    <circle cx="9" cy="17.6" r="2.2" />
   </Svg>
 );
 
@@ -363,6 +413,20 @@ export const IconGauge = (p: IconProps) => (
   </Svg>
 );
 
+/**
+ * CUF — a vessel filled to a level: how much of the nameplate the Plant used.
+ *
+ * Its own glyph because the icon is how a tile says which tile it is, and PR
+ * and CUF sat side by side under the same gauge.
+ */
+export const IconUtilisation = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5" y="3.6" width="14" height="16.8" rx="2.6" />
+    <path d="M5 14.4h14" />
+    <path d="M8.2 17.4h7.6" />
+  </Svg>
+);
+
 /** Energy — a counter that only goes up. */
 export const IconEnergy = (p: IconProps) => (
   <Svg {...p}>
@@ -462,6 +526,18 @@ export const IconCloud = (p: IconProps) => (
 );
 
 /** Frequency — two cycles of the waveform it counts. */
+/**
+ * Voltage — the cell symbol, long plate and short: a potential difference,
+ * which is what a voltage is. Not a bolt; the bolt is power.
+ */
+export const IconVoltage = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 12h7.4M13.6 12H21" />
+    <path d="M10.4 5.6v12.8M13.6 8.6v6.8" />
+    <path d="M5.6 6.4h2.8M7 5v2.8M16.2 6.4H19" />
+  </Svg>
+);
+
 export const IconFrequency = (p: IconProps) => (
   <Svg {...p}>
     <path d="M3 12c1.5-4.5 3-4.5 4.5 0s3 4.5 4.5 0 3-4.5 4.5 0 3 4.5 4.5 0" />

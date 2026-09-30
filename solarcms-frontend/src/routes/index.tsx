@@ -24,9 +24,11 @@ import { PlantsDashboard } from "@/dashboards/PlantsDashboard";
 import { SinglePlantDashboard } from "@/dashboards/SinglePlantDashboard";
 import { SldDashboard } from "@/dashboards/SldDashboard";
 import { InverterMonitoringDashboard } from "@/dashboards/InverterMonitoringDashboard";
+import { StringAnalysisDashboard } from "@/dashboards/StringAnalysisDashboard";
 import { MeteorologicalDashboard } from "@/dashboards/MeteorologicalDashboard";
 import { EnergyAnalyticsDashboard } from "@/dashboards/EnergyAnalyticsDashboard";
 import { GridMonitoringDashboard } from "@/dashboards/GridMonitoringDashboard";
+import { PpcDashboard, TransformerDashboard, VcbDashboard } from "@/dashboards/EquipmentDashboard";
 import { AlarmsDashboard } from "@/dashboards/AlarmsDashboard";
 import { ReportsDashboard } from "@/dashboards/ReportsDashboard";
 
@@ -38,6 +40,7 @@ import { DeviceBindingsAdmin } from "@/admin/DeviceBindingsAdmin";
 import { AlarmRulesAdmin } from "@/admin/AlarmRulesAdmin";
 import { UsersAdmin } from "@/admin/UsersAdmin";
 import { SystemAdmin } from "@/admin/SystemAdmin";
+import { SystemHealthAdmin } from "@/admin/SystemHealthAdmin";
 import { usePermission, type Permission } from "@/auth/usePermission";
 import { ArtPreview } from "@/dev/ArtPreview";
 import { ChartPreview } from "@/dev/ChartPreview";
@@ -56,9 +59,13 @@ const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
   single_plant: SinglePlantDashboard,
   sld: SldDashboard,
   inverter_monitoring: InverterMonitoringDashboard,
+  string_analysis: StringAnalysisDashboard,
   meteorological: MeteorologicalDashboard,
   energy_analytics: EnergyAnalyticsDashboard,
   grid_monitoring: GridMonitoringDashboard,
+  transformer_monitoring: TransformerDashboard,
+  ppc_monitoring: PpcDashboard,
+  vcb_monitoring: VcbDashboard,
   alarms: AlarmsDashboard,
   reports: ReportsDashboard,
 };
@@ -72,9 +79,13 @@ const PLANT_FILTERED_DASHBOARDS = new Set([
   "single_plant",
   "sld",
   "inverter_monitoring",
+  "string_analysis",
   "meteorological",
   "energy_analytics",
   "grid_monitoring",
+  "transformer_monitoring",
+  "ppc_monitoring",
+  "vcb_monitoring",
   "alarms",
 ]);
 
@@ -234,6 +245,14 @@ export function AppRoutes(): JSX.Element {
           element={
             <RequirePermission permission="system.admin">
               <SystemAdmin />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="/admin/health"
+          element={
+            <RequirePermission permission="system.admin">
+              <SystemHealthAdmin />
             </RequirePermission>
           }
         />

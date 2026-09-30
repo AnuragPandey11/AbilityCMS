@@ -447,7 +447,7 @@ async def update_device(
     device_id: int, body: DeviceUpdate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
 ) -> dict[str, Any]:
-    """Edit a Device — its wiring, its topic, its interval, its string count.
+    """Edit a Device — its wiring, its topic, its interval, its string count, its Model.
 
     The three groupings are edited here because they are *discovered*: which
     Collector actually transmits a Device, and what it really feeds into, are
@@ -457,11 +457,37 @@ async def update_device(
     before = (await session.execute(text("""
         SELECT client_id, plant_id, code, name, status, block_id, parent_device_id,
                reports_via_device_id, collector_code, source_address,
-               expected_interval_s, string_count
+               expected_interval_s, string_count, device_model_id
           FROM devices WHERE id = :id
     """), {"id": device_id})).first()
     if before is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+
+    # ── A Model of the same Type, or nothing ────────────────────────────────
+    # String or Central is a Model fact (MASTER §2.3), and an Inverter
+    # registered from the broker gets the placeholder `REF-INVERTER`, which has
+    # neither — so without this, Inverter Monitoring could never rank it.
+    if body.device_model_id is not None and body.device_model_id != before.device_model_id:
+        models = {
+            row.id: row for row in (await session.execute(text("""
+                SELECT dm.id, dm.model_code, dt.code AS type_code
+                  FROM device_models dm JOIN device_types dt ON dt.id = dm.device_type_id
+                 WHERE dm.id IN (:current, :requested)
+            """), {"current": before.device_model_id,
+                  "requested": body.device_model_id})).all()
+        }
+        requested = models.get(body.device_model_id)
+        current = models.get(before.device_model_id)
+        if requested is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"there is no Device Model {body.device_model_id}")
+        if current is not None and requested.type_code != current.type_code:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{before.code} is of Device Type {current.type_code}, and {requested.model_code} "
+                f"is a Model of {requested.type_code}. A Device's Type decides how every value "
+                f"it sends is read, so it cannot change; register a new Device instead.",
+            )
 
     clear = set(body.clear or [])
     unknown = clear - {"block_id", "parent_device_id", "reports_via_device_id",
@@ -568,6 +594,7 @@ async def update_device(
                    rated_capacity_kw = coalesce(:capacity, rated_capacity_kw),
                    string_count = CASE WHEN :clear_strings THEN NULL
                                        ELSE coalesce(:string_count, string_count) END,
+                   device_model_id = coalesce(:model_id, device_model_id),
                    installed_on = coalesce(CAST(:installed_on AS date), installed_on),
                    sld_stage_override =
                        CASE WHEN :clear_stage THEN NULL
@@ -578,7 +605,7 @@ async def update_device(
             RETURNING id, code, name, status, block_id, parent_device_id,
                       reports_via_device_id, collector_code, source_address,
                       expected_interval_s, rated_capacity_kw, string_count,
-                      sld_stage_override
+                      sld_stage_override, device_model_id
         """), {
             "id": device_id, "name": body.name, "serial": body.serial_number,
             "block_id": value("block_id", body.block_id),
@@ -590,6 +617,7 @@ async def update_device(
             "interval_s": body.expected_interval_s,
             "capacity": body.rated_capacity_kw,
             "string_count": value("string_count", body.string_count),
+            "model_id": body.device_model_id,
             "installed_on": body.installed_on, "status": body.status,
             "stage_override": value("sld_stage_override", body.sld_stage_override),
             "clear_stage": "sld_stage_override" in clear,

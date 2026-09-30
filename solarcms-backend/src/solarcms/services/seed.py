@@ -149,6 +149,9 @@ DASHBOARDS: Final[tuple[tuple[str, str, int], ...]] = (
     ("single_plant", "Single Plant", 40),
     ("sld", "Single Line Diagram", 50),
     ("inverter_monitoring", "Inverter Monitoring", 60),
+    # The client's reference String Analysis screen (30 Sep 2026): every PV
+    # string of every Inverter at once, coloured by `domain/strings.py`.
+    ("string_analysis", "String Analysis", 61),
     # Not tender §7 — the client's reference screens (28 Sep 2026): the Weather
     # Station's readings and trends, historical Plant trends over a chosen
     # window, and the Plant's meters. Granted like any other: a Client Admin
@@ -156,6 +159,13 @@ DASHBOARDS: Final[tuple[tuple[str, str, int], ...]] = (
     ("meteorological", "Meteorological", 62),
     ("energy_analytics", "Energy Analytics", 64),
     ("grid_monitoring", "MFM / Grid", 66),
+    # The client's reference screens for the Plant's HV equipment (30 Sep
+    # 2026): the Transformer's temperatures and protection contacts, the Power
+    # Plant Controller's setpoints and control enables, and every VCB's
+    # contacts. Granted like the three above.
+    ("transformer_monitoring", "Transformer", 67),
+    ("ppc_monitoring", "PPC", 68),
+    ("vcb_monitoring", "VCB", 69),
     ("alarms", "Alarms", 70),
     ("reports", "Reports", 80),
 )

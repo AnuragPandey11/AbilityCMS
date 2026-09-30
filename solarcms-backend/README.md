@@ -146,8 +146,8 @@ at mosquitto on the canonical `scms/v1/#` contract.
 ## A fabricated multi-Client fleet
 
 The client's broker carries one Plant, which cannot show whether one Client
-can see another's data. `tools/simulate_fleet.py` publishes two Clients × two
-Plants of deliberately different shape to the Docker broker (see the module
+can see another's data. `tools/simulate_fleet.py` publishes three Clients and
+five Plants of deliberately different shape to the Docker broker (see the module
 docstring for the fleet and why each Plant is shaped as it is), using the same
 short payload keys the client's equipment sends, so commissioning binds the
 same Tags it would for real equipment. **The values are invented**: they say
@@ -156,7 +156,7 @@ nothing about units, scaling or formulas (OPEN-14/15/16).
 ```bash
 # 1. Point ingest at the Docker broker — .env already does; .env.clientbroker
 #    is the client-broker version, and `cp .env.clientbroker .env` switches back.
-# 2. Create the two Clients, four Plants and one Client Admin login each.
+# 2. Create the Clients, Plants and logins. --client seeds only the one named.
 .venv/bin/python scripts/seed_fleet.py
 # 3. Start publishing, and leave it running.
 .venv/bin/python tools/simulate_fleet.py
@@ -175,8 +175,11 @@ from the plan. The window must also see every topic **twice**, or its
 interval is not measured and it is registered at the 60 s default.
 
 Logins: `sunfield@example.com` and `roofco@example.com`, password
-`fleet12345` (or `--password`), each a Client Admin over their own two Plants.
-`admin@example.com` (Super Admin) sees all four.
+`fleet12345`, each a Client Admin over their own two Plants;
+`vardhman@example.com` (Client Admin) and `operator@example.com` (Client
+Employee — views, exports, acknowledges Alarms, administers nothing), password
+`admin12345`, over VF_LUDHIANA. `--password` overrides every one of them.
+`admin@example.com` (Super Admin) sees all five Plants.
 
 Faults are a flag, not a scenario, so the same fleet can be broken in any way
 on any run:
@@ -190,7 +193,7 @@ on any run:
 ```
 
 `SF_NORTH/INVERTER_9` always runs 40% below its siblings — the case a relative
-underperformance rule exists for. Both Clients are `is_demo = true`; that flag,
+underperformance rule exists for. Every fleet Client is `is_demo = true`; that flag,
 never the code, is how anything should tell them from a real tenant.
 
 Restarting the simulator is safe: every energy and irradiation counter is saved

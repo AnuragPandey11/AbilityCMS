@@ -273,6 +273,31 @@ export const KpiCoverageSchema = z.object({
 });
 export type KpiCoverage = z.infer<typeof KpiCoverageSchema>;
 
+/**
+ * PR and CUF over the previous period up to the same point — yesterday to
+ * this time of day, last month to this date — computed exactly as the current
+ * figures are. Only present with `compare=true`, and null for lifetime or a
+ * Plant that had not reported by then.
+ *
+ * ⚠ Never the whole previous period: at 09:00 today's CUF has three hours of
+ * daylight in nine, and yesterday's whole day would make every morning read
+ * as a collapse. And never the Plant KPI panel's YESTERDAY Tags, which the
+ * scheduler computes by a different formula.
+ *
+ * It carries its own coverage, because a hole in yesterday moves the
+ * comparison as surely as a hole today moves the figure (Guardrail 18).
+ */
+export const KpiComparisonSchema = z.object({
+  period_start: z.string(),
+  period_end: z.string(),
+  measured_since: z.string().nullable().optional().catch(null),
+  source_tier: z.string().nullable().optional().catch(null),
+  performance_ratio: KpiFigureSchema,
+  cuf: KpiFigureSchema,
+  coverage: KpiCoverageSchema.nullable().catch(null),
+});
+export type KpiComparison = z.infer<typeof KpiComparisonSchema>;
+
 export const PlantKpisSchema = z.object({
   plant_id: z.number(),
   period: z.string(),
@@ -305,6 +330,8 @@ export const PlantKpisSchema = z.object({
   /** Which tier served these. A figure from `agg_1d` over "today" is a
    *  different resolution of claim than one from `agg_1m`. */
   source_tier: z.string().nullable().optional().catch(null),
+  /** The previous period to the same point; see `KpiComparisonSchema`. */
+  previous: KpiComparisonSchema.nullable().optional().catch(null),
   assumptions_note: z.string(),
 });
 export type PlantKpis = z.infer<typeof PlantKpisSchema>;
@@ -441,6 +468,75 @@ export const CommStatusSchema = z
   .catch("unknown");
 export type CommStatus = z.infer<typeof CommStatusSchema>;
 
+/**
+ * A PV string's verdict — `domain/strings.py`, ⚠ PROPOSED. Anything unknown
+ * becomes `no_reading`, the one state that claims nothing about the string.
+ */
+export const StringStateSchema = z
+  .enum(["normal", "low", "no_current", "idle", "no_reading"])
+  .catch("no_reading");
+export type StringState = z.infer<typeof StringStateSchema>;
+
+const StringCountsSchema = z.object({
+  normal: z.number(),
+  low: z.number(),
+  no_current: z.number(),
+  idle: z.number(),
+  no_reading: z.number(),
+});
+export type StringCounts = z.infer<typeof StringCountsSchema>;
+
+/** Every PV string of every Inverter on a Plant — `GET /plants/{id}/strings`. */
+export const PlantStringsSchema = z.object({
+  plant_id: z.number(),
+  as_of: z.string(),
+  units: z.object({
+    current: z.string(),
+    voltage: z.string().nullable(),
+    power: z.string().nullable(),
+  }),
+  rule: z.object({
+    measure: z.string(),
+    low_below_median_fraction: numeric(),
+    min_median: numeric(),
+    lookback_minutes: z.number(),
+    status: z.string(),
+  }),
+  counts: StringCountsSchema,
+  inverters: z.array(
+    z.object({
+      device_id: z.number(),
+      code: z.string(),
+      name: z.string().nullable(),
+      variant: z.string().nullable(),
+      comm_status: CommStatusSchema,
+      string_count: z.number().nullable(),
+      undefined_reason: z.string().nullable(),
+      operating: z.object({
+        state: OperatingStateSchema,
+        undefined_reason: z.string().nullable(),
+      }),
+      median_current: nullableNumeric(),
+      counts: StringCountsSchema,
+      strings: z.array(
+        z.object({
+          n: z.number(),
+          state: StringStateSchema,
+          reason: z.string(),
+          current: nullableNumeric(),
+          voltage: nullableNumeric(),
+          power: nullableNumeric(),
+          at: z.string().nullable(),
+          flagged: z.number(),
+        }),
+      ),
+    }),
+  ),
+});
+export type PlantStrings = z.infer<typeof PlantStringsSchema>;
+export type InverterStrings = PlantStrings["inverters"][number];
+export type PvString = InverterStrings["strings"][number];
+
 export const DeviceListItemSchema = z.object({
   id: z.number(),
   code: z.string(),
@@ -533,6 +629,7 @@ export const DeviceUpdateResultSchema = z.object({
   rated_capacity_kw: nullableNumeric(),
   string_count: z.number().nullable(),
   sld_stage_override: z.string().nullable(),
+  device_model_id: z.number().optional(),
 });
 export type DeviceUpdateResult = z.infer<typeof DeviceUpdateResultSchema>;
 
@@ -767,6 +864,9 @@ export const AlarmSchema = z.object({
   plant_id: z.number().nullable(),
   device_code: z.string().nullable(),
   rule_code: z.string(),
+  // The rule's Tag — which signal the Alarm is about. Null for an absence
+  // rule, which is about no Tag; `.catch` so an older server still parses.
+  tag_code: z.string().nullable().catch(null),
 });
 export type Alarm = z.infer<typeof AlarmSchema>;
 
@@ -831,12 +931,90 @@ export type DeviceHealth = z.infer<typeof DeviceHealthSchema>;
 export const SystemHealthSchema = z.object({
   ingest_lag_seconds: nullableNumeric(),
   quarantined_last_hour: z.number(),
+  /** The stream's length — read and unread; it keeps up to 100k for replay. */
   alarm_stream_depth: z.number(),
+  /** What the alarm checks have not evaluated yet. Null before the group exists. */
+  alarm_backlog: z.number().nullable().optional().catch(null),
   continuous_aggregates: z.array(
     z.object({ view: z.string(), last_refresh: z.string().nullable() }),
   ),
 });
 export type SystemHealth = z.infer<typeof SystemHealthSchema>;
+
+/**
+ * The platform's own processes — `GET /health/processes`, from their heartbeats.
+ * Verdicts are the server's (`domain/system_health.py`); anything it adds later
+ * reads as a plain state rather than failing the page.
+ */
+export const HealthToneSchema = z.enum(["ok", "warn", "bad"]).catch("bad");
+export type HealthTone = z.infer<typeof HealthToneSchema>;
+
+const SupervisedSchema = z.object({
+  pid: z.number().nullable(),
+  state: z.string(),
+  started_at: z.string().nullable(),
+  restarts: z.number(),
+  last_exit_code: z.number().nullable(),
+  last_exit_at: z.string().nullable(),
+  last_ran_for_s: nullableNumeric(),
+  next_start_at: z.string().nullable(),
+});
+
+export const ProcessHealthSchema = z.object({
+  name: z.string(),
+  purpose: z.string(),
+  state: z.string(),
+  tone: HealthToneSchema,
+  reason: z.string(),
+  pid: z.number().nullable().optional().catch(null),
+  host: z.string().nullable().optional().catch(null),
+  started_at: z.string().nullable().optional().catch(null),
+  beat_at: z.string().nullable().optional().catch(null),
+  last_cycle_at: z.string().nullable().optional().catch(null),
+  cycles: z.number().nullable().optional().catch(null),
+  last_write_at: z.string().nullable().optional().catch(null),
+  last_write: z.string().nullable().optional().catch(null),
+  last_error_at: z.string().nullable().optional().catch(null),
+  last_error: z.string().nullable().optional().catch(null),
+  errors: z.number().nullable().optional().catch(null),
+  recent_errors: z.number().nullable().optional().catch(null),
+  supervised: SupervisedSchema.nullable().optional().catch(null),
+});
+export type ProcessHealth = z.infer<typeof ProcessHealthSchema>;
+
+export const PlatformHealthSchema = z.object({
+  as_of: z.string(),
+  overall: HealthToneSchema,
+  redis: z.object({ ok: z.boolean(), error: z.string().nullable() }),
+  processes: z.array(ProcessHealthSchema),
+  broker: z
+    .object({
+      state: z.string(),
+      tone: HealthToneSchema,
+      reason: z.string(),
+      broker: z.string().nullable(),
+      topics: z.array(z.string()),
+      connected: z.boolean(),
+      connected_at: z.string().nullable(),
+      last_message_at: z.string().nullable(),
+      messages: z.number().nullable(),
+      error: z.string().nullable(),
+    })
+    .nullable(),
+  supervisor: z
+    .object({
+      state: z.string(),
+      tone: HealthToneSchema,
+      reason: z.string(),
+      pid: z.number().nullable(),
+      host: z.string().nullable(),
+      started_at: z.string().nullable(),
+      beat_at: z.string().nullable(),
+      log_dir: z.string().nullable(),
+    })
+    .nullable(),
+});
+export type PlatformHealth = z.infer<typeof PlatformHealthSchema>;
 
 // ── Reports ─────────────────────────────────────────────────────────────────
 
@@ -905,6 +1083,9 @@ export const ReportTableSchema = z.object({
   period: z.string(),
   first_day: z.string(),
   last_day: z.string(),
+  // `HH:MM` where a custom period was cut inside a day; null at a day's edge.
+  from_time: z.string().nullable().optional(),
+  to_time: z.string().nullable().optional(),
   start: z.string(),
   end: z.string(),
   source_tier: z.string().nullable(),

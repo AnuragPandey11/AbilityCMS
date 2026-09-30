@@ -2,9 +2,9 @@
  * A live rate against the nameplate that bounds it — current power over the
  * Plant's AC capacity, as a half-ring.
  *
- * ── Why this is not `Gauge` ─────────────────────────────────────────────────
- * `Gauge` draws a *ratio the backend computed* (PR, CUF, availability) and can
- * band it ok/warn/bad. This draws a *measurement* against a *registered fact*,
+ * ── Why this is not `RatioDial` ─────────────────────────────────────────────
+ * `RatioDial` draws a *ratio the backend computed* (PR, CUF) and can
+ * band it chart/warn/bad. This draws a *measurement* against a *registered fact*,
  * and the arc is only the one divided by the other, so it states a proportion
  * and makes no judgement — the chart colour only, never a status colour. A Plant at 40%
  * of capacity at 09:00 is doing exactly what it should.

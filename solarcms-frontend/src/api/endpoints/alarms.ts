@@ -20,6 +20,8 @@ export interface AlarmQuery {
    * narrow.
    */
   clientId?: number | null;
+  /** Narrows to one Device's Alarms, for a screen about one Device. */
+  deviceId?: number | null;
   since?: string | null;
   limit?: number;
 }
@@ -36,6 +38,7 @@ export async function listAlarms(query: AlarmQuery = {}): Promise<Alarm[]> {
       severity: query.severity ?? undefined,
       plant_id: query.plantId ?? undefined,
       client_id: query.clientId ?? undefined,
+      device_id: query.deviceId ?? undefined,
       since: query.since ?? undefined,
       limit: query.limit ?? 100,
     },

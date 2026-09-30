@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -22,6 +22,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 async def _report_table(
     session: SessionDep, kind: str, plant_id: int, period: str,
     from_date: date | None, to_date: date | None,
+    from_time: time | None, to_time: time | None,
 ) -> tuple[report_tables.ReportTable, datetime]:
     if kind not in report_tables.REPORT_KINDS:
         raise HTTPException(
@@ -35,7 +36,8 @@ async def _report_table(
     try:
         # The days are the Plant's, not the browser's and not UTC's: "today"
         # in Kolkata began at 18:30 UTC yesterday.
-        window = report_window(period, now, plant.zone, from_date, to_date)
+        window = report_window(period, now, plant.zone, from_date, to_date,
+                               from_time, to_time)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return await report_tables.compose(session, kind, plant, window, now), now
@@ -47,14 +49,19 @@ async def report_table(
     period: str = Query("today"),
     from_date: date | None = None,
     to_date: date | None = None,
+    from_time: time | None = None,
+    to_time: time | None = None,
     _: CurrentUser = Depends(require_permission("report.generate")),
 ) -> dict[str, Any]:
     """The table a Report download would contain, as JSON — the screen's preview.
 
     `period` is today, yesterday, last_7_days, last_30_days or custom (with
-    `from_date` and `to_date`, inclusive, as the Plant's own dates).
+    `from_date` and `to_date`, inclusive, as the Plant's own dates, and
+    optionally `from_time` and `to_time` on them — `HH:MM` on the Plant's
+    clock, the period stopping at `to_time`, and 23:59 meaning the day's end).
     """
-    table, now = await _report_table(session, kind, plant_id, period, from_date, to_date)
+    table, now = await _report_table(session, kind, plant_id, period, from_date, to_date,
+                                     from_time, to_time)
     return report_tables.to_payload(table, now)
 
 
@@ -74,6 +81,8 @@ async def export_report_table(
     period: str = Query("today"),
     from_date: date | None = None,
     to_date: date | None = None,
+    from_time: time | None = None,
+    to_time: time | None = None,
     user: CurrentUser = Depends(require_permission("report.generate")),
 ) -> Response:
     """The same table as a file. Computed afresh, never from the preview the
@@ -83,7 +92,8 @@ async def export_report_table(
     rendering (WeasyPrint) is an optional extra: without it `pdf` is refused
     with 503 and a browser can still print the page to PDF.
     """
-    table, _now = await _report_table(session, kind, plant_id, period, from_date, to_date)
+    table, _now = await _report_table(session, kind, plant_id, period, from_date, to_date,
+                                      from_time, to_time)
 
     content: bytes
     if file_format == "csv":
@@ -110,7 +120,9 @@ async def export_report_table(
            "after": json.dumps({"kind": kind, "format": file_format,
                                 "period": table.window.period,
                                 "first_day": table.window.first_day.isoformat(),
-                                "last_day": table.window.last_day.isoformat()})})
+                                "last_day": table.window.last_day.isoformat(),
+                                "from_time": report_tables.clock(table.window.from_time),
+                                "to_time": report_tables.clock(table.window.to_time)})})
 
     disposition = "inline" if file_format == "html" else "attachment"
     return Response(

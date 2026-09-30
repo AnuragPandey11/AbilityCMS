@@ -40,10 +40,13 @@ vi.mock("@/api/client", async (original) => ({
 const { ReportsDashboard } = await import("@/dashboards/ReportsDashboard");
 const { useSelection } = await import("@/state/selection");
 const {
+  customRangeEnd,
   customRangeProblem,
   formatReportCell,
+  formatReportPeriod,
   shiftDate,
 } = await import("@/dashboards/reports/format");
+const { reportFilename } = await import("@/api/endpoints/reports");
 
 const DAILY_COLUMNS: ReportColumn[] = [
   { key: "date", label: "Date", kind: "date", unit: "", digits: 1 },
@@ -52,7 +55,11 @@ const DAILY_COLUMNS: ReportColumn[] = [
   { key: "coverage", label: "Coverage", kind: "percent", unit: "%", digits: 0 },
 ];
 
-function table(period: string, days: string[]): ReportTable {
+function table(
+  period: string,
+  days: string[],
+  times: { from_time?: string | null; to_time?: string | null } = {},
+): ReportTable {
   return {
     kind: "daily_plant",
     title: "Daily Plant Report",
@@ -60,6 +67,8 @@ function table(period: string, days: string[]): ReportTable {
     period,
     first_day: days[0]!,
     last_day: days[days.length - 1]!,
+    from_time: times.from_time ?? null,
+    to_time: times.to_time ?? null,
     start: "2026-09-27T18:30:00Z",
     end: "2026-09-28T10:48:00Z",
     source_tier: "agg_1m",
@@ -122,7 +131,15 @@ beforeEach(() => {
           : period === "custom"
             ? [url.searchParams.get("from_date")!, url.searchParams.get("to_date")!]
             : ["2026-09-28"];
-        return respond(table(period, days));
+        // The server keeps a time only where it cuts inside a day.
+        const edge = (name: string, whole: string) => {
+          const value = url.searchParams.get(name);
+          return value === whole ? null : value;
+        };
+        return respond(table(period, days, {
+          from_time: edge("from_time", "00:00"),
+          to_time: edge("to_time", "23:59"),
+        }));
       }
       return respond({ detail: `unexpected ${path}` }, 404);
     }),
@@ -191,6 +208,55 @@ describe("Reports screen", () => {
     });
   });
 
+  it("opens on whole days and sends the times it is narrowed to", async () => {
+    renderScreen();
+    await screen.findByText("Daily Plant Report — preview (1 row)");
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    const start = screen.getByLabelText("Start time") as HTMLInputElement;
+    const end = screen.getByLabelText("End time") as HTMLInputElement;
+    expect([start.value, end.value]).toEqual(["00:00", "23:59"]);
+    // Whole days: the preview names the days alone.
+    expect(await screen.findByText(/Sunfield North \(SF_NORTH\) · \d{2}-\d{2}-\d{4} to/))
+      .not.toHaveTextContent(/00:00/);
+
+    fireEvent.change(screen.getByLabelText("First day"), { target: { value: "2026-09-01" } });
+    fireEvent.change(screen.getByLabelText("Last day"), { target: { value: "2026-09-03" } });
+    fireEvent.change(start, { target: { value: "06:00" } });
+    fireEvent.change(end, { target: { value: "18:00" } });
+    await waitFor(() => {
+      const url = tableRequests().at(-1)!;
+      expect(url.searchParams.get("from_time")).toBe("06:00");
+      expect(url.searchParams.get("to_time")).toBe("18:00");
+    });
+    expect(
+      await screen.findByText(
+        "Sunfield North (SF_NORTH) · 01-09-2026 06:00 to 03-09-2026 18:00 · Kolkata time",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Excel/ }));
+    await waitFor(() => expect(triggerDownload).toHaveBeenCalledTimes(1));
+    expect(triggerDownload.mock.calls[0]![1])
+      .toBe("SF_NORTH_daily_plant_20260901T0600_20260903T1800.xlsx");
+    const exported = requested.filter((url) => url.pathname.endsWith("/export")).at(-1)!;
+    expect(exported.searchParams.get("from_time")).toBe("06:00");
+    expect(exported.searchParams.get("to_time")).toBe("18:00");
+  });
+
+  it("does not ask for a day whose end is before its start, and says why", async () => {
+    renderScreen();
+    await screen.findByText("Daily Plant Report — preview (1 row)");
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    fireEvent.change(screen.getByLabelText("First day"), { target: { value: "2026-09-02" } });
+    fireEvent.change(screen.getByLabelText("Last day"), { target: { value: "2026-09-02" } });
+    fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "18:00" } });
+    fireEvent.change(screen.getByLabelText("End time"), { target: { value: "06:00" } });
+    expect(await screen.findByText("The end is not after the start.")).toBeInTheDocument();
+    expect(
+      tableRequests().filter((url) => url.searchParams.get("to_time") === "06:00"),
+    ).toHaveLength(0);
+  });
+
   it("does not ask for a backwards range, and says why", async () => {
     renderScreen();
     await screen.findByText("Daily Plant Report — preview (1 row)");
@@ -249,10 +315,35 @@ describe("report cell formatting", () => {
   });
 
   it("checks a custom range the way the server will", () => {
-    expect(customRangeProblem("2026-09-01", "2026-09-29", "2026-09-28", 366))
-      .toMatch(/after today/);
-    expect(customRangeProblem("2025-01-01", "2026-09-01", "2026-09-28", 366))
-      .toMatch(/at most 366/);
-    expect(customRangeProblem("2026-09-01", "2026-09-28", "2026-09-28", 366)).toBeNull();
+    const now = "2026-09-28T16:18";
+    const days = (fromDate: string, toDate: string, fromTime = "00:00", toTime = "23:59") =>
+      customRangeProblem({ fromDate, fromTime, toDate, toTime }, now, 366);
+    expect(days("2026-09-01", "2026-09-29")).toMatch(/after today/);
+    expect(days("2025-01-01", "2026-09-01")).toMatch(/at most 366/);
+    expect(days("2026-09-01", "2026-09-28")).toBeNull();
+    // Times: the period stops at the end time, so an equal pair is empty.
+    expect(days("2026-09-02", "2026-09-02", "06:00", "06:00")).toMatch(/not after the start/);
+    expect(days("2026-09-02", "2026-09-02", "06:00", "00:00")).toMatch(/not after the start/);
+    expect(days("2026-09-02", "2026-09-02", "06:00", "06:01")).toBeNull();
+    expect(days("2026-09-28", "2026-09-28", "16:18", "23:59")).toBeNull();
+    expect(days("2026-09-28", "2026-09-28", "16:19", "23:59")).toMatch(/after now \(16:18\)/);
+    expect(days("2026-09-02", "2026-09-02", "", "18:00")).toMatch(/start and an end time/);
+  });
+
+  it("reads 23:59 as the end of its day, as the server does", () => {
+    const range = { fromDate: "2026-09-01", fromTime: "00:00", toDate: "2026-09-03" };
+    expect(customRangeEnd({ ...range, toTime: "23:59" })).toBe("2026-09-04T00:00");
+    expect(customRangeEnd({ ...range, toTime: "18:00" })).toBe("2026-09-03T18:00");
+  });
+
+  it("names a period cut inside a day with both its times", () => {
+    const period = { first_day: "2026-09-22", last_day: "2026-09-28" };
+    expect(formatReportPeriod(period)).toBe("22-09-2026 to 28-09-2026");
+    expect(formatReportPeriod({ ...period, from_time: "06:00", to_time: null }))
+      .toBe("22-09-2026 06:00 to 28-09-2026 23:59");
+    expect(formatReportPeriod({ first_day: "2026-09-28", last_day: "2026-09-28",
+      from_time: "06:00", to_time: "18:00" })).toBe("28-09-2026 06:00 to 18:00");
+    expect(reportFilename({ ...table("custom", ["2026-09-22", "2026-09-28"]),
+      to_time: "18:00" }, "csv")).toBe("SF_NORTH_daily_plant_20260922T0000_20260928T1800.csv");
   });
 });

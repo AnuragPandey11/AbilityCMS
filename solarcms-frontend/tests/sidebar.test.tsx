@@ -31,6 +31,8 @@ vi.mock("@/auth/AuthProvider", () => ({
 
 vi.mock("@/api/hooks", () => ({
   useAlarms: () => ({ data: [{ id: 1 }, { id: 2 }, { id: 3 }] }),
+  // The header asks after the platform's health; nothing to report here.
+  usePlatformHealth: () => ({ data: undefined, isError: false }),
 }));
 
 vi.mock("@/live/LiveIndicator", () => ({ LiveIndicator: () => null }));

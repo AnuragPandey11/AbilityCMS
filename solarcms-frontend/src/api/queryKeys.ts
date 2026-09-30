@@ -26,14 +26,19 @@ export const qk = {
   plants: (params?: unknown) => ["plants", params ?? {}] as const,
   allPlants: () => ["plants", "all"] as const,
   plant: (id: number) => ["plants", id] as const,
-  plantKpis: (id: number, period: KpiPeriod) =>
-    ["plants", id, "kpis", period] as const,
+  // A comparing request is its own entry — it carries `previous` and the plain
+  // one does not — but under the same prefix, so `useLiveRefresh` reaches both.
+  plantKpis: (id: number, period: KpiPeriod, compare = false) =>
+    compare
+      ? (["plants", id, "kpis", period, "compare"] as const)
+      : (["plants", id, "kpis", period] as const),
   plantBlocks: (id: number) => ["plants", id, "blocks"] as const,
   plantDevices: (id: number, blockId?: number | null) =>
     ["plants", id, "devices", blockId ?? null] as const,
   plantSld: (id: number) => ["plants", id, "sld"] as const,
   plantDashboard: (id: number) => ["plants", id, "dashboard"] as const,
   plantOperatingStatus: (id: number) => ["plants", id, "operating-status"] as const,
+  plantStrings: (id: number) => ["plants", id, "strings"] as const,
   blockKpis: (id: number, period: KpiPeriod) =>
     ["blocks", id, "kpis", period] as const,
 
@@ -52,6 +57,7 @@ export const qk = {
   deviceHealth: (plantId?: number | null) =>
     ["health", "devices", plantId ?? null] as const,
   systemHealth: () => ["health", "system"] as const,
+  platformHealth: () => ["health", "processes"] as const,
 
   reportDefinitions: () => ["reports", "definitions"] as const,
   reportRun: (id: number) => ["reports", "runs", id] as const,
@@ -61,7 +67,10 @@ export const qk = {
     period: string,
     fromDate: string | null,
     toDate: string | null,
-  ) => ["reports", "tables", kind, plantId, period, fromDate, toDate] as const,
+    fromTime: string | null,
+    toTime: string | null,
+  ) =>
+    ["reports", "tables", kind, plantId, period, fromDate, toDate, fromTime, toTime] as const,
 
   users: () => ["users"] as const,
   clients: () => ["clients"] as const,

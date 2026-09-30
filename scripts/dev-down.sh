@@ -34,9 +34,18 @@ while IFS=: read -r name pid; do
     fi
 done < "$PID_FILE"
 
-# Ingest holds an MQTT session and flushes a buffer on shutdown; give every
-# process a few seconds to exit cleanly before anything is forced.
-sleep 3
+# Ingest holds an MQTT session and flushes a buffer on shutdown, and the
+# supervisor stops each of its children in turn, allowing each up to 15 s.
+# Wait for that rather than a fixed pause: killing the supervisor early would
+# leave its children running, in sessions of their own, with nothing watching.
+for _ in $(seq 1 40); do
+    alive=0
+    while IFS=: read -r _name pid; do
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1
+    done < "$PID_FILE"
+    [ "$alive" -eq 0 ] && break
+    sleep 0.5
+done
 
 while IFS=: read -r name pid; do
     [ -z "$pid" ] && continue

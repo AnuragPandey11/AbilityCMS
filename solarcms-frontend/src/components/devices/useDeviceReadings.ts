@@ -22,6 +22,11 @@ export interface DeviceReadings {
   /** Tag id → value: stored latest, then the live frame over it. */
   values: Map<number, number>;
   fill: (position: Position) => Filled;
+  /**
+   * Enabled bindings by Tag code, or null where this session may not read
+   * them (Tag Mapping needs `config.modify`).
+   */
+  bound: Set<string> | null;
   /** The later of the health sweep's last contact and the last live frame. */
   heard: string | null;
   tagsById: Map<number, Tag>;
@@ -71,6 +76,7 @@ export function useDeviceReadings(
   return {
     values,
     fill,
+    bound,
     heard: device ? latestOf(device.last_seen_at, live?.at) : null,
     tagsById,
     isLoading: latest.isLoading,

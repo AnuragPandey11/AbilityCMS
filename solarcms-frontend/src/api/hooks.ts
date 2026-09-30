@@ -238,15 +238,20 @@ export function usePlant(plantId: number | null) {
   });
 }
 
+/**
+ * One Plant's KPIs over a period. `compare` also fetches the previous period
+ * to the same point (`previous`), which the single-Plant dials draw against.
+ */
 export function usePlantKpis(
   plantId: number | null,
   period: KpiPeriod,
+  { compare = false }: { compare?: boolean } = {},
   options: Partial<UseQueryOptions> = {},
 ) {
   const socketOpen = useLiveSocket().status === "open";
   return useQuery({
-    queryKey: qk.plantKpis(plantId ?? 0, period),
-    queryFn: () => plantsApi.plantKpis(plantId as number, period),
+    queryKey: qk.plantKpis(plantId ?? 0, period, compare),
+    queryFn: () => plantsApi.plantKpis(plantId as number, period, compare),
     enabled: plantId !== null,
     ...(socketOpen ? LIVE_SOCKET_FALLBACK : LIVE_KPI),
     ...ON_RETURN,
@@ -324,6 +329,22 @@ export function usePlantOperatingStatus(plantId: number | null) {
     queryFn: () => plantsApi.plantOperatingStatus(plantId as number),
     enabled: plantId !== null,
     ...(status === "open" ? LIVE_SOCKET_FALLBACK : LIVE_KPI),
+    ...ON_RETURN,
+  });
+}
+
+/**
+ * Every PV string of every Inverter on the Plant, for String Analysis. Once a
+ * minute: the values are one-minute buckets, so asking more often returns the
+ * same answer.
+ */
+export function usePlantStrings(plantId: number | null) {
+  return useQuery({
+    queryKey: qk.plantStrings(plantId ?? 0),
+    queryFn: () => plantsApi.plantStrings(plantId as number),
+    enabled: plantId !== null,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
     ...ON_RETURN,
   });
 }
@@ -426,10 +447,11 @@ export function useReadings(query: readingsApi.ReadingsQuery, enabled = true) {
 
 // ── Alarms ──────────────────────────────────────────────────────────────────
 
-export function useAlarms(query: alarmsApi.AlarmQuery = {}) {
+export function useAlarms(query: alarmsApi.AlarmQuery = {}, enabled = true) {
   return useQuery({
     queryKey: qk.alarms(query),
     queryFn: () => alarmsApi.listAlarms(query),
+    enabled,
     // Left at 30s rather than sped up: an Alarm cannot appear faster than the
     // pipeline raises one (`min_interval_s + duration_s`, BACKEND_SPEC §12.4),
     // so polling harder would only ask more often for the same answer. The
@@ -475,6 +497,22 @@ export function useSystemHealth(enabled = true) {
   });
 }
 
+/**
+ * Whether the platform's own processes are running and working. Every 10 s: it
+ * reads Redis only, and a process that died should be on screen within one
+ * heartbeat of the server noticing. Shared by the page and the header.
+ */
+export function usePlatformHealth(enabled = true) {
+  return useQuery({
+    queryKey: qk.platformHealth(),
+    queryFn: healthApi.platformHealth,
+    enabled,
+    retry: false,
+    refetchInterval: 10_000,
+    ...ON_RETURN,
+  });
+}
+
 // ── Reports, Users ──────────────────────────────────────────────────────────
 
 export function useReportDefinitions(enabled = true) {
@@ -507,6 +545,8 @@ export function useReportTable(query: reportsApi.ReportTableQuery | null, live: 
       query?.period ?? "",
       query?.period === "custom" ? (query.fromDate ?? null) : null,
       query?.period === "custom" ? (query.toDate ?? null) : null,
+      query?.period === "custom" ? (query.fromTime ?? null) : null,
+      query?.period === "custom" ? (query.toTime ?? null) : null,
     ),
     queryFn: () => reportsApi.getReportTable(query as reportsApi.ReportTableQuery),
     enabled: query !== null,

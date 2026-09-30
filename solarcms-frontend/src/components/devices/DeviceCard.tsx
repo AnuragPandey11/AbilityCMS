@@ -22,7 +22,7 @@
 
 import type { CommStatus, DeviceListItem, DeviceTableColumn } from "@/api/schemas";
 import { DeviceArt } from "./DeviceArt";
-import { UNDEFINED_DISPLAY, formatDigital, formatNumber } from "@/format/value";
+import { UNDEFINED_DISPLAY, formatDigital, formatNumber, isDigital } from "@/format/value";
 import { formatAge, ageSeconds } from "@/format/datetime";
 
 /**
@@ -114,7 +114,7 @@ export function DeviceCard({
             Roughly a third of Tags are Digital Inputs and the whole of VCB and
             TRANSFORMER is, so this is most of what those cards show.
           */
-          const digital = column.category === "status";
+          const digital = isDigital(column);
           return (
             <div key={column.tag_id} className="min-w-0">
               <dt

@@ -41,6 +41,9 @@ import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { NewClientForm } from "@/admin/NewClientForm";
 import { CommissioningPanel } from "@/admin/CommissioningPanel";
 import { RegionSelect } from "@/admin/RegionSelect";
+import { PublishingCodes, usePrefillOnce, type PublishingCode } from "@/admin/PublishingCodes";
+import * as discoveryApi from "@/api/endpoints/discovery";
+import { formatAge } from "@/format/datetime";
 import { usePermission } from "@/auth/usePermission";
 import { useAuth } from "@/auth/AuthProvider";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
@@ -405,6 +408,26 @@ export function OnboardingWizard(): JSX.Element {
       ),
   });
 
+  // Plant codes the broker is already carrying under this Client, so the code is
+  // confirmed rather than typed (see `PublishingCodes`). Super Admin only.
+  const discoveryClientCode =
+    clientsQuery.data?.find((entry) => entry.id === clientId)?.code ??
+    (clientId !== null && clientId === sessionClientId ? (me?.client_code ?? null) : null);
+  const publishingPlants = useQuery({
+    queryKey: ["discovery", "plants", discoveryClientCode],
+    queryFn: () => discoveryApi.discoverPlants(String(discoveryClientCode)),
+    enabled: isPlatformAdmin && discoveryClientCode !== null,
+    retry: false,
+  });
+  const plantCodes: PublishingCode[] | undefined = publishingPlants.data?.map((p) => ({
+    code: p.plant_code,
+    unregistered: p.registered_plant_id === null,
+    title: `${p.device_count} device(s), last heard ${formatAge((Date.now() - Date.parse(p.last_seen)) / 1000)} ago.`,
+  }));
+  const plantCodePrefilled = usePrefillOnce(plant.code, plantCodes, (code) =>
+    setPlant((current) => ({ ...current, code })),
+  );
+
   if (!canManage) {
     return (
       <ForbiddenState detail="Onboarding requires the plant.manage permission." />
@@ -711,7 +734,13 @@ export function OnboardingWizard(): JSX.Element {
                 onChange={(event) =>
                   setPlant({ ...plant, code: event.target.value })
                 }
-                className={inputClass}
+                className={`${inputClass} font-mono`}
+              />
+              <PublishingCodes
+                typed={plant.code}
+                codes={plantCodes}
+                onPick={(code) => setPlant({ ...plant, code })}
+                prefilled={plantCodePrefilled}
               />
             </Field>
             <Field label="Name" required>

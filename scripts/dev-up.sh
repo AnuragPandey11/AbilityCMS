@@ -29,7 +29,6 @@ LOG_DIR="$RUN_DIR/logs"
 PID_FILE="$RUN_DIR/pids"
 
 VENV_PY="$BACKEND_DIR/.venv/bin/python"
-VENV_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
 
 # ── Guard against a second, competing set of processes ──────────────────────
 # Two ingest workers on the same MQTT client_id fight the broker for the
@@ -105,16 +104,18 @@ start() {
 }
 
 echo "Starting SolarCMS..."
-start api            "$BACKEND_DIR" "$VENV_UVICORN" solarcms.api.main:app --reload
-start ingest         "$BACKEND_DIR" "$VENV_PY" -m solarcms.workers.ingest
-start alarm          "$BACKEND_DIR" "$VENV_PY" -m solarcms.workers.alarm
-start health_sweeper "$BACKEND_DIR" "$VENV_PY" -m solarcms.workers.health_sweeper
-start scheduler      "$BACKEND_DIR" "$VENV_PY" -m solarcms.workers.scheduler
+# The API and the four workers run under the supervisor, which restarts any
+# that exits and refuses to start a second set beside a running one. Each
+# process still logs to $LOG_DIR/<name>.log; the supervisor's own notes (starts,
+# exits, restarts) go there too, and to supervisor.log.
+start supervisor     "$BACKEND_DIR" "$VENV_PY" -m solarcms.supervisor --reload --log-dir "$LOG_DIR"
 start frontend       "$FRONTEND_DIR" npm run dev
 
 echo
-echo "All 6 processes started. PIDs recorded in $PID_FILE."
+echo "Started: the supervisor (API + ingest, alarm, health_sweeper, scheduler) and"
+echo "the frontend. PIDs recorded in $PID_FILE."
 echo
 echo "  tail -f $LOG_DIR/<name>.log     — watch one process"
+echo "  System Health (/admin/health)   — is each one running and working"
 echo "  scripts/dev-status.sh           — is everything still alive"
 echo "  scripts/dev-down.sh             — stop all of the above"

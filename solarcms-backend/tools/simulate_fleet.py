@@ -1,4 +1,4 @@
-"""Fleet simulator: two fabricated Clients, two Plants each, publishing to the
+"""Fleet simulator: three fabricated Clients and five Plants, publishing to the
 Docker broker so multi-tenancy can be tested against equipment that behaves.
 
     python tools/simulate_fleet.py --list
@@ -30,6 +30,23 @@ mean something, and a meter reads slightly below the sum of its Inverters so
 about units, scaling or formulas — OPEN-14/15/16 stay open, and a PR this
 produces is a PR of invented numbers.
 
+── Strings: the one set of keys nobody has observed ─────────────────────────
+SF_NORTH's Inverters publish sixteen PV inputs each, WH1's and VF_LUDHIANA's twelve, as
+`PVn CURRENT`, `PVn VOLTAGE` and `PVn ACTIVE POWER` — added 30 Sep 2026 so the
+String Analysis screen has something to draw. ⚠ These are the names on the
+client's *signal schedule* (TAG_CATALOGUE §2.4a), **not** keys seen on their
+broker: no Inverter there publishes per-string values yet, so the real keys
+may well be short ones like `PAC`. SF_SOUTH and WH2 publish none, and have no
+string count, which is the state the client's own Plant is in today.
+
+Two faults are built in, because they are what the screen is for: SF_NORTH
+INVERTER_4's PV7 is dead and INVERTER_11's PV12 is shaded to 60%. At 400 kW
+and ~720 V each input carries 30-odd amps at noon — several strings in
+parallel on one MPPT input, realistically, which is itself a question for the
+client (is PVn a string or an input?). ⚠ The aggregate `PVI` is left as it
+was, about 1000x smaller than the inputs sum to: scaling it to amps would put
+a 400 kW Inverter's ~560 A above DC_CURRENT's 500 A range and flag it.
+
 ── The fleet, and why it is shaped this way ─────────────────────────────────
 SUNFIELD  (utility-scale, Asia/Kolkata)
   SF_NORTH  4.8 MW  two Collectors (MCR_A, MCR_B) of six Inverters each, and
@@ -48,11 +65,21 @@ ROOFCO    (rooftop, Asia/Dubai — a different day boundary)
   WH2       200 kW  two Inverters, one MFM, nothing else, on a slow 120 s
             cycle. The smallest Plant that can exist; liveness against a
             fixed clock would call it late.
+VARDHMAN  (textile mill, captive rooftop, Asia/Kolkata; added 30 Sep 2026)
+  VF_LUDHIANA  2.0 MW  sixteen 125 kW string Inverters on two mill roofs, each
+            roof a Collector (WEAVING_SHED ten, PROCESS_HOUSE six), stepped up
+            to 11 kV through the mill's own Transformer and VCB, with MFM,
+            ABT_METER, WMS and a PPC outside both. UPPER-CASE root, as the
+            client's broker uses. The one Client that also has an operator —
+            a Client Employee — so an Employee's view of a whole Client can
+            be checked here without granting one on another Client. Twelve PV
+            inputs per Inverter, and one fault: INVERTER_14's PV9 shaded to
+            70%.
 
 Regions differ on purpose too, because CO₂ avoided is energy times the Region's
 grid factor: with one factor everywhere its per-Plant split *is* the energy
 split, and the fleet's CO₂ donut can never show anything the energy donut does
-not. SF_NORTH, SF_SOUTH and WH1 each sit in a different Region; WH2 has none
+not. SF_NORTH, SF_SOUTH, WH1 and VF_LUDHIANA each sit in a different Region; WH2 has none
 and falls back to the national default, so the tile's "no Region factor"
 wording has a case to render. The factors are invented — chosen only to differ
 from each other and from that default, not a statement about any real grid.
@@ -103,6 +130,23 @@ class DeviceSpec:
     collector: str | None = None    # {collector_code}, or None for a 5-segment topic
     capacity_kw: float = 0.0        # Inverters only
     derate: float = 1.0             # 0.6 = runs 40% below its siblings, always
+    # PV inputs published as PVn CURRENT / VOLTAGE / ACTIVE POWER (Inverters
+    # only; 0 = none, as the client's broker sends today). See "Strings" above.
+    strings: int = 0
+    # (string, factor): 0.0 is a dead string, 0.6 one shaded to 60% of its
+    # neighbours. Every other string is 1.0.
+    string_factors: tuple[tuple[int, float], ...] = ()
+
+    def string_factor(self, n: int) -> float:
+        return dict(self.string_factors).get(n, 1.0)
+
+    @property
+    def mean_string_factor(self) -> float:
+        """How much of its nameplate the strings deliver: a dead string costs the
+        Inverter its share of output, exactly as it would on a real machine."""
+        if not self.strings:
+            return 1.0
+        return sum(self.string_factor(n) for n in range(1, self.strings + 1)) / self.strings
 
 
 @dataclass(frozen=True)
@@ -136,12 +180,20 @@ class ClientSpec:
     name: str
     admin_email: str
     plants: tuple[PlantSpec, ...]
+    # A Client Employee over every Plant of the Client, created by
+    # `scripts/seed_fleet.py`; None = the Client has only its admin.
+    operator_email: str | None = None
+    # Every login of this Client, unless `seed_fleet.py --password` overrides
+    # it. Dev only — these are fabricated tenants.
+    password: str = "fleet12345"
 
 
 def _inverters(n: int, kw: float, collector: str | None, start: int = 1,
-               derate: dict[int, float] | None = None) -> list[DeviceSpec]:
+               derate: dict[int, float] | None = None, strings: int = 0,
+               string_faults: dict[int, dict[int, float]] | None = None) -> list[DeviceSpec]:
     return [DeviceSpec(f"INVERTER_{i}", "INVERTER", collector, kw,
-                       (derate or {}).get(i, 1.0))
+                       (derate or {}).get(i, 1.0), strings,
+                       tuple(sorted((string_faults or {}).get(i, {}).items())))
             for i in range(start, start + n)]
 
 
@@ -150,16 +202,24 @@ def _inverters(n: int, kw: float, collector: str | None, start: int = 1,
 _RAJASTHAN = RegionSpec("IN-RJ", "Rajasthan (demo)", "IN", 0.91)
 _KARNATAKA = RegionSpec("IN-KA", "Karnataka (demo)", "IN", 0.64)
 _DUBAI = RegionSpec("AE-DU", "Dubai (demo)", "AE", 0.42)
+_PUNJAB = RegionSpec("IN-PB", "Punjab (demo)", "IN", 0.76)
 
 
 FLEET: tuple[ClientSpec, ...] = (
     ClientSpec("SUNFIELD", "Sunfield Energy", "sunfield@example.com", (
         PlantSpec("SF_NORTH", "Sunfield North", "Asia/Kolkata",
                   4800.0, 5760.0, 30.0, "scms/v1", (
-            *_inverters(6, 400.0, "MCR_A"),
+            # Sixteen PV inputs each, as the client's reference String Analysis
+            # screen draws. INVERTER_4's PV7 is dead (a blown fuse) and
+            # INVERTER_11's PV12 is shaded to 60% of its neighbours: the two
+            # faults that screen exists to show.
+            *_inverters(6, 400.0, "MCR_A", strings=16, string_faults={4: {7: 0.0}}),
             # INVERTER_9 is permanently 40% down: what a relative
             # underperformance rule catches and an absolute threshold cannot.
-            *_inverters(6, 400.0, "MCR_B", start=7, derate={9: 0.6}),
+            # Its strings are down together, so none of them reads low against
+            # its own neighbours — a whole-Inverter loss is not a string fault.
+            *_inverters(6, 400.0, "MCR_B", start=7, derate={9: 0.6}, strings=16,
+                        string_faults={11: {12: 0.6}}),
             DeviceSpec("MFM", "MFM"),
             DeviceSpec("ABT_METER", "ABT_METER"),
             DeviceSpec("TRANSFORMER", "TRANSFORMER"),
@@ -179,7 +239,7 @@ FLEET: tuple[ClientSpec, ...] = (
     ClientSpec("ROOFCO", "Roofco Logistics", "roofco@example.com", (
         PlantSpec("WH1", "Warehouse 1 Rooftop", "Asia/Dubai",
                   450.0, 540.0, 15.0, "scms/v1", (
-            *_inverters(3, 150.0, None),
+            *_inverters(3, 150.0, None, strings=12),
             DeviceSpec("MFM", "MFM"),
             DeviceSpec("WMS", "WMS"),
         ), region=_DUBAI),
@@ -189,6 +249,23 @@ FLEET: tuple[ClientSpec, ...] = (
             DeviceSpec("MFM", "MFM"),
         )),
     )),
+    ClientSpec("VARDHMAN", "Vardhman Fabrics", "vardhman@example.com", (
+        PlantSpec("VF_LUDHIANA", "Ludhiana Mill Rooftop", "Asia/Kolkata",
+                  2000.0, 2400.0, 60.0, "SCMS/V1", (
+            # 125 kW string Inverters on two mill roofs, twelve PV inputs
+            # each. INVERTER_14's PV9 is shaded to 70% by the process house's
+            # boiler stack — the one fault on an otherwise healthy Plant.
+            *_inverters(10, 125.0, "WEAVING_SHED", strings=12),
+            *_inverters(6, 125.0, "PROCESS_HOUSE", start=11, strings=12,
+                        string_faults={14: {9: 0.7}}),
+            DeviceSpec("MFM", "MFM"),
+            DeviceSpec("ABT_METER", "ABT_METER"),
+            DeviceSpec("TRANSFORMER", "TRANSFORMER"),
+            DeviceSpec("VCB", "VCB"),
+            DeviceSpec("WMS", "WMS"),
+            DeviceSpec("PPC", "PPC"),
+        ), region=_PUNJAB),
+    ), operator_email="operator@example.com", password="admin12345"),
 )
 
 
@@ -340,7 +417,7 @@ class PlantSim:
             st._roll_day(now_local)
             if spec.kind == "INVERTER":
                 power = spec.capacity_kw * spec.derate * curve * self.cloud \
-                    * random.uniform(0.985, 1.015)
+                    * spec.mean_string_factor * random.uniform(0.985, 1.015)
                 st.last_power_kw = power
                 st.energy_today_kwh += power * hours
                 st.energy_total_kwh += power * hours
@@ -379,7 +456,9 @@ class PlantSim:
         running = power > 1.0
         v = random.uniform(795, 805) if running else 0.0     # 800 V LT bus
         i = power / (math.sqrt(3) * 0.8) if running else 0.0  # per phase
+        pvv = random.uniform(700, 740) if running else 0.0
         return {
+            **PlantSim._strings(st.spec, power, pvv),
             "F": f"{random.uniform(49.92, 50.08):.3f}" if running else "0.0",
             "Q": f"{power * random.uniform(0.02, 0.06):.2f}",
             "CE": f"{st.energy_total_kwh:.2f}",
@@ -393,13 +472,38 @@ class PlantSim:
             "EFF": f"{random.uniform(97.5, 98.8):.2f}" if running else "0.0",
             "PAC": f"{power:.2f}",
             "PVI": f"{power / 0.98 / 720:.2f}" if running else "0.0",
-            "PVV": f"{random.uniform(700, 740):.1f}" if running else "0.0",
+            "PVV": f"{pvv:.1f}",
             # 40960 is what the client's Inverters report at night (observed).
             "STS": "1024" if running else "40960",
             "VBR": f"{v * random.uniform(0.998, 1.002):.1f}",
             "VRY": f"{v * random.uniform(0.998, 1.002):.1f}",
             "VYB": f"{v * random.uniform(0.998, 1.002):.1f}",
         }
+
+    @staticmethod
+    def _strings(spec: DeviceSpec, power: float, pvv: float) -> dict[str, str]:
+        """Each PV input's current, voltage and power, summing to the DC side.
+
+        A healthy input carries its share of the DC current the Inverter's AC
+        output implies (at 98% efficiency), ±3% — well inside the 20% the String
+        Analysis rule tolerates, so only the configured faults read as faults.
+        A dead input carries nothing but still reads the MPPT's voltage, as an
+        input with a blown fuse does. At night every input reads zero.
+        """
+        if not spec.strings:
+            return {}
+        running = power > 1.0 and pvv > 0
+        # The DC current a fully healthy set of inputs would carry, per input.
+        per_input = (power / 0.98 / spec.mean_string_factor * 1000.0 / pvv / spec.strings
+                     if running and spec.mean_string_factor > 0 else 0.0)
+        out: dict[str, str] = {}
+        for n in range(1, spec.strings + 1):
+            current = per_input * spec.string_factor(n) * random.uniform(0.97, 1.03)
+            voltage = pvv * random.uniform(0.995, 1.005) if running else 0.0
+            out[f"PV{n} CURRENT"] = f"{current:.2f}"
+            out[f"PV{n} VOLTAGE"] = f"{voltage:.1f}"
+            out[f"PV{n} ACTIVE POWER"] = f"{current * voltage / 1000.0:.2f}"
+        return out
 
     @staticmethod
     def _meter(st: DeviceState, power_kw: float, hours: float) -> dict[str, str]:
@@ -572,7 +676,8 @@ async def publish_loop(args: argparse.Namespace) -> None:
 
 def print_fleet() -> None:
     for client in FLEET:
-        print(f"{client.code}  {client.name}  (admin: {client.admin_email})")
+        operator = f", operator: {client.operator_email}" if client.operator_email else ""
+        print(f"{client.code}  {client.name}  (admin: {client.admin_email}{operator})")
         for plant in client.plants:
             print(f"  {plant.code:<10} {plant.name:<22} {plant.ac_capacity_kw:>7.0f} kW  "
                   f"{plant.timezone:<13} every {plant.interval_s:g}s  root={plant.topic_root}")
@@ -580,6 +685,8 @@ def print_fleet() -> None:
             for d in plant.devices:
                 extra = f"  {d.capacity_kw:g} kW" if d.capacity_kw else ""
                 extra += f"  derate {d.derate:g}" if d.derate != 1.0 else ""
+                extra += f"  {d.strings} strings" if d.strings else ""
+                extra += "".join(f"  PV{n}x{f:g}" for n, f in d.string_factors)
                 print(f"      {sim.topic(d):<44} {d.kind:<12}{extra}")
 
 

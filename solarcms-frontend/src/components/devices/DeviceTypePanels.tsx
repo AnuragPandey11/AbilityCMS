@@ -34,7 +34,7 @@ import { useTagsById } from "@/api/hooks";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
 import { ageSeconds } from "@/format/datetime";
-import { formatValue } from "@/format/value";
+import { formatValue, isDigital } from "@/format/value";
 import { Badge, Panel } from "@/components/ui";
 import { EmptyState } from "@/components/state";
 import { DeviceIcon } from "@/components/devices/DeviceIcon";
@@ -184,8 +184,8 @@ function DeviceCard({
       });
   }, [frame, tagsById]);
 
-  const measurements = rows.filter((row) => row.tag.category !== "status");
-  const contacts = rows.filter((row) => row.tag.category === "status");
+  const measurements = rows.filter((row) => !isDigital(row.tag));
+  const contacts = rows.filter((row) => isDigital(row.tag));
 
   // Collapsed by default: the card sits in a grid of its peers and is meant to
   // be scanned, so the common case stays one comparable height. Expanding is

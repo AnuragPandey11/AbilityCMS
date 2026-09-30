@@ -43,6 +43,18 @@ import type { ReadingPoint } from "./schemas";
  */
 const LOOKBACK_MINUTES = 30;
 
+/**
+ * The window ends at the *end* of the current minute, not its start.
+ *
+ * The start keeps the query key stable, but the server returns only buckets
+ * before `to`, so ending there left out the minute in progress: a page opened
+ * at 13:54:50 read nothing newer than 13:53, and showed a breaker's trip
+ * contact that had opened at 13:54:46 as FALSE until the next live frame
+ * (measured 30 Sep 2026). Ending a minute later keeps the key just as stable
+ * and includes it; real-time aggregation fills the bucket from raw rows.
+ */
+const CURRENT_MINUTE_MS = 60_000;
+
 export interface LatestValues {
   /** device id → (tag id as string → value), shaped like a live frame (§5.1). */
   byDevice: Record<number, Record<string, number>>;
@@ -58,7 +70,7 @@ export function useLatestValues(
   // seconds. Unanchored, `Date.now()` makes a new key on every render and the
   // request repeats on every paint without ever hitting cache.
   const now = Math.floor(Date.now() / 60_000) * 60_000;
-  const to = new Date(now).toISOString();
+  const to = new Date(now + CURRENT_MINUTE_MS).toISOString();
   const from = new Date(now - LOOKBACK_MINUTES * 60_000).toISOString();
 
   const sortedDevices = useMemo(() => [...deviceIds].sort((a, b) => a - b), [deviceIds]);
@@ -125,7 +137,7 @@ export function useDeviceLatest(
   const query: readingsApi.ReadingsQuery = {
     deviceIds: deviceId === null ? [] : [deviceId],
     from: new Date(now - LOOKBACK_MINUTES * 60_000).toISOString(),
-    to: new Date(now).toISOString(),
+    to: new Date(now + CURRENT_MINUTE_MS).toISOString(),
     resolution: "agg_1m",
   };
   const readings = useQuery({

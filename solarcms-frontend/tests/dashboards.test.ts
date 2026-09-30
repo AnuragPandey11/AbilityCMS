@@ -3,11 +3,13 @@
  * component map is keyed by code — never by Plant (F-14).
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DASHBOARD_CODES, dashboardLabel } from "@/auth/useDashboard";
 
 describe("dashboard codes", () => {
-  it("matches the eleven seeded in the database", () => {
+  it("matches the fifteen seeded in the database", () => {
     expect([...DASHBOARD_CODES]).toEqual([
       "portfolio",
       "plant_overview",
@@ -15,12 +17,28 @@ describe("dashboard codes", () => {
       "single_plant",
       "sld",
       "inverter_monitoring",
+      "string_analysis",
       "meteorological",
       "energy_analytics",
       "grid_monitoring",
+      "transformer_monitoring",
+      "ppc_monitoring",
+      "vcb_monitoring",
       "alarms",
       "reports",
     ]);
+  });
+
+  it("is the seed's own list, in the seed's order", () => {
+    // `seed.py` is what creates the rows; a code added there and not here
+    // still routes (see below) but gets no label and no place in the menu.
+    const source = readFileSync(
+      join(__dirname, "..", "..", "solarcms-backend/src/solarcms/services/seed.py"),
+      "utf8",
+    );
+    const block = source.slice(source.indexOf("DASHBOARDS: Final"), source.indexOf("# ── Ingress topic patterns"));
+    const seeded = [...block.matchAll(/^\s*\("([a-z_]+)", "[^"]*", \d+\)/gm)].map((match) => match[1]);
+    expect(seeded).toEqual([...DASHBOARD_CODES]);
   });
 
   it("falls back to the code, so a dashboard added as a row still renders", () => {

@@ -115,6 +115,15 @@ async def _series(
     A bucket holding any flagged reading is left out and counted — a flagged
     value is stored, never plotted as data, and here never a start.
     """
+    good, flagged = await _bucket_rows(session, devices, tag_code, start, end)
+    return held_series(good, _hold(devices), aggregate), flagged
+
+
+async def _bucket_rows(
+    session: AsyncSession, devices: list[Any], tag_code: str,
+    start: datetime, end: datetime,
+) -> tuple[list[tuple[datetime, int, float]], int]:
+    """Each Device's good one-minute `max_value`s, ascending, and the flagged count."""
     if not devices:
         return [], 0
     rows = (await session.execute(text("""
@@ -130,8 +139,7 @@ async def _series(
         (row.bucket, row.device_id, float(row.max_value))
         for row in rows if not row.flagged and row.max_value is not None
     ]
-    flagged = sum(1 for row in rows if row.flagged)
-    return held_series(good, _hold(devices), aggregate), flagged
+    return good, sum(1 for row in rows if row.flagged)
 
 
 def _observed(at: datetime | None, after: datetime | None, gap: timedelta) -> bool:
@@ -274,6 +282,75 @@ async def _grid(session: AsyncSession, plant_id: int) -> dict[str, Any]:
     }
 
 
+def _gap(devices: list[Any]) -> timedelta:
+    """The longest silence that is still one ordinary interval for these Devices."""
+    return max(_hold(devices).values(), default=timedelta(0)) + BUCKET
+
+
+def _state_now(
+    devices: list[Any], folded_today: OperatingDay, moment: datetime, tag_code: str,
+    *, whose: str,
+) -> tuple[str | None, str | None]:
+    """Running, stopped, not started or unknown — and why, where it is unknown.
+
+    "Running" is only said on fresh evidence: Inverters that went quiet
+    mid-afternoon leave a running fold behind them, and silence is not a stop —
+    but neither is it still running. One function for the Plant card, the
+    Inverter view and the String Analysis screen, so no two of them can call
+    the same Inverter generating and idle at once.
+    """
+    if not devices:
+        return None, f"nothing here is bound to {tag_code}"
+    if folded_today.running and (
+        folded_today.last_sample is None
+        or moment - folded_today.last_sample > _gap(devices)
+    ):
+        return "unknown", f"no {whose} has reported since it was last generating"
+    if folded_today.running:
+        return "running", None
+    if folded_today.start is not None:
+        return "stopped", None
+    if folded_today.last_sample is None:
+        return "unknown", f"no {whose} reading today"
+    return "not_started", None
+
+
+async def device_states(
+    session: AsyncSession, plant_id: int, timezone: str | None,
+    now: datetime | None = None,
+) -> dict[int, tuple[str | None, str | None]]:
+    """Each Inverter's operating state on its own output, in one query.
+
+    The same fold and the same `_state_now` as `device_operating_status`, which
+    the Inverter view calls one Device at a time; a screen of every Inverter
+    cannot afford five queries each. It skips the to-the-second pinning of
+    start and stop (`_exact`), which never changes the state. An Inverter not
+    bound to the operating Tag is absent — its state is not known.
+    """
+    moment = now or datetime.now(UTC)
+    type_code, tag_code = PLANT_OPERATING_SOURCE
+    devices = await _devices(session, plant_id, type_code, tag_code)
+    if not devices:
+        return {}
+    zone = _zone(timezone)
+    today_start = _midnight(moment.astimezone(zone).date(), zone)
+    hold = _hold(devices)
+    # Back far enough that each Device's value on entry to the day is known,
+    # exactly as the two-day read in `_operating` would have it.
+    good, _ = await _bucket_rows(
+        session, devices, tag_code, today_start - max(hold.values()), moment + BUCKET)
+
+    by_device: dict[int, list[tuple[datetime, int, float]]] = {}
+    for row in good:
+        by_device.setdefault(row[1], []).append(row)
+    states: dict[int, tuple[str | None, str | None]] = {}
+    for device in devices:
+        series = held_series(by_device.get(device.id, []), {device.id: hold[device.id]}, "sum")
+        folded = operating_day(s for s in series if s[0] >= today_start)
+        states[device.id] = _state_now([device], folded, moment, tag_code, whose="Inverter")
+    return states
+
+
 async def _operating(
     session: AsyncSession, devices: list[Any], tag_code: str, zone: ZoneInfo,
     moment: datetime, *, whose: str,
@@ -301,28 +378,9 @@ async def _operating(
         stop=await _exact(session, devices, tag_code, folded_today.stop, "stop"),
     )
 
-    # The state now. "Running" is only said on fresh evidence: Inverters that
-    # went quiet mid-afternoon leave a running fold behind them, and silence is
-    # not a stop — but neither is it still running.
     reporting = sum(1 for device in devices if device.comm_status == "online")
-    longest_hold = max(_hold(devices).values(), default=timedelta(0))
-    gap = longest_hold + BUCKET
-    state: str | None
-    reason: str | None = None
-    if not devices:
-        state, reason = None, f"nothing here is bound to {tag_code}"
-    elif folded_today.running and (
-        folded_today.last_sample is None or moment - folded_today.last_sample > gap
-    ):
-        state, reason = "unknown", f"no {whose} has reported since it was last generating"
-    elif folded_today.running:
-        state = "running"
-    elif folded_today.start is not None:
-        state = "stopped"
-    elif folded_today.last_sample is None:
-        state, reason = "unknown", f"no {whose} reading today"
-    else:
-        state = "not_started"
+    gap = _gap(devices)
+    state, reason = _state_now(devices, folded_today, moment, tag_code, whose=whose)
 
     carried = carried_over_midnight(folded_yesterday, folded_today, gap)
     return {

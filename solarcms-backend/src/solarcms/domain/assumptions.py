@@ -1168,6 +1168,14 @@ UNDERPERFORMANCE_MIN_IRRADIANCE_W_PER_M2: Final = 400.0
 ZERO_GENERATION_MIN_IRRADIANCE_W_PER_M2: Final = 200.0
 ZERO_GENERATION_POWER_EPSILON_KW: Final = 1.0
 STRING_DEVIATION_FRACTION: Final = 0.20  # >20% below string-box median
+# ⚠ ASSUMED. The String Analysis screen (`domain/strings.py`) calls a PV string
+# "low" only when the median of its Inverter's producing strings is at least
+# this — below it (dawn, dusk, heavy overcast) every string carries a few amps,
+# a 20% difference is a fraction of an amp, and orientation alone produces it.
+# About 150 to 200 W/m² on a typical module; the analogue of
+# UNDERPERFORMANCE_MIN_IRRADIANCE_W_PER_M2, measured on the string itself so
+# that a Plant with no Weather Station can still be judged.
+STRING_LOW_MIN_MEDIAN_A: Final = 2.0
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1247,3 +1255,44 @@ NEGATIVE_DELTA_IS_SUSPECT: Final = True
 
 INCIDENT_SNAPSHOT_WINDOW_MINUTES: Final = 15  # ± around the trigger
 INCIDENT_SNAPSHOT_MIN_SEVERITY: Final = "high"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Platform health — ⚠ ASSUMED (30 Sep 2026). How the System Health page
+# judges the platform's own processes (`domain/system_health.py`). Not about
+# any Plant: whether *we* are running, which no Device reading can say.
+#
+# Four times this project has had a process that caught its own failure,
+# logged it and carried on, with nothing written for days (CLAUDE.md, "Things
+# that surprised the build"). These are the thresholds that make that loud.
+# ════════════════════════════════════════════════════════════════════════════
+
+# How often each process says it is alive. Independent of its work, so a
+# process whose work is hung still beats — and reads *stalled*, not *down*.
+HEARTBEAT_INTERVAL_S: Final = 10
+# No heartbeat for this long and the process is not running. Four missed beats,
+# so a slow Redis write or a long GC pause does not flap it.
+PROCESS_DOWN_AFTER_S: Final = 45
+# Running, but no unit of work has *completed* for this long: stalled. Per
+# process, from its own cadence — ingest flushes every 2 s, the alarm worker
+# reads the stream every 2 s, the sweep runs every HEALTH_SWEEP_INTERVAL_S and
+# the scheduler ticks every 60 s but a tick can render a report.
+PROCESS_STALLED_AFTER_S: Final[dict[str, int]] = {
+    "ingest": 60,
+    "alarm": 60,
+    "health_sweeper": 4 * HEALTH_SWEEP_INTERVAL_S,
+    "scheduler": 300,
+}
+# Errors this recent make a process *degraded* even when its latest unit of
+# work succeeded — the intermittent failure that is otherwise invisible.
+PROCESS_RECENT_ERROR_WINDOW_S: Final = 900
+# Ingest connected and subscribed, yet nothing has arrived for this long: either
+# every Plant is silent, or the equipment is publishing somewhere ingest is not
+# listening — another broker, or topics outside MQTT_SUBSCRIBE_TOPICS. The
+# second happened for 27 hours with no Alarm (CLAUDE.md), because a filter
+# that matches nothing produces nothing to quarantine.
+BROKER_QUIET_AFTER_S: Final = 600
+# The supervisor's restart backoff: 1 s, doubling to this ceiling, back to 1 s
+# once a process has stayed up for SUPERVISOR_STABLE_AFTER_S.
+SUPERVISOR_MAX_BACKOFF_S: Final = 60
+SUPERVISOR_STABLE_AFTER_S: Final = 60

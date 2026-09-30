@@ -9,7 +9,7 @@
  * decision that has not been made yet (OPEN-15).
  */
 
-import type { Tag } from "@/api/schemas";
+import type { KpiPeriod, Tag } from "@/api/schemas";
 
 /** Rendered wherever a figure is undefined. Never "0". */
 export const UNDEFINED_DISPLAY = "—";
@@ -80,7 +80,7 @@ export function formatValue(
 
 /**
  * A Digital Input is not a number (§4.5). Roughly a third of Tags are DI, and
- * the whole of VCB and TRANSFORMER is. Rendered as state, never as a quantity.
+ * the whole of VCB is. Rendered as state, never as a quantity.
  */
 export function formatDigital(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
@@ -89,8 +89,17 @@ export function formatDigital(value: number | null | undefined): string {
   return value === 0 ? "OFF" : "ON";
 }
 
-export function isDigital(tag: Pick<Tag, "category"> | null | undefined): boolean {
-  return tag?.category === "status";
+/**
+ * Whether a Tag is a two-state contact — decided by its unit, `bool`.
+ *
+ * ⚠ Not by category. `status` is the category of everything that must never
+ * be throttled, and that is wider than contacts: the PPC's five setpoints (kW,
+ * kVAr, kV, a ratio, Hz) and `DEVICE_STATUS` (a code) are `status` too. Keyed
+ * on category, a 4,800 kW Active Power Setpoint rendered as "ON" and could not
+ * be charted. Every Digital Input is catalogued in `bool` (`assumptions._di`).
+ */
+export function isDigital(tag: { unit: string | null } | null | undefined): boolean {
+  return tag?.unit === "bool";
 }
 
 /** Format against a Tag, which is the only object that knows the unit. */
@@ -264,4 +273,39 @@ export function implausibleRatioReason(value: number, label = "This figure"): st
 export function variantNote(variant: string | null | undefined): string {
   const label = variant ? variant.replace(/_/g, " ") : "unspecified";
   return `${label} — provisional pending OPEN-16`;
+}
+
+/** Where a period's calendar hours begin, in words. */
+const HOURS_SINCE: Record<KpiPeriod, string> = {
+  today: "midnight",
+  month: "the 1st",
+  year: "the year began",
+  lifetime: "the first reading",
+};
+
+/**
+ * A formula variant in words, for the footnote of the tile showing it.
+ *
+ * The codes are identifiers, and with the underscores swapped for spaces they
+ * read as jargon ("poa uncorrected"). This says what each one means. An
+ * unknown code falls back to that swap rather than to nothing: a new variant
+ * must still be named (OPEN-16). `measuredLater` is a Plant younger than the
+ * period, whose CUF hours count from its first reading instead.
+ */
+export function variantWords(
+  variant: string | null | undefined,
+  period: KpiPeriod,
+  measuredLater = false,
+): string | null {
+  if (!variant) return null;
+  switch (variant) {
+    case "poa_uncorrected":
+      return "plane-of-array irradiance, not temperature-corrected";
+    case "ac_capacity_calendar_hours":
+      return `AC capacity, every hour since ${measuredLater ? "the first reading" : HOURS_SINCE[period]}`;
+    case "time_based_excluding_comms":
+      return "time-weighted; comms loss not counted as downtime";
+    default:
+      return variant.replace(/_/g, " ");
+  }
 }

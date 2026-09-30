@@ -47,6 +47,7 @@ import { JsonTree } from "@/components/json/JsonTree";
 import { formatAge } from "@/format/datetime";
 import type { Client } from "@/api/schemas";
 import type { DiscoveredClient } from "@/api/endpoints/discovery";
+import { PublishingCodes, usePrefillOnce, type PublishingCode } from "@/admin/PublishingCodes";
 
 const AGE = (iso: string): string =>
   formatAge((Date.now() - Date.parse(iso)) / 1000);
@@ -151,6 +152,30 @@ export function ClientsAdmin(): JSX.Element {
     },
   });
 
+  /** Typing the code fills the display name in, until the name is touched. */
+  const setCode = (code: string): void =>
+    setForm((f) => ({
+      ...f,
+      code,
+      name: nameTouched
+        ? f.name
+        : code.toLowerCase().replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+    }));
+
+  const clientCodes: PublishingCode[] | undefined = discovered.data?.map((d) => ({
+    code: d.client_code,
+    unregistered: d.registered_client_id === null,
+    title: `${d.plant_codes.length} plant(s), last heard ${AGE(d.last_seen)} ago.`,
+  }));
+  // Above the permission check, as every hook must be. Only while the
+  // new-Client form is open: filling a hidden field would
+  // be filling it for nobody.
+  const clientCodePrefilled = usePrefillOnce(
+    form.code,
+    mode === "new" ? clientCodes : undefined,
+    setCode,
+  );
+
   if (!canAdmin) {
     return (
       <ForbiddenState detail="Managing Clients requires the system.admin permission. Broker discovery is Super Admin only: an unregistered topic carries no Client, and attributing one by reading the topic is exactly the guess the isolation model refuses to make." />
@@ -201,16 +226,6 @@ export function ClientsAdmin(): JSX.Element {
     setNameTouched(false);
     setMode("new");
   };
-
-  /** Typing the code fills the display name in, until the name is touched. */
-  const setCode = (code: string): void =>
-    setForm((f) => ({
-      ...f,
-      code,
-      name: nameTouched
-        ? f.name
-        : code.toLowerCase().replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-    }));
 
   const readyToCreate =
     form.code.trim() !== "" &&
@@ -284,24 +299,12 @@ export function ClientsAdmin(): JSX.Element {
             </div>
             {/* Offered, never required. A code already arriving on the broker is
                 the one spelling that is certainly right. */}
-            {(discovered.data ?? []).some((d) => d.registered_client_id === null) ? (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] text-ink-faint">Publishing now:</span>
-                {(discovered.data ?? [])
-                  .filter((d) => d.registered_client_id === null)
-                  .map((d) => (
-                    <button
-                      key={d.client_code}
-                      type="button"
-                      onClick={() => startNew(d.client_code)}
-                      className="rounded border border-warn/40 bg-warn/5 px-1.5 py-0.5 font-mono text-[11px] text-ink hover:border-warn"
-                      title={`${d.plant_codes.length} plant(s), last heard ${AGE(d.last_seen)} ago. Click to fill the code in.`}
-                    >
-                      {d.client_code}
-                    </button>
-                  ))}
-              </div>
-            ) : null}
+            <PublishingCodes
+              typed={form.code}
+              codes={clientCodes}
+              onPick={setCode}
+              prefilled={clientCodePrefilled}
+            />
           </Section>
 
           <Section

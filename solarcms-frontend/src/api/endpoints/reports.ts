@@ -24,13 +24,27 @@ export interface ReportTableQuery {
   /** The Plant's own dates, `YYYY-MM-DD`, inclusive. Custom periods only. */
   fromDate?: string;
   toDate?: string;
+  /**
+   * `HH:MM` on the Plant's clock: the period starts at `fromTime` on the
+   * first day and stops at `toTime` on the last (23:59 is the day's end).
+   * Custom periods only; omitted, that end is the whole day's edge.
+   */
+  fromTime?: string;
+  toTime?: string;
 }
 
 function tableParams(query: ReportTableQuery): QueryParams {
   return {
     plant_id: query.plantId,
     period: query.period,
-    ...(query.period === "custom" ? { from_date: query.fromDate, to_date: query.toDate } : {}),
+    ...(query.period === "custom"
+      ? {
+          from_date: query.fromDate,
+          to_date: query.toDate,
+          from_time: query.fromTime,
+          to_time: query.toTime,
+        }
+      : {}),
   };
 }
 
@@ -71,10 +85,18 @@ export async function reportTablePage(query: ReportTableQuery): Promise<string> 
   });
 }
 
-/** What the server names the file — the Plant, the kind and the days. */
+/**
+ * What the server names the file — the Plant, the kind and the days, and the
+ * times when the period was cut inside a day (`20260922T0600`).
+ */
 export function reportFilename(table: ReportTable, format: ReportFormat): string {
   const day = (iso: string) => iso.replace(/-/g, "");
-  return `${table.plant.code}_${table.kind}_${day(table.first_day)}_${day(table.last_day)}.${format}`;
+  const timed = table.from_time != null || table.to_time != null;
+  const at = (iso: string, clock: string | null | undefined, edge: string) =>
+    timed ? `${day(iso)}T${(clock ?? edge).replace(":", "")}` : day(iso);
+  const first = at(table.first_day, table.from_time, "00:00");
+  const last = at(table.last_day, table.to_time, "23:59");
+  return `${table.plant.code}_${table.kind}_${first}_${last}.${format}`;
 }
 
 // ── Report definitions and runs: a Client's Reports, rendered by the scheduler

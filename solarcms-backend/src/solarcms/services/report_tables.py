@@ -43,7 +43,7 @@ import io
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -81,7 +81,7 @@ from solarcms.domain.formulas import (
 )
 from solarcms.domain.health_logic import uptime_seconds_from_events
 from solarcms.domain.periods import ReportWindow, local_midnight
-from solarcms.domain.tiering import TIERS, Tier, select_tier
+from solarcms.domain.tiering import TIERS, Tier, bucket_start, select_tier
 from solarcms.services.energy import read_counter_series
 from solarcms.services.reporting import BOLD, HEADER_FILL, MUTED
 
@@ -164,8 +164,23 @@ class ReportTable:
 
     @property
     def filename_stem(self) -> str:
+        window = self.window
+        if not window.timed:
+            return (f"{self.plant.code}_{self.kind}_"
+                    f"{window.first_day:%Y%m%d}_{window.last_day:%Y%m%d}")
+        begins, ends = window.from_time or _DAY_BEGINS, window.to_time or _DAY_ENDS
         return (f"{self.plant.code}_{self.kind}_"
-                f"{self.window.first_day:%Y%m%d}_{self.window.last_day:%Y%m%d}")
+                f"{window.first_day:%Y%m%d}T{begins:%H%M}_{window.last_day:%Y%m%d}T{ends:%H%M}")
+
+
+# How a whole day's edges read beside a clock time chosen for the other end.
+_DAY_BEGINS = time(0, 0)
+_DAY_ENDS = time(23, 59)
+
+
+def clock(at: time | None) -> str | None:
+    """`HH:MM`, or None for a day's own edge — how a window's times travel."""
+    return at.strftime("%H:%M") if at else None
 
 
 # ── Units and labels ─────────────────────────────────────────────────────────
@@ -493,9 +508,23 @@ async def compose(
     if kind not in REPORT_KINDS:
         raise ValueError(f"unknown report kind {kind!r}")
 
+    table, reads = await _compose(session, kind, plant, window, now)
+    table.notes[:0] = period_notes(table, now, reads)
+    return table
+
+
+# What reads the stats tier, in a sentence about the period's edges.
+_STATS_READ = "peaks, averages and coverage"
+
+
+async def _compose(
+    session: AsyncSession, kind: str, plant: PlantInfo, window: ReportWindow,
+    now: datetime,
+) -> tuple[ReportTable, list[tuple[str, Tier]]]:
+    """The table, and what was read from which tier — for `period_notes`."""
     if kind == "alarm":
         alarms = await fetch_alarms(session, plant.id, window, MAX_ALARM_ROWS + 1)
-        return build_alarm(plant, window, alarms)
+        return build_alarm(plant, window, alarms), []
 
     day_tier = _day_tier(window, now)
     stats_tier = _stats_tier(window, now)
@@ -512,7 +541,8 @@ async def compose(
             ["AC_ACTIVE_POWER", "DC_POWER", "DEVICE_TEMPERATURE"])
         uptime = await fetch_availability(session, inverters, window)
         return build_inverter(plant, window, inverters, series, device_stats, uptime,
-                              counter_tier=counter_tier, stats_tier=stats_tier)
+                              counter_tier=counter_tier, stats_tier=stats_tier), [
+            ("energy registers", counter_tier), (_STATS_READ, stats_tier)]
 
     if kind == "weather":
         pairs = [("WMS", tag) for tag in (
@@ -524,7 +554,8 @@ async def compose(
             start=window.start, end=window.end, plant_ids=[plant.id],
         )).get(plant.id, [])
         return build_weather(plant, window, series, stats,
-                             counter_tier=day_tier, stats_tier=stats_tier)
+                             counter_tier=day_tier, stats_tier=stats_tier), [
+            ("irradiation registers", day_tier), (_STATS_READ, stats_tier)]
 
     # daily_plant and monthly_plant read the same registers; only the monthly
     # one has PR, and so needs the sun.
@@ -538,8 +569,92 @@ async def compose(
         session, plant, window, stats_tier,
         [*PLANT_POWER_SOURCE_PRECEDENCE, *PLANT_FREQUENCY_SOURCE_PRECEDENCE])
     builder = build_daily_plant if kind == "daily_plant" else build_monthly_plant
+    registers = "energy and irradiation registers" if sun else "energy registers"
     return builder(plant, window, series, stats,
-                   counter_tier=day_tier, stats_tier=stats_tier)
+                   counter_tier=day_tier, stats_tier=stats_tier), [
+        (registers, day_tier), (_STATS_READ, stats_tier)]
+
+
+# ── A period cut inside a day ────────────────────────────────────────────────
+
+def _moment(at: datetime, zone: ZoneInfo) -> str:
+    return at.astimezone(zone).strftime("%H:%M on %d-%m-%Y")
+
+
+def _span(begins: datetime, ends: datetime, zone: ZoneInfo) -> str:
+    """"06:00 to 18:00 on 28-09-2026", or with both dates when they differ."""
+    first, last = begins.astimezone(zone), ends.astimezone(zone)
+    if first.date() == last.date():
+        return f"{first:%H:%M} to {last:%H:%M} on {first:%d-%m-%Y}"
+    return f"{_moment(begins, zone)} to {_moment(ends, zone)}"
+
+
+def _align_up(at: datetime, tier: Tier) -> datetime:
+    """The first `tier` bucket boundary at or after `at`."""
+    floor = bucket_start(at, tier)
+    return at if floor == at else floor + _tier_resolution(tier)
+
+
+def period_notes(
+    table: ReportTable, now: datetime, reads: Sequence[tuple[str, Tier]],
+) -> list[str]:
+    """What a Report cut inside a day covers, said first. Empty for whole days.
+
+    Two things the rows cannot say themselves. A day's row covers only the part
+    of it the period entered, and its Date column does not show which part.
+    And an aggregate is read in whole buckets — `bucket >= start AND bucket <
+    end` — so a time inside a bucket moves the edge: the bucket holding the
+    start is left out, the one holding the end read whole. A time on the
+    bucket's boundary moves nothing and gets no note; nor does an end cut short
+    at now, which is how every day in progress is read.
+    """
+    window, zone = table.window, table.plant.zone
+    if not window.timed:
+        return []
+    begins = (f"{window.from_time:%H:%M} on {window.first_day:%d-%m-%Y}"
+              if window.from_time else f"the start of {window.first_day:%d-%m-%Y}")
+    ends = (f"{window.to_time:%H:%M} on {window.last_day:%d-%m-%Y}"
+            if window.to_time else f"the end of {window.last_day:%d-%m-%Y}")
+    if window.from_time and window.to_time and window.first_day == window.last_day:
+        span = (f"from {window.from_time:%H:%M} to {window.to_time:%H:%M} on "
+                f"{window.first_day:%d-%m-%Y}")
+    else:
+        span = f"from {begins} to {ends}"
+    sentence = f"The period runs {span}, on the Plant's clock ({table.plant.timezone})"
+    unit = {"daily_plant": "day", "weather": "day", "monthly_plant": "month"}.get(table.kind)
+    if unit is not None:
+        first, last = window.first_day, window.last_day
+        if unit == "day" and first == last:
+            sentence += "; the row covers only that part of the day"
+        elif unit == "month" and (first.year, first.month) == (last.year, last.month):
+            sentence += "; the row covers only the part of its month inside it"
+        else:
+            which = ("first and last" if window.from_time and window.to_time
+                     else "first" if window.from_time else "last")
+            rows = ("rows cover only the part of their" if which == "first and last"
+                    else "row covers only the part of its")
+            sentence += f"; the {which} {rows} {unit} inside it"
+    notes = [sentence + "."]
+
+    chosen_end = window.to_time is not None and window.end < now
+    by_tier: dict[Tier, list[str]] = {}
+    for what, tier in reads:
+        by_tier.setdefault(tier, []).append(what)
+    for tier, whats in by_tier.items():
+        read_from = _align_up(window.start, tier) if window.from_time else window.start
+        read_to = _align_up(window.end, tier) if chosen_end else window.end
+        clauses = []
+        if read_from != window.start:
+            clauses.append("the bucket holding the start is left out")
+        if read_to != window.end:
+            clauses.append(f"the {'one' if clauses else 'bucket'} holding the end is read whole")
+        if not clauses:
+            continue
+        subject = " and ".join(whats)
+        notes.append(
+            f"{subject[0].upper()}{subject[1:]} are read in {_resolution_phrase(tier)} buckets, "
+            f"so they cover {_span(read_from, read_to, zone)}: {' and '.join(clauses)}.")
+    return notes
 
 
 # ── Shared arithmetic ────────────────────────────────────────────────────────
@@ -1095,6 +1210,9 @@ def to_payload(table: ReportTable, now: datetime) -> dict[str, Any]:
         "period": table.window.period,
         "first_day": table.window.first_day.isoformat(),
         "last_day": table.window.last_day.isoformat(),
+        # The chosen clock times, or null where that end is a whole day's edge.
+        "from_time": clock(table.window.from_time),
+        "to_time": clock(table.window.to_time),
         "start": table.window.start,
         "end": table.window.end,
         "source_tier": table.source_tier,
@@ -1122,9 +1240,16 @@ def _json_row(columns: Sequence[Column], row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _period_text(table: ReportTable) -> str:
-    first, last = table.window.first_day, table.window.last_day
-    days = f"{first:%d-%m-%Y}" if first == last else f"{first:%d-%m-%Y} to {last:%d-%m-%Y}"
-    return f"{days} ({table.plant.timezone})"
+    window = table.window
+    first, last = window.first_day, window.last_day
+    if not window.timed:
+        days = f"{first:%d-%m-%Y}" if first == last else f"{first:%d-%m-%Y} to {last:%d-%m-%Y}"
+        return f"{days} ({table.plant.timezone})"
+    # One end timed shows the other's edge too: "06:00 to" what, otherwise?
+    begins, ends = window.from_time or _DAY_BEGINS, window.to_time or _DAY_ENDS
+    span = (f"{first:%d-%m-%Y} {begins:%H:%M} to {ends:%H:%M}" if first == last
+            else f"{first:%d-%m-%Y} {begins:%H:%M} to {last:%d-%m-%Y} {ends:%H:%M}")
+    return f"{span} ({table.plant.timezone})"
 
 
 def display(column: Column, value: Any, *, thousands: bool = True) -> str:

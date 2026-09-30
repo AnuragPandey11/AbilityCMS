@@ -1,29 +1,26 @@
 /**
- * Platform administration: system health, Clients, and the audit trail.
+ * Platform administration: Clients and the audit trail.
  *
- * All three are `system.admin`. The audit trail is read-only by construction —
- * no write route exists, and every row is written in the same transaction as the
+ * Both are `system.admin`. The audit trail is read-only by construction — no
+ * write route exists, and every row is written in the same transaction as the
  * change it records.
  *
- * `ingest_lag_seconds` is the number to read first: it distinguishes "nothing is
- * generating" from "nothing is arriving", and the two look identical on every
- * other dashboard in this application.
+ * Platform health — the processes' heartbeats, the broker, ingest lag and
+ * aggregate freshness — has its own page, System Health (`SystemHealthAdmin`).
  */
 
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { useSystemHealth } from "@/api/hooks";
 import { qk } from "@/api/queryKeys";
 import * as auditApi from "@/api/endpoints/audit";
 import * as clientsApi from "@/api/endpoints/clients";
 import type { AuditEntry, Client } from "@/api/schemas";
-import { StatTile } from "@/components/charts/KpiTile";
 import { Panel, Badge, inputClass } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { NewClientForm } from "@/admin/NewClientForm";
-import { formatAge, formatDateTime } from "@/format/datetime";
-import { formatNumber } from "@/format/value";
+import { formatDateTime } from "@/format/datetime";
 import { usePermission } from "@/auth/usePermission";
 import { useAuth } from "@/auth/AuthProvider";
 
@@ -33,7 +30,6 @@ export function SystemAdmin(): JSX.Element {
   const [auditAction, setAuditAction] = useState("");
   const [switchError, setSwitchError] = useState<string | null>(null);
 
-  const healthQuery = useSystemHealth(isPlatformAdmin);
   const clientsQuery = useQuery({
     queryKey: qk.clients(),
     queryFn: clientsApi.listClients,
@@ -53,8 +49,6 @@ export function SystemAdmin(): JSX.Element {
       <ForbiddenState detail="Platform administration requires the system.admin permission." />
     );
   }
-
-  const health = healthQuery.data;
 
   const clientColumns: Column<Client>[] = [
     {
@@ -187,7 +181,7 @@ export function SystemAdmin(): JSX.Element {
       <div>
         <h1 className="page-title">System</h1>
         <p className="mt-1.5 text-sm text-ink-muted">
-          Platform health, Clients, and the immutable audit trail.
+          Clients, and the immutable audit trail.
         </p>
       </div>
 
@@ -197,77 +191,15 @@ export function SystemAdmin(): JSX.Element {
         </div>
       ) : null}
 
-      {healthQuery.isLoading ? (
-        <LoadingState label="Reading system health" />
-      ) : healthQuery.isError ? (
-        <ErrorState
-          error={healthQuery.error}
-          retry={() => void healthQuery.refetch()}
-        />
-      ) : health ? (
-        <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatTile
-              label="Ingest lag"
-              value={
-                health.ingest_lag_seconds === null
-                  ? "—"
-                  : formatAge(health.ingest_lag_seconds)
-              }
-              tone={
-                health.ingest_lag_seconds === null
-                  ? "default"
-                  : health.ingest_lag_seconds > 300
-                    ? "bad"
-                    : health.ingest_lag_seconds > 60
-                      ? "warn"
-                      : "ok"
-              }
-              hint="Age of the newest Reading. This is what separates 'nothing is generating' from 'nothing is arriving'."
-            />
-            <StatTile
-              label="Quarantined (1h)"
-              value={formatNumber(health.quarantined_last_hour, { digits: 0 })}
-              tone={health.quarantined_last_hour > 0 ? "warn" : "default"}
-              hint="Messages on unrecognised topics. Retained in mqtt_raw and alarmed — never attributed to a Client by guessing at the payload."
-            />
-            <StatTile
-              label="Alarm stream depth"
-              value={formatNumber(health.alarm_stream_depth, { digits: 0 })}
-              tone={health.alarm_stream_depth > 10_000 ? "warn" : "default"}
-              hint="A growing figure means alarm evaluation is falling behind ingestion."
-            />
-            <StatTile
-              label="Continuous aggregates"
-              value={formatNumber(health.continuous_aggregates.length, {
-                digits: 0,
-              })}
-              hint="A stalled aggregate is invisible everywhere else — the tiers serving week and month views simply stop filling."
-            />
-          </div>
-
-          <Panel
-            title="Aggregate freshness"
-            subtitle="Reports and KPIs read these tiers, never raw Readings."
-          >
-            <ul className="space-y-1.5">
-              {health.continuous_aggregates.map((aggregate) => (
-                <li
-                  key={aggregate.view}
-                  className="flex items-center justify-between rounded border border-line bg-surface px-3 py-1.5 text-xs"
-                >
-                  <span className="font-mono text-ink">{aggregate.view}</span>
-                  <span className="text-ink-muted">
-                    {aggregate.last_refresh
-                      ? `refreshed ${formatDateTime(aggregate.last_refresh)}`
-                      : "never refreshed"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Panel>
-        </>
-      ) : null}
+      {/* Platform health has its own page now, with each process's heartbeat
+          beside the database figures that used to open this one. */}
+      <p className="text-sm text-ink-muted">
+        Processes, the broker, ingest lag and aggregate freshness are on{" "}
+        <Link to="/admin/health" className="font-medium text-accent hover:underline">
+          System Health
+        </Link>
+        .
+      </p>
 
       <Panel
         title="Clients"

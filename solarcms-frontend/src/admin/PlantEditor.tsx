@@ -51,6 +51,7 @@ import { JsonTree } from "@/components/json/JsonTree";
 import { formatAge } from "@/format/datetime";
 import type { DeviceListItem } from "@/api/schemas";
 import type { DiscoveredDevice } from "@/api/endpoints/discovery";
+import { PublishingCodes, usePrefillOnce, type PublishingCode } from "@/admin/PublishingCodes";
 
 const AGE = (iso: string): string => formatAge((Date.now() - Date.parse(iso)) / 1000);
 
@@ -625,9 +626,12 @@ function NewPlantPanel({
     form.name.trim() !== "" &&
     (!needsClient || form.clientId !== "");
 
-  const unregisteredCodes = (discovered.data ?? []).filter(
-    (p) => p.registered_plant_id === null,
-  );
+  const plantCodes: PublishingCode[] | undefined = discovered.data?.map((p) => ({
+    code: p.plant_code,
+    unregistered: p.registered_plant_id === null,
+    title: `${p.device_count} device(s), last heard ${AGE(p.last_seen)} ago.`,
+  }));
+  const codePrefilled = usePrefillOnce(form.code, plantCodes, setCode);
 
   return (
     <Panel
@@ -672,22 +676,12 @@ function NewPlantPanel({
           </Field>
         </div>
 
-        {unregisteredCodes.length > 0 ? (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-ink-faint">Publishing, not registered yet:</span>
-            {unregisteredCodes.map((p) => (
-              <button
-                key={p.plant_code}
-                type="button"
-                onClick={() => setCode(p.plant_code)}
-                className="rounded border border-warn/40 bg-warn/5 px-1.5 py-0.5 font-mono text-[11px] text-ink hover:border-warn"
-                title={`${p.device_count} device(s), last heard ${AGE(p.last_seen)} ago. Click to fill the code in.`}
-              >
-                {p.plant_code}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <PublishingCodes
+          typed={form.code}
+          codes={plantCodes}
+          onPick={setCode}
+          prefilled={codePrefilled}
+        />
       </Section>
 
       <Section

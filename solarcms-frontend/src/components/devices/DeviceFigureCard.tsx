@@ -20,7 +20,7 @@
 import type { CommStatus, DeviceListItem, DeviceTableColumn } from "@/api/schemas";
 import { COMM_CARD_STYLE } from "./DeviceCard";
 import { DeviceIcon } from "./DeviceIcon";
-import { UNDEFINED_DISPLAY, formatDigital, formatNumber } from "@/format/value";
+import { UNDEFINED_DISPLAY, formatDigital, formatNumber, isDigital } from "@/format/value";
 import { ageSeconds, formatAge } from "@/format/datetime";
 
 const STATUS_TEXT: Record<CommStatus, string> = {
@@ -105,7 +105,7 @@ export function DeviceFigureCard({
         {shown.map((column) => {
           const value = values?.[String(column.tag_id)];
           // A Digital Input is a contact, not a quantity (§4.5): never "0.00 bool".
-          const digital = column.category === "status";
+          const digital = isDigital(column);
           const highlighted = column.tag_id === highlightTagId;
           return (
             <div key={column.tag_id} className="min-w-0">

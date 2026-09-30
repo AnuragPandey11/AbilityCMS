@@ -15,8 +15,10 @@
  * ── Periods are the Plant's days ────────────────────────────────────────────
  * The period is sent by name and resolved on the server in the Plant's zone:
  * "today" at a Plant in Kolkata began at its midnight, whatever the browser's
- * clock says. The custom range is the Plant's own dates too, and its "today"
- * limit is read in the Plant's zone for the same reason.
+ * clock says. The custom range is the Plant's own dates and clock times too,
+ * and its "today" and "now" limits are read in the Plant's zone for the same
+ * reason. It stops at the end time; 23:59 is the end of that day, so a whole
+ * day typed by hand reads exactly as the same day chosen as Yesterday.
  *
  * Below the preview, a Client's scheduled Reports (`ClientReportRuns`) — a
  * different job: every Plant in one workbook, including the settlement Report
@@ -37,12 +39,13 @@ import { Button, Panel, SegmentedControl, inputClass } from "@/components/ui";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { EmptyState, ErrorState, ForbiddenState, SkeletonTable } from "@/components/state";
 import { IconExport, IconWarning } from "@/components/icons";
-import { DEFAULT_TIMEZONE, dateInputInZone, timezoneLabel } from "@/format/datetime";
+import { DEFAULT_TIMEZONE, timezoneLabel, toDateTimeInput } from "@/format/datetime";
 import {
   columnHeading,
+  customRangeEnd,
   customRangeProblem,
-  formatDayRange,
   formatReportCell,
+  formatReportPeriod,
   isNumericColumn,
   shiftDate,
 } from "./reports/format";
@@ -115,12 +118,17 @@ export function ReportsDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = usePlantScope();
   const plantQuery = usePlant(plantId);
   const zone = plantQuery.data?.timezone ?? DEFAULT_TIMEZONE;
-  const today = dateInputInZone(Date.now(), zone);
+  // The Plant's wall clock, `YYYY-MM-DDTHH:MM`, which the inputs also hold.
+  const now = toDateTimeInput(Date.now(), zone);
+  const today = now.slice(0, 10);
 
   const [kind, setKind] = useState<ReportKind>("daily_plant");
   const [period, setPeriod] = useState<ReportPeriod>("today");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  // The whole of both days until the reader narrows them.
+  const [fromTime, setFromTime] = useState("00:00");
+  const [toTime, setToTime] = useState("23:59");
   const [exporting, setExporting] = useState<ReportFormat | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
 
@@ -135,14 +143,15 @@ export function ReportsDashboard(): JSX.Element {
     setNotice(null);
   };
 
+  const range = { fromDate, fromTime, toDate, toTime };
   const rangeProblem =
-    period === "custom" ? customRangeProblem(fromDate, toDate, today, MAX_CUSTOM_DAYS) : null;
+    period === "custom" ? customRangeProblem(range, now, MAX_CUSTOM_DAYS) : null;
   const query: reportsApi.ReportTableQuery | null =
     canGenerate && plantId !== null && rangeProblem === null
-      ? { kind, plantId, period, ...(period === "custom" ? { fromDate, toDate } : {}) }
+      ? { kind, plantId, period, ...(period === "custom" ? range : {}) }
       : null;
-  // Today's row is still being written; a past range is not.
-  const live = period !== "yesterday" && (period !== "custom" || toDate >= today);
+  // Today's row is still being written; a range that has already stopped is not.
+  const live = period !== "yesterday" && (period !== "custom" || customRangeEnd(range) > now);
   const tableQuery = useReportTable(query, live);
   const table = tableQuery.data;
   // A table for the previous choice, kept on screen while this one loads.
@@ -238,34 +247,70 @@ export function ReportsDashboard(): JSX.Element {
                     </div>
                     {period === "custom" ? (
                       <div className="flex flex-wrap items-center gap-2">
-                        {/* Sized by a wrapper: the shared input class is full-width. */}
-                        <div className="w-40">
-                          <input
-                            type="date"
-                            aria-label="First day"
-                            value={fromDate}
-                            max={toDate || today}
-                            onChange={(event) => setFromDate(event.target.value)}
-                            className={inputClass}
-                          />
+                        {/* Each day keeps its time beside it when the row wraps.
+                            Sized by wrappers: the shared input class is full-width. */}
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-40">
+                            <input
+                              type="date"
+                              aria-label="First day"
+                              value={fromDate}
+                              max={toDate || today}
+                              onChange={(event) => setFromDate(event.target.value)}
+                              className={inputClass}
+                              aria-describedby="report-range-note"
+                            />
+                          </div>
+                          <div className="w-32">
+                            <input
+                              type="time"
+                              aria-label="Start time"
+                              value={fromTime}
+                              max={fromDate === today ? now.slice(11, 16) : undefined}
+                              onChange={(event) => setFromTime(event.target.value)}
+                              className={inputClass}
+                              aria-describedby="report-range-note"
+                            />
+                          </div>
                         </div>
                         <span className="text-xs text-ink-muted">to</span>
-                        <div className="w-40">
-                          <input
-                            type="date"
-                            aria-label="Last day"
-                            value={toDate}
-                            min={fromDate || undefined}
-                            max={today}
-                            onChange={(event) => setToDate(event.target.value)}
-                            className={inputClass}
-                          />
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-40">
+                            <input
+                              type="date"
+                              aria-label="Last day"
+                              value={toDate}
+                              min={fromDate || undefined}
+                              max={today}
+                              onChange={(event) => setToDate(event.target.value)}
+                              className={inputClass}
+                              aria-describedby="report-range-note"
+                            />
+                          </div>
+                          <div className="w-32">
+                            <input
+                              type="time"
+                              aria-label="End time"
+                              value={toTime}
+                              min={fromDate === toDate ? fromTime : undefined}
+                              onChange={(event) => setToTime(event.target.value)}
+                              className={inputClass}
+                              aria-describedby="report-range-note"
+                            />
+                          </div>
                         </div>
                       </div>
                     ) : null}
                   </div>
                   {rangeProblem ? (
-                    <p className="mt-2 text-xs text-bad">{rangeProblem}</p>
+                    <p id="report-range-note" className="mt-2 text-xs text-bad">
+                      {rangeProblem}
+                    </p>
+                  ) : period === "custom" ? (
+                    <p id="report-range-note" className="mt-2 text-xs text-ink-faint">
+                      Times are the Plant's clock ({timezoneLabel(zone)}). The report stops at
+                      the end time; 23:59 runs to the end of the day.
+                    </p>
                   ) : null}
                 </div>
 
@@ -374,10 +419,9 @@ function ReportPreview({
     ? `${table.title} — preview (${count} ${count === 1 ? "row" : "rows"})`
     : "Preview";
   const subtitle = table
-    ? `${table.plant.name} (${table.plant.code}) · ${formatDayRange(
-        table.first_day,
-        table.last_day,
-      )} · ${timezoneLabel(table.plant.timezone)} time`
+    ? `${table.plant.name} (${table.plant.code}) · ${formatReportPeriod(table)} · ${timezoneLabel(
+        table.plant.timezone,
+      )} time`
     : undefined;
 
   let body: JSX.Element;

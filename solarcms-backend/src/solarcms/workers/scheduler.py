@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy import text
 
+from solarcms.cache.heartbeat import Heartbeat
 from solarcms.cache.live import close_redis
 from solarcms.config import get_settings
 from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
@@ -235,19 +236,37 @@ async def run() -> None:
         loop.add_signal_handler(sig, stopping.set)
 
     log.info("scheduler started", tick_seconds=TICK_SECONDS)
-    while not stopping.is_set():
-        try:
-            escalated = await fire_due_escalations()
-            rendered = await run_queued_reports()
-            stalled = await verify_aggregates()
-            kpis = await run_plant_kpis()
-            if escalated or rendered or stalled:
-                log.info("tick", escalated=escalated, rendered=rendered,
-                         stalled=stalled, kpi_values=kpis.get("values", 0))
-        except Exception as exc:
-            log.error("scheduler tick failed", error=str(exc))
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stopping.wait(), timeout=TICK_SECONDS)
+    heartbeat = Heartbeat("scheduler")
+    beat = heartbeat.start(stopping)
+    try:
+        while not stopping.is_set():
+            try:
+                escalated = await fire_due_escalations()
+                rendered = await run_queued_reports()
+                stalled = await verify_aggregates()
+                kpis = await run_plant_kpis()
+                if escalated or rendered or stalled:
+                    log.info("tick", escalated=escalated, rendered=rendered,
+                             stalled=stalled, kpi_values=kpis.get("values", 0))
+                heartbeat.cycle()
+                heartbeat.wrote(
+                    f"{kpis.get('values', 0)} Plant KPI value(s), {rendered} report(s), "
+                    f"{escalated} escalation(s)"
+                )
+                # A stalled aggregate is the scheduler reporting a fault it found,
+                # not one it has — kept beside its heartbeat so the page can say.
+                heartbeat.extra["stalled_aggregates"] = list(stalled)
+            except Exception as exc:
+                log.error("scheduler tick failed", error=str(exc))
+                heartbeat.failed(exc)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stopping.wait(), timeout=TICK_SECONDS)
+    except Exception as exc:
+        heartbeat.crashed(exc)
+        raise
+    finally:
+        stopping.set()
+        await beat
 
     await close_redis()
     await dispose_engine()

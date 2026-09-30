@@ -46,6 +46,7 @@ import { usePermissions } from "@/auth/usePermission";
 import { useDashboards, dashboardLabel } from "@/auth/useDashboard";
 import { useAlarms } from "@/api/hooks";
 import { LiveIndicator } from "@/live/LiveIndicator";
+import { SystemHealthPill } from "@/components/layout/SystemHealthPill";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { HeaderSlotProvider } from "@/components/layout/HeaderSlot";
 import { ThemeToggle } from "@/theme/ThemeToggle";
@@ -282,6 +283,8 @@ export function AppShell(): JSX.Element {
           {/* Filled by the page, if it has an identity worth pinning. */}
           <div ref={setHeaderSlot} className="flex min-w-0 flex-1 items-center" />
           <div className="ml-auto flex shrink-0 items-center gap-3">
+            {/* Only for a Super Admin, and only when something is wrong. */}
+            <SystemHealthPill />
             <LiveIndicator />
             {/* Hidden on a phone: the count is context, and the header there
                 has room for the live state and the theme toggle, not both. */}

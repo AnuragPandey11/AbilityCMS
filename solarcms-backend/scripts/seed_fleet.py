@@ -1,11 +1,14 @@
 """Create the fabricated fleet's Clients, Plants and logins — and nothing else.
 
     .venv/bin/python scripts/seed_fleet.py
+    .venv/bin/python scripts/seed_fleet.py --client VARDHMAN
     .venv/bin/python scripts/seed_fleet.py --password 'something-else'
 
 The fleet itself is defined once, in `tools/simulate_fleet.py` (`FLEET`); this
 reads it, so a Plant code here can never disagree with the topic being
-published. Idempotent: re-running updates names and re-sets passwords.
+published. Idempotent: re-running updates names and re-sets passwords — each
+Client's own (`ClientSpec.password`) unless `--password` overrides them all.
+`--client` seeds only the named Clients and leaves the rest as they are.
 
 ── Why Devices are not created here ─────────────────────────────────────────
 The Clients and Plants *have* to be typed in: a Client cannot be discovered
@@ -32,9 +35,16 @@ reasons are in that module's docstring.
 ── Why one Client Admin each, with every Plant ──────────────────────────────
 `app_can_see_plant` grants an `admin` every Plant of their own Client, so
 these logins keep working as Plants are added. Any other role starts with
-zero Plants, and zero means none (Guardrail 7). Both Clients are marked
+zero Plants, and zero means none (Guardrail 7). Every fleet Client is marked
 `is_demo`, which is what the prune script and anyone reading `clients` should
 use to tell fabricated tenants from real ones — never the code.
+
+── Why the operator's Plants are rows, and stop at today's ──────────────────
+A Client with an `operator_email` also gets a Client Employee: may view,
+export and acknowledge Alarms, administers nothing. `--all-plants` grants the
+Plants the Client has *now*, one row each, so a Plant added later is invisible
+to the operator until someone grants it — which is the Employee's rule, not a
+defect. Re-run this after adding a Plant to FLEET and the grant catches up.
 """
 
 from __future__ import annotations
@@ -65,9 +75,16 @@ from tools.simulate_fleet import FLEET  # noqa: E402
 log = structlog.get_logger(__name__)
 
 
-async def seed(password: str) -> int:
+async def seed(password: str | None, only: list[str]) -> int:
+    fleet = [c for c in FLEET if not only or c.code in only]
+    unknown = set(only) - {c.code for c in FLEET}
+    if unknown or not fleet:
+        print(f"no Client {', '.join(sorted(unknown))} in FLEET "
+              f"(have {', '.join(c.code for c in FLEET)})", file=sys.stderr)
+        return 1
+
     async with scoped_session(SecurityContext.platform(user_id=0), role=None) as session:
-        for client in FLEET:
+        for client in fleet:
             client_id = await upsert_client(
                 session, client.code, client.name, status="active", is_demo=True)
             await session.execute(text(
@@ -106,18 +123,25 @@ async def seed(password: str) -> int:
 
     # Separate transactions, after the Plants exist: `--all-plants` grants
     # whatever Plants the Client has *at that moment*.
-    for client in FLEET:
-        rc = await _create_client_user(
-            email=client.admin_email, password=password,
-            full_name=f"{client.name} Admin", client_code=client.code,
-            role_code="admin", all_plants=True, all_dashboards=True,
-        )
-        if rc != 0:
-            return rc
+    for client in fleet:
+        logins = [(client.admin_email, "admin", "Admin")]
+        if client.operator_email:
+            logins.append((client.operator_email, "employee", "Operator"))
+        for email, role_code, title in logins:
+            rc = await _create_client_user(
+                email=email, password=password or client.password,
+                full_name=f"{client.name} {title}", client_code=client.code,
+                role_code=role_code, all_plants=True, all_dashboards=True,
+            )
+            if rc != 0:
+                return rc
 
-    print("\nLogins (Client Admin, every Plant of their Client):")
-    for client in FLEET:
-        print(f"  {client.code:<10} {client.admin_email:<24} {password}")
+    print("\nLogins (every Plant of their own Client):")
+    for client in fleet:
+        pw = password or client.password
+        print(f"  {client.code:<10} {client.admin_email:<24} {pw:<12} Client Admin")
+        if client.operator_email:
+            print(f"  {'':<10} {client.operator_email:<24} {pw:<12} Client Employee")
     print("\nNext: start tools/simulate_fleet.py, then commission-from-broker "
           "--seconds 150 (dry run), then --apply.\n")
     await dispose_engine()
@@ -127,10 +151,13 @@ async def seed(password: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--password", default="fleet12345",
-                        help="password for every fleet login (dev only)")
+    parser.add_argument("--password", default=None,
+                        help="password for every login seeded, overriding each "
+                             "Client's own in FLEET (dev only)")
+    parser.add_argument("--client", action="append", default=[],
+                        help="seed only this Client code (repeatable)")
     args = parser.parse_args()
-    return asyncio.run(seed(args.password))
+    return asyncio.run(seed(args.password, args.client))
 
 
 if __name__ == "__main__":

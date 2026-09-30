@@ -35,6 +35,7 @@ import aiomqtt
 import asyncpg
 
 from solarcms.cache import live
+from solarcms.cache.heartbeat import Heartbeat
 from solarcms.config import Settings, get_settings
 from solarcms.db.rls import INGEST_ROLE, SecurityContext
 from solarcms.db.session import dispose_engine, scoped_session
@@ -86,6 +87,18 @@ class IngestWorker:
         self._seq = 0
         self.stats = {"received": 0, "stored": 0, "quarantined": 0, "throttled": 0,
                       "unmapped": 0, "suspect_counters": 0, "flushes": 0}
+        # What the System Health page reads: alive, flushing, and whether the
+        # broker is connected and delivering. The broker is the one thing only
+        # this process can see — a subscription that matches nothing looks, from
+        # everywhere else, exactly like every Plant going quiet.
+        self.heartbeat = Heartbeat(
+            "ingest",
+            broker=f"{settings.mqtt_host}:{settings.mqtt_port}",
+            topics=list(settings.mqtt_subscribe_topics),
+            broker_connected=False, connected_at=None, broker_error=None,
+            last_message_at=None, messages=0,
+        )
+        self._beat: asyncio.Task[None] | None = None
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -110,6 +123,9 @@ class IngestWorker:
         await self.flush()
         if self._pool is not None:
             await self._pool.close()
+        if self._beat is not None:
+            # The heartbeat's last word, while Redis is still open to take it.
+            await self._beat
         await live.close_redis()
         await dispose_engine()
         log.info("ingest stopped", **self.stats)
@@ -119,6 +135,8 @@ class IngestWorker:
     async def handle(self, topic: str, payload_bytes: bytes) -> None:
         self.stats["received"] += 1
         now = datetime.now(UTC)
+        self.heartbeat.extra["last_message_at"] = now
+        self.heartbeat.extra["messages"] += 1
         self._seq = (self._seq + 1) % 1_000_000
 
         try:
@@ -274,15 +292,22 @@ class IngestWorker:
         raw = list(self.batch.raw)
         stream_entries = list(self.batch.stream_entries)
 
-        async with self._pool.acquire() as connection, connection.transaction():
-            if readings:
-                await connection.copy_records_to_table(
-                    "readings", records=readings, columns=list(READINGS_COLUMNS)
-                )
-            if raw:
-                await connection.copy_records_to_table(
-                    "mqtt_raw", records=raw, columns=list(MQTT_RAW_COLUMNS)
-                )
+        try:
+            async with self._pool.acquire() as connection, connection.transaction():
+                if readings:
+                    await connection.copy_records_to_table(
+                        "readings", records=readings, columns=list(READINGS_COLUMNS)
+                    )
+                if raw:
+                    await connection.copy_records_to_table(
+                        "mqtt_raw", records=raw, columns=list(MQTT_RAW_COLUMNS)
+                    )
+        except Exception as exc:
+            # Recorded before it propagates: the batch stays buffered for the
+            # next attempt, and the page says why nothing is being saved.
+            self.heartbeat.failed(exc)
+            raise
+        self.heartbeat.wrote(f"{len(readings):,} readings, {len(raw):,} raw messages")
 
         # Only after commit. The alarm worker must never see a Reading that a
         # rolled-back transaction means never happened.
@@ -294,35 +319,59 @@ class IngestWorker:
         self.batch.clear()
 
     async def _flush_loop(self) -> None:
-        """Time-based flush, so a trickle of messages is not held indefinitely."""
+        """Time-based flush, so a trickle of messages is not held indefinitely.
+
+        Each tick is ingest's unit of work for the heartbeat. ⚠ A failed flush
+        used to end this task — an unobserved exception on a background task —
+        after which a trickle sat unflushed until the next message happened to
+        arrive. It is now logged, recorded and retried on the next tick; the
+        batch is only cleared by a flush that committed, so nothing is lost.
+        """
         while not self._stopping.is_set():
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     self._stopping.wait(), timeout=self.settings.ingest_batch_max_seconds
                 )
-            if self.batch.should_flush(self.settings, datetime.now(UTC)):
-                await self.flush()
+            try:
+                if self.batch.should_flush(self.settings, datetime.now(UTC)):
+                    await self.flush()
+            except Exception as exc:
+                log.error("flush failed, retrying next tick", error=str(exc))
+                continue
+            self.heartbeat.cycle()
 
     # ── main loop ───────────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        await self.start()
-        flusher = asyncio.create_task(self._flush_loop())
+        # Beating before `start()`, so a process that cannot even reach the
+        # database is on the page as crashed rather than absent.
+        self._beat = self.heartbeat.start(self._stopping)
+        flusher: asyncio.Task[None] | None = None
         try:
+            await self.start()
+            flusher = asyncio.create_task(self._flush_loop())
             while not self._stopping.is_set():
                 try:
                     await self._consume()
                 except aiomqtt.MqttError as exc:
+                    self.heartbeat.extra["broker_connected"] = False
+                    self.heartbeat.extra["broker_error"] = str(exc)
                     if self._stopping.is_set():
                         break
                     # Reconnect rather than exit: the broker going away is an
                     # expected condition, not a fault in this process.
                     log.warning("mqtt connection lost, reconnecting", error=str(exc))
+                    await self.heartbeat.publish()
                     await asyncio.sleep(5)
+        except Exception as exc:
+            self.heartbeat.crashed(exc)
+            raise
         finally:
-            flusher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await flusher
+            self.heartbeat.extra["broker_connected"] = False
+            if flusher is not None:
+                flusher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await flusher
             await self.stop()
 
     async def _consume(self) -> None:
@@ -342,6 +391,9 @@ class IngestWorker:
             for topic in settings.mqtt_subscribe_topics:
                 await client.subscribe(topic, qos=1)
             log.info("subscribed", topics=settings.mqtt_subscribe_topics)
+            self.heartbeat.extra.update(
+                broker_connected=True, connected_at=datetime.now(UTC), broker_error=None)
+            await self.heartbeat.publish()
             async for message in client.messages:
                 # aiomqtt types payload as a union covering str/int/float for
                 # publishes it originated; an inbound message is always bytes.

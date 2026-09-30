@@ -39,7 +39,7 @@ import { Button, Field, Panel, Badge, inputClass } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { SeverityBadge } from "@/components/domain";
-import { formatNumber } from "@/format/value";
+import { formatNumber, isDigital } from "@/format/value";
 import { usePermission } from "@/auth/usePermission";
 import { useAuth } from "@/auth/AuthProvider";
 import { scopeLabel, standingOf, type Standing } from "./ruleStanding";
@@ -474,7 +474,7 @@ export function AlarmRulesAdmin(): JSX.Element {
                 {(tagsQuery.data ?? []).map((tag) => (
                   <option key={tag.id} value={tag.code}>
                     {tag.code} ({tag.unit})
-                    {tag.category === "status" ? " — digital" : ""}
+                    {isDigital(tag) ? " — digital" : ""}
                   </option>
                 ))}
               </select>

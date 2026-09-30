@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
@@ -31,6 +31,7 @@ from solarcms.services.report_tables import (
     build_monthly_plant,
     build_weather,
     device_availability,
+    period_notes,
     pick_source,
     render_csv,
     render_html,
@@ -358,3 +359,80 @@ class TestRendering:
         assert payload["first_day"] == "2026-09-22"
         assert payload["columns"][0] == {"key": "date", "label": "Date", "kind": "date",
                                          "unit": "", "digits": 1}
+
+
+class TestTimedPeriod:
+    """A custom range cut at clock times says which part of each day it read."""
+
+    def _window(self, first: int, last: int, begins: time | None, ends: time | None):  # type: ignore[no-untyped-def]
+        return report_window("custom", NOW, IST, date(2026, 9, first), date(2026, 9, last),
+                             begins, ends)
+
+    def _daily(self, window):  # type: ignore[no-untyped-def]
+        return build_daily_plant(PLANT, window, [], {}, **TIERS)
+
+    QUARTER_HOURS = (("energy registers", Tier.AGG_15M),
+                     ("peaks, averages and coverage", Tier.AGG_15M))
+
+    def test_whole_days_get_no_note(self) -> None:
+        table = self._daily(self._window(22, 24, time(0, 0), time(23, 59)))
+        assert period_notes(table, NOW, self.QUARTER_HOURS) == []
+
+    def test_says_the_first_and_last_rows_are_part_days(self) -> None:
+        table = self._daily(self._window(22, 24, time(6, 0), time(18, 0)))
+        notes = period_notes(table, NOW, self.QUARTER_HOURS)
+        # 06:00 and 18:00 are on quarter-hour boundaries: nothing moved.
+        assert notes == [
+            "The period runs from 06:00 on 22-09-2026 to 18:00 on 24-09-2026, on the "
+            "Plant's clock (Asia/Kolkata); the first and last rows cover only the part of "
+            "their day inside it."]
+
+    def test_one_day_says_so_once(self) -> None:
+        table = self._daily(self._window(24, 24, time(6, 0), time(18, 0)))
+        assert period_notes(table, NOW, self.QUARTER_HOURS)[0] == (
+            "The period runs from 06:00 to 18:00 on 24-09-2026, on the Plant's clock "
+            "(Asia/Kolkata); the row covers only that part of the day.")
+
+    def test_a_time_inside_a_bucket_says_what_was_really_read(self) -> None:
+        table = self._daily(self._window(22, 24, time(6, 10), None))
+        notes = period_notes(table, NOW, self.QUARTER_HOURS)
+        assert "the first row covers only the part of its day" in notes[0]
+        assert notes[1] == (
+            "Energy registers and peaks, averages and coverage are read in 15-minute "
+            "buckets, so they cover 06:15 on 22-09-2026 to 00:00 on 25-09-2026: the bucket "
+            "holding the start is left out.")
+
+    def test_kolkatas_hours_are_half_an_hour_off_utcs(self) -> None:
+        table = self._daily(self._window(1, 24, time(6, 0), time(18, 0)))
+        notes = period_notes(table, NOW, [("energy registers", Tier.AGG_1H),
+                                          ("peaks, averages and coverage", Tier.AGG_15M)])
+        assert notes[1:] == [
+            "Energy registers are read in 1-hour buckets, so they cover 06:30 on "
+            "01-09-2026 to 18:30 on 24-09-2026: the bucket holding the start is left out "
+            "and the one holding the end is read whole."]
+
+    def test_an_end_cut_short_at_now_moves_nothing(self) -> None:
+        # 16:18 now; the chosen 20:00 has not happened, so the end is now,
+        # read as every day in progress is.
+        table = self._daily(self._window(28, 28, time(6, 0), time(20, 0)))
+        hourly = period_notes(table, NOW, [("energy registers", Tier.AGG_1H)])
+        # 06:00 is inside an hourly bucket in Kolkata; now is not an edge.
+        assert "holding the start" in hourly[1] and "holding the end" not in hourly[1]
+        assert len(period_notes(table, NOW, self.QUARTER_HOURS)) == 1
+
+    def test_files_and_payload_carry_the_times(self) -> None:
+        table = self._daily(self._window(22, 24, time(6, 0), None))
+        assert table.filename_stem == "SF_NORTH_daily_plant_20260922T0600_20260924T2359"
+        assert "22-09-2026 06:00 to 24-09-2026 23:59" in render_html(table)
+        payload = to_payload(table, NOW)
+        assert (payload["from_time"], payload["to_time"]) == ("06:00", None)
+
+    def test_a_month_inside_one_month_is_one_row(self) -> None:
+        window = self._window(1, 24, time(6, 0), None)
+        table = build_monthly_plant(PLANT, window, [], {}, **TIERS)
+        assert period_notes(table, NOW, [])[0].endswith(
+            "; the row covers only the part of its month inside it.")
+
+    def test_whole_days_keep_their_filename(self) -> None:
+        table = self._daily(self._window(22, 24, None, None))
+        assert table.filename_stem == "SF_NORTH_daily_plant_20260922_20260924"

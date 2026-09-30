@@ -50,6 +50,7 @@ import {
   UNDEFINED_DISPLAY,
   digitsForUnit,
   formatDigital,
+  isDigital,
   formatHeadline,
   formatNumber,
 } from "@/format/value";
@@ -532,7 +533,7 @@ export function InverterCard({
             {others.map((column) => {
               const value = values?.[String(column.tag_id)];
               // A Digital Input is a contact, not a quantity (§4.5): never "0.00 bool".
-              const digital = column.category === "status";
+              const digital = isDigital(column);
               const highlighted = column.tag_id === highlightTagId;
               const unit = column.unit && !NOT_A_UNIT.has(column.unit) ? column.unit : null;
               return (

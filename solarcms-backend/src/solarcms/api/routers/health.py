@@ -10,6 +10,7 @@ from sqlalchemy import text
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.cache import keys
 from solarcms.cache.live import get_redis
+from solarcms.services.platform_health import platform_health
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -28,6 +29,19 @@ async def device_health(
          ORDER BY h.comm_status, d.code
     """), {"plant_id": plant_id})).all()
     return [dict(row._mapping) for row in rows]
+
+
+@router.get("/processes")
+async def platform_processes(
+    _: CurrentUser = Depends(require_permission("system.admin")),
+) -> dict[str, Any]:
+    """Is each SolarCMS process running, working, and connected to the broker?
+
+    From the processes' own heartbeats, in Redis only — so it still answers when
+    the database is the thing that is down, and it is cheap enough for the
+    header to ask every few seconds. Verdicts are `domain/system_health.py`'s.
+    """
+    return await platform_health()
 
 
 @router.get("/system")
@@ -66,14 +80,29 @@ async def system_health(
          ORDER BY view_name
     """))).all()
 
-    # Depth of the alarm worker's input. A growing number means alarm evaluation
-    # is falling behind ingestion, which is the one lag that matters for latency.
+    # The alarm worker's input: its length (read and unread), and below it the
+    # backlog — a growing backlog means alarm evaluation is falling behind
+    # ingestion, the one lag that matters for how soon an Alarm opens.
     stream_depth = await get_redis().xlen(keys.STREAM_READINGS)
+    # ⚠ The length is not the backlog: the stream keeps up to STREAM_MAXLEN
+    # entries after they are read, so a fully caught-up worker showed "21,033"
+    # and read as 21,000 readings behind. The group's lag (not yet delivered)
+    # plus pending (delivered, not acknowledged) is what is actually waiting.
+    backlog: int | None = None
+    try:
+        for group in await get_redis().xinfo_groups(keys.STREAM_READINGS):
+            if group.get("name") == keys.STREAM_READINGS_GROUP:
+                lag = group.get("lag")
+                backlog = None if lag is None else int(lag) + int(group.get("pending") or 0)
+    except Exception:
+        # No group yet (the alarm worker has never run) — nothing to measure.
+        backlog = None
 
     return {
         "ingest_lag_seconds": float(lag) if lag is not None else None,
         "quarantined_last_hour": quarantined,
         "alarm_stream_depth": stream_depth,
+        "alarm_backlog": backlog,
         "continuous_aggregates": [
             {"view": row.view_name, "last_refresh": row.last_refresh}
             for row in aggregates

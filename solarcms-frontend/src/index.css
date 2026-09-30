@@ -221,6 +221,9 @@
        with a firm edge is the look of an instrument. */
     --shadow-card: 0 1px 0 rgb(56 44 30 / 0.04), 0 1px 3px rgb(56 44 30 / 0.08);
     --shadow-soft: 0 1px 2px rgb(56 44 30 / 0.07);
+    /* The light a ratio dial's arc gives off (`.dial-glow-*`). None in light:
+       on stone a glow reads as a smudge rather than a lit instrument. */
+    --dial-glow: 0;
 
     color-scheme: light;
   }
@@ -308,6 +311,7 @@
       --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5),
         0 16px 32px -16px rgb(0 0 0 / 0.75);
       --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.42);
+      --dial-glow: 0.5;
 
       color-scheme: dark;
     }
@@ -394,6 +398,7 @@
     --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 3px 8px -3px rgb(0 0 0 / 0.5),
       0 16px 32px -16px rgb(0 0 0 / 0.75);
     --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.42);
+    --dial-glow: 0.5;
 
     color-scheme: dark;
   }
@@ -511,6 +516,22 @@
    * emits a `@layer components` class only if its literal name appears in the
    * source — `icon-well-${hue}` would compile and ship no rule.
    */
+  /**
+   * The glow on a ratio dial's arc, in the arc's own colour. Dark mode only
+   * (`--dial-glow` is 0 in light): on navy it makes the dial read as a lit
+   * instrument; on stone it would read as a smudge. One class per tone, so the
+   * glow is never a different colour from the arc it surrounds.
+   */
+  .dial-glow-chart {
+    filter: drop-shadow(0 0 5px rgb(var(--c-chart-primary) / var(--dial-glow)));
+  }
+  .dial-glow-warn {
+    filter: drop-shadow(0 0 5px rgb(var(--c-warn) / var(--dial-glow)));
+  }
+  .dial-glow-bad {
+    filter: drop-shadow(0 0 5px rgb(var(--c-bad) / var(--dial-glow)));
+  }
+
   .icon-well {
     --well-ink: var(--c-accent);
     --well-ground: var(--c-accent-soft);

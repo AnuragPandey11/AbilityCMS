@@ -16,10 +16,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Iterable
 from typing import Any
 
+from redis.exceptions import RedisError
 from sqlalchemy import text
 
+from solarcms.cache.live import close_redis, invalidate_resolution
 from solarcms.config import get_settings
 from solarcms.db.rls import INGEST_ROLE, SecurityContext
 from solarcms.db.session import dispose_engine, scoped_session
@@ -45,6 +48,29 @@ async def _seed() -> int:
     total = sum(counts.values())
     log.info("seed complete", rows=total, **counts)
     return 0
+
+
+async def _invalidate_resolutions(topics: Iterable[str]) -> None:
+    """Make ingest re-resolve these topics on their next message.
+
+    Ingest caches every topic's resolution for `RESOLVE_TOPIC_TTL_S`, and "no
+    Device registered for this topic" is cached too. So a Device registered
+    here went on being quarantined for up to five minutes after the command
+    said it was done — measured 30 Sep 2026, on six of VF_LUDHIANA's
+    twenty-two Devices — and one that gained bindings went on decoding with
+    the old set. Call this **after** the commit, never inside the transaction:
+    cleared before it, a message arriving in between re-caches the miss.
+
+    A Redis failure is a warning, not an error: the registration has already
+    committed, and the cost is the TTL, which the warning names.
+    """
+    try:
+        for topic in topics:
+            await invalidate_resolution(topic)
+    except RedisError as exc:
+        log.warning("registered, but the topic cache could not be cleared; "
+                    "these Devices may be quarantined for up to five minutes",
+                    error=str(exc))
 
 
 async def _create_superadmin(email: str, password: str, full_name: str) -> int:
@@ -179,6 +205,9 @@ async def _commission_from_broker(
             return 0
 
         summary = await commission_observed_devices(session, observed)
+    # Every observed topic, not only those registered: clearing an entry costs
+    # one lookup on the next message, and a skipped topic's miss is still true.
+    await _invalidate_resolutions(item.topic for item in observed)
     log.info("commissioned from broker", **summary)
     return 0
 
@@ -498,11 +527,14 @@ def main(argv: list[str] | None = None) -> int:
                     SecurityContext.platform(user_id=0), role=None
                 ) as session:
                     summary = await onboard_test_plant(session)
+                await _invalidate_resolutions(
+                    device["topic"] for device in summary["devices"].values())
                 log.info("test plant onboarded", **summary)
                 return 0
             return 1
         finally:
             await dispose_engine()
+            await close_redis()
 
     return asyncio.run(run())
 

@@ -166,6 +166,12 @@ export async function deleteDevice(
 export type DeviceUpdate = Partial<Omit<DeviceCreate, "device_model_id">> & {
   status?: string;
   /**
+   * Another Model of the same Device Type — how an Inverter registered from
+   * the broker is recorded as String or Central. The server refuses a Model
+   * of a different Type.
+   */
+  device_model_id?: number;
+  /**
    * Fields to set to NULL. Needed because `null` and "unchanged" are the same
    * JSON in a PATCH body — without it a Collector can be assigned but never
    * unassigned.

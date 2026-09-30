@@ -22,6 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache import live
+from solarcms.cache.heartbeat import Heartbeat
 from solarcms.cache.live import close_redis
 from solarcms.config import get_settings
 from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
@@ -373,14 +374,33 @@ async def run() -> None:
         loop.add_signal_handler(sig, stopping.set)
 
     log.info("health sweeper started", interval_s=HEALTH_SWEEP_INTERVAL_S)
-    while not stopping.is_set():
-        try:
-            stats = await sweep_once()
-            log.debug("sweep complete", **stats)
-        except Exception as exc:
-            log.error("sweep failed", error=str(exc))
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stopping.wait(), timeout=HEALTH_SWEEP_INTERVAL_S)
+    # This loop once failed "permission denied" on every sweep for weeks, logged
+    # it and slept, and comm_status stayed NULL fleet-wide (CLAUDE.md). The
+    # heartbeat is what makes a failing sweep read as failing.
+    heartbeat = Heartbeat("health_sweeper")
+    beat = heartbeat.start(stopping)
+    try:
+        while not stopping.is_set():
+            try:
+                stats = await sweep_once()
+                log.debug("sweep complete", **stats)
+                heartbeat.cycle()
+                heartbeat.wrote(
+                    f"{stats.get('devices', 0)} Devices assessed, "
+                    f"{stats.get('alarms_opened', 0)} Alarm(s) opened, "
+                    f"{stats.get('alarms_cleared', 0)} cleared"
+                )
+            except Exception as exc:
+                log.error("sweep failed", error=str(exc))
+                heartbeat.failed(exc)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stopping.wait(), timeout=HEALTH_SWEEP_INTERVAL_S)
+    except Exception as exc:
+        heartbeat.crashed(exc)
+        raise
+    finally:
+        stopping.set()
+        await beat
 
     await close_redis()
     await dispose_engine()

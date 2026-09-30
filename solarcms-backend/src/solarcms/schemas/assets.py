@@ -153,6 +153,12 @@ class DeviceUpdate(BaseModel):
     expected_interval_s: int | None = Field(default=None, ge=1)
     rated_capacity_kw: float | None = Field(default=None, ge=0)
     string_count: int | None = Field(default=None, ge=0, le=512)
+    # Another Model of the *same* Device Type — how an Inverter registered from
+    # the broker (placeholder Model, no variant) is recorded as String or
+    # Central after the fact. A different Type is refused: the Type decides how
+    # every key decodes and where the Device sits, so changing it is a different
+    # piece of equipment, not a correction. Bindings are per-Device and survive.
+    device_model_id: int | None = Field(default=None, ge=1)
     installed_on: date | None = None
     status: str | None = Field(
         default=None, pattern="^(active|maintenance|faulty|decommissioned)$")

@@ -78,6 +78,10 @@ WS_FANOUT: Final = "ws:fanout"
 # worth evaluating.
 STREAM_READINGS: Final = "stream:readings"
 STREAM_MAXLEN: Final = 100_000
+# The alarm worker's consumer group on it. Named here, not only in the worker,
+# because System Health asks the group how far behind it is: the stream's own
+# length counts entries already evaluated and kept for replay, up to MAXLEN.
+STREAM_READINGS_GROUP: Final = "alarm-workers"
 
 
 def live_device(device_id: int) -> str:
@@ -122,3 +126,11 @@ def analytics(digest: str) -> str:
 
 def unmapped_keys(device_id: int) -> str:
     return UNMAPPED_KEYS.format(device_id=device_id)
+
+# Each long-running process's heartbeat: a JSON document it rewrites every
+# HEARTBEAT_INTERVAL_S — alive, last unit of work completed, last write, last
+# error (`cache/heartbeat.py`). Kept a week rather than expiring with the beat,
+# so a process that died says *when* it last spoke instead of vanishing from
+# the page. Losing Redis loses only this, and the next beat restores it.
+HEARTBEAT: Final = "heartbeat:{process}"
+HEARTBEAT_TTL_S: Final = 7 * 86_400

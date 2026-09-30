@@ -1,8 +1,10 @@
 /**
  * Period performance: PR, CUF, Availability, CO₂ — and what they are worth.
  *
- * Three parts. `PerformanceTiles` puts the three gauges in the headline strip,
- * beside Current Power — the part read at a glance, so it costs no click.
+ * Three parts. `PerformanceTiles` puts PR and CUF as dials, each marked with
+ * the previous period to the same point, and Availability as a figure over a
+ * meter, in the headline strip beside Current Power — the part read at a
+ * glance, so it costs no click.
  * `PerformanceDetailsButton` is the way into the drawer, carrying the period's
  * coverage so it stays in the same row as the figures it qualifies.
  * `PerformancePanel` is the drawer: each figure's variant spelled out, the
@@ -28,9 +30,10 @@
  *   figure that is low, plausible, and wrong in a way nothing else reveals.
  */
 
-import type { ComponentType } from "react";
+import type { ReactNode } from "react";
 import type { KpiFigure, KpiPeriod, PlantKpis } from "@/api/schemas";
-import { Gauge } from "@/components/charts/Gauge";
+import { RatioDial, type DialComparison } from "@/components/charts/RatioDial";
+import { RatioMeter } from "@/components/charts/RatioMeter";
 import { RailTile } from "@/components/charts/RailTile";
 import { CoverageBadge, CoverageBar } from "@/components/dashboard/CoverageBadge";
 import { ErrorState, Skeleton } from "@/components/state";
@@ -38,7 +41,7 @@ import {
   IconAvailability,
   IconChevronRight,
   IconGauge,
-  type IconProps,
+  IconUtilisation,
 } from "@/components/icons";
 import {
   UNDEFINED_DISPLAY,
@@ -47,8 +50,9 @@ import {
   implausibleRatioReason,
   ratioIsImplausible,
   variantNote,
+  variantWords,
 } from "@/format/value";
-import { formatDate } from "@/format/datetime";
+import { formatDate, formatDateTime } from "@/format/datetime";
 
 /**
  * Where the figures begin, in the Plant's own calendar — so "month" reads as
@@ -125,8 +129,8 @@ function FigureRow({
   );
 }
 
-/** The height of a gauge inside its tile, matched to the Current Power dial. */
-const GAUGE_HEIGHT = 120;
+/** A tile's height while its figures load, so the strip does not move when they land. */
+const TILE_MIN_HEIGHT = 210;
 
 const PERIOD_LABEL: Record<KpiPeriod, string> = {
   today: "Today",
@@ -135,41 +139,74 @@ const PERIOD_LABEL: Record<KpiPeriod, string> = {
   lifetime: "Lifetime",
 };
 
-function RatioTile({
-  figure,
-  label,
-  icon,
-  period,
-  banded = true,
-}: {
-  figure: KpiFigure;
-  label: string;
-  icon: ComponentType<IconProps>;
-  period: KpiPeriod;
-  banded?: boolean;
-}): JSX.Element {
+/**
+ * What the dials compare against, in words. Lifetime has no previous period,
+ * so it has no entry and its dials carry no comparison.
+ */
+const COMPARISON_LABEL: Partial<Record<KpiPeriod, string>> = {
+  today: "Yesterday, same time",
+  month: "Last month, same date",
+  year: "Last year, same date",
+};
+
+/** The footnote: the period, then what the figure is measured against. */
+function footnote(
+  figure: KpiFigure,
+  period: KpiPeriod,
+  measuredLater: boolean,
+): ReactNode {
+  const words = variantWords(figure.variant, period, measuredLater);
   return (
-    <RailTile
-      dense
-      icon={icon}
-      label={label}
-      visual={<Gauge figure={figure} label={label} height={GAUGE_HEIGHT} banded={banded} bare />}
-      footnote={
-        <span title={figure.variant ? variantNote(figure.variant) : undefined}>
-          {PERIOD_LABEL[period]}
-          {figure.variant ? ` · ${figure.variant.replace(/_/g, " ")}` : ""}
-        </span>
-      }
-    />
+    <span title={figure.variant ? variantNote(figure.variant) : undefined}>
+      <span className="font-medium text-ink-muted">{PERIOD_LABEL[period]}</span>
+      {words ? ` · ${words}` : ""}
+    </span>
   );
 }
 
 /**
- * The on-page half: three gauges, as three tiles of the headline strip. A
- * fragment, so the strip's grid places them.
+ * The comparison one dial draws: the previous period's figure to the same
+ * point, or — where the period has one but the Plant cannot answer it — an
+ * empty comparison that says so, rather than a line that vanishes and leaves
+ * the reader wondering whether the feature exists.
+ */
+function comparisonFor(
+  kpis: PlantKpis,
+  key: "performance_ratio" | "cuf",
+  period: KpiPeriod,
+  timeZone: string | undefined,
+): DialComparison | null {
+  const label = COMPARISON_LABEL[period];
+  if (!label) return null;
+  const previous = kpis.previous;
+  if (!previous) {
+    return {
+      label,
+      figure: {
+        value: null,
+        variant: null,
+        undefined_reason: "the Plant had not reported by then, so there is nothing to compare with",
+      },
+      coverage: null,
+    };
+  }
+  return {
+    label,
+    figure: previous[key],
+    coverage: previous.coverage,
+    span: `${formatDateTime(previous.period_start, timeZone)} to ${formatDateTime(previous.period_end, timeZone)}`,
+  };
+}
+
+/**
+ * The on-page half: PR and CUF as dials marked with the previous period, and
+ * Availability as a figure over a meter, as three tiles of the headline strip.
+ * A fragment, so the strip's grid places them.
  *
- * A gauge is the right form only because these genuinely have a fixed 0..100%
- * range — a gauge around an unbounded quantity invents a maximum.
+ * Dial or meter, each is the right form only because these genuinely have a
+ * fixed 0..100% range — a scale around an unbounded quantity invents a maximum.
+ * Availability takes the meter (the user's choice, 29 Sep 2026) because it
+ * lives in the top few percent, where a nearly full ring cannot show a change.
  */
 export function PerformanceTiles({
   kpis,
@@ -177,25 +214,28 @@ export function PerformanceTiles({
   isLoading,
   error,
   retry,
+  timeZone,
 }: {
   kpis: PlantKpis | undefined;
   period: KpiPeriod;
   isLoading: boolean;
   error: unknown;
   retry: () => void;
+  /** The Plant's zone, for when the comparison window ran. */
+  timeZone?: string;
 }): JSX.Element {
   if (isLoading) {
     // Tiles at their final height, so the strip does not move when data lands.
     return (
       <>
         {Array.from({ length: 3 }, (_, index) => (
-          <Skeleton key={index} className="rounded-card" style={{ minHeight: GAUGE_HEIGHT + 90 }} />
+          <Skeleton key={index} className="rounded-card" style={{ minHeight: TILE_MIN_HEIGHT }} />
         ))}
       </>
     );
   }
   if (!kpis) {
-    // Never three "not defined" gauges: that would state a fact about the
+    // Never three "not defined" figures: that would state a fact about the
     // period when the truth is that the request failed.
     return (
       <div className="sm:col-span-2 xl:col-span-3">
@@ -203,11 +243,49 @@ export function PerformanceTiles({
       </div>
     );
   }
+  // A Plant younger than the period counts CUF's hours from its first reading.
+  const measuredLater =
+    !!kpis.measured_since &&
+    !!kpis.period_start &&
+    Date.parse(kpis.measured_since) > Date.parse(kpis.period_start);
   return (
     <>
-      <RatioTile figure={kpis.performance_ratio} label="Performance Ratio" icon={IconGauge} period={period} />
-      <RatioTile figure={kpis.cuf} label="CUF" icon={IconGauge} period={period} banded={false} />
-      <RatioTile figure={kpis.availability} label="Availability" icon={IconAvailability} period={period} />
+      <RailTile
+        dense
+        icon={IconGauge}
+        label="Performance Ratio"
+        visual={
+          <RatioDial
+            figure={kpis.performance_ratio}
+            label="Performance Ratio"
+            comparison={comparisonFor(kpis, "performance_ratio", period, timeZone)}
+          />
+        }
+        footnote={footnote(kpis.performance_ratio, period, measuredLater)}
+      />
+      <RailTile
+        dense
+        icon={IconUtilisation}
+        label="CUF"
+        visual={
+          <RatioDial
+            figure={kpis.cuf}
+            label="CUF"
+            // A PV Plant's CUF physically tops out near 25–30%, so 80/60 bands
+            // would draw every healthy Plant red.
+            banded={false}
+            comparison={comparisonFor(kpis, "cuf", period, timeZone)}
+          />
+        }
+        footnote={footnote(kpis.cuf, period, measuredLater)}
+      />
+      <RailTile
+        dense
+        icon={IconAvailability}
+        label="Availability"
+        visual={<RatioMeter figure={kpis.availability} label="Availability" />}
+        footnote={footnote(kpis.availability, period, measuredLater)}
+      />
     </>
   );
 }

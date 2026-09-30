@@ -40,6 +40,27 @@ export function formatDayRange(firstDay: string, lastDay: string): string {
     : `${formatPlantDate(firstDay)} to ${formatPlantDate(lastDay)}`;
 }
 
+/**
+ * The period a table covers, as its files name it: the days alone when they
+ * are whole, or "22-09-2026 06:00 to 28-09-2026 18:00" when either end was cut
+ * inside a day — the other end then shows its day's edge, 00:00 or 23:59.
+ */
+export function formatReportPeriod(table: {
+  first_day: string;
+  last_day: string;
+  from_time?: string | null;
+  to_time?: string | null;
+}): string {
+  if (table.from_time == null && table.to_time == null) {
+    return formatDayRange(table.first_day, table.last_day);
+  }
+  const begins = `${formatPlantDate(table.first_day)} ${table.from_time ?? "00:00"}`;
+  const ends = table.to_time ?? "23:59";
+  return table.first_day === table.last_day
+    ? `${begins} to ${ends}`
+    : `${begins} to ${formatPlantDate(table.last_day)} ${ends}`;
+}
+
 /** A cell as text. `null` is "nothing to read" — a dash, never 0 (Guardrail 3). */
 export function formatReportCell(
   column: ReportColumn,
@@ -76,22 +97,47 @@ export function shiftDate(iso: string, days: number): string {
   return new Date(at + days * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** A custom period as the inputs hold it: Plant dates and `HH:MM` times. */
+export interface CustomRange {
+  fromDate: string;
+  fromTime: string;
+  toDate: string;
+  toTime: string;
+}
+
+/**
+ * Where a custom period stops, as a Plant wall-clock `YYYY-MM-DDTHH:MM` — so
+ * it compares as text. The server's rule: the period stops at the end time,
+ * and 23:59, the latest a clock input shows, is the end of that day.
+ */
+export function customRangeEnd(range: CustomRange): string {
+  return range.toTime === "23:59"
+    ? `${shiftDate(range.toDate, 1)}T00:00`
+    : `${range.toDate}T${range.toTime}`;
+}
+
 /**
  * Why a custom range cannot be asked for yet, or null when it can. Checked
  * here only to avoid a round trip for the obvious cases; the server applies
- * the same rules and has the last word.
+ * the same rules, in the same order, and has the last word. `now` is the
+ * Plant's wall clock, `YYYY-MM-DDTHH:MM`.
  */
 export function customRangeProblem(
-  fromDate: string,
-  toDate: string,
-  today: string,
+  range: CustomRange,
+  now: string,
   maxDays: number,
 ): string | null {
+  const { fromDate, fromTime, toDate, toTime } = range;
+  const today = now.slice(0, 10);
   if (!fromDate || !toDate) return "Choose both a first and a last day.";
+  if (!fromTime || !toTime) return "Choose both a start and an end time.";
   if (toDate < fromDate) return "The last day is before the first.";
   if (toDate > today) return `The last day cannot be after today (${formatPlantDate(today)}).`;
   const span = (Date.parse(`${toDate}T00:00:00Z`) - Date.parse(`${fromDate}T00:00:00Z`)) /
     86_400_000 + 1;
   if (span > maxDays) return `A custom period is at most ${maxDays} days.`;
+  const start = `${fromDate}T${fromTime}`;
+  if (customRangeEnd(range) <= start) return "The end is not after the start.";
+  if (start > now) return `The period cannot start after now (${now.slice(11, 16)}).`;
   return null;
 }

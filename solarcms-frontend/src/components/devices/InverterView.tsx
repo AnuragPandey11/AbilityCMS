@@ -57,7 +57,7 @@ import { TrendChart } from "@/components/charts/TrendChart";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 import { Skeleton } from "@/components/state";
 import { usePermission } from "@/auth/usePermission";
-import { UNDEFINED_DISPLAY, digitsForUnit, formatHeadline } from "@/format/value";
+import { UNDEFINED_DISPLAY, digitsForUnit, formatDigital, formatHeadline, isDigital } from "@/format/value";
 import { formatDateTime, formatTime } from "@/format/datetime";
 
 // ── The layout ───────────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ export function valueText(filled: Filled): { text: string; unit: string | null; 
   // A status code is an identifier the Device sent, not a quantity: printed
   // whole, never as ON/OFF, which is what a contact would be.
   if (tag.unit === "code") return { text: String(value), unit: null, title: undefined };
-  if (tag.category === "status") return { text: value === 0 ? "OFF" : "ON", unit: null, title: undefined };
+  if (isDigital(tag)) return { text: formatDigital(value), unit: null, title: undefined };
   const headline = formatHeadline(value, { digits: digitsForUnit(tag.unit) });
   const unit = tag.unit && !NOT_A_UNIT.has(tag.unit) ? tag.unit : null;
   return {
@@ -700,7 +700,7 @@ export function InverterView({
           // Guardrail 26: a blank with a knowable reason says the reason.
           <p className="text-sm leading-snug text-ink-muted">
             No string count is recorded for this Inverter, so none of its PV inputs is bound and
-            there are no strings to monitor. Record how many strings it has in Plants & Devices — a
+            there are no strings to monitor. Record how many strings it has in Tag Mapping — a
             count is a fact about the unit, not the Model, because one datasheet covers a 12-string
             and a 24-string machine.
           </p>

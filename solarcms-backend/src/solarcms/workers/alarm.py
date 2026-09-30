@@ -27,6 +27,7 @@ import structlog
 from sqlalchemy import text
 
 from solarcms.cache import keys
+from solarcms.cache.heartbeat import Heartbeat
 from solarcms.cache.live import close_redis, get_redis
 from solarcms.config import get_settings
 from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
@@ -56,7 +57,7 @@ log = structlog.get_logger("alarm")
 #: 0025), and ingest is kept away from `users` by design.
 ALARM_WRITER = SCHEDULER_ROLE
 
-CONSUMER_GROUP = "alarm-workers"
+CONSUMER_GROUP = keys.STREAM_READINGS_GROUP
 CONSUMER_NAME = "alarm-1"
 BLOCK_MS = 2000
 
@@ -67,6 +68,11 @@ class AlarmWorker:
         self._state: dict[tuple[int, int], RuleState] = {}
         self._rules_by_device: dict[int, list[AlarmRuleSpec]] = {}
         self.stats = {"consumed": 0, "opened": 0, "cleared": 0, "notified": 0}
+        # Alive, reading the stream, and — separately — whether an entry failed.
+        # "entry failed" was logged for every raise for weeks and the worker
+        # looked perfectly healthy throughout (CLAUDE.md); this is what the
+        # System Health page reads to say so instead.
+        self.heartbeat = Heartbeat("alarm")
 
     async def _rules_for(self, device_id: int) -> list[AlarmRuleSpec]:
         """Rules applying to one Device, most-specific-wins.
@@ -136,8 +142,10 @@ class AlarmWorker:
 
     async def _apply(
         self, action: Any, code: str, entry: dict[str, str], device_id: int, tag_id: int
-    ) -> None:
+    ) -> str | None:
+        """Open or clear an Alarm; what was written, once it has committed."""
         client_id = int(entry["client_id"])
+        written: str | None = None
         plant_id = int(entry["plant_id"])
         now = datetime.now(UTC)
 
@@ -157,7 +165,7 @@ class AlarmWorker:
                 if already is not None:
                     log.info("alarm already open under this code", code=code,
                              alarm_id=already.id, device_id=device_id)
-                    return
+                    return None
 
                 # ON CONFLICT DO NOTHING against the partial unique index, and
                 # RETURNING so that only a row this call wrote is notified —
@@ -179,8 +187,9 @@ class AlarmWorker:
                     "classification": action.classification,
                 })).first()
                 if opened is None:
-                    return
+                    return None
                 self.stats["opened"] += 1
+                written = f"Alarm opened ({code})"
                 log.info("alarm opened", rule_id=action.rule_id, device_id=device_id,
                          tag_id=tag_id, severity=action.severity, value=action.value)
 
@@ -204,8 +213,10 @@ class AlarmWorker:
                                         WHERE code = :code AND operator <> 'special')
                 """), {"now": now, "device_id": device_id, "code": code})
                 self.stats["cleared"] += 1
+                written = f"Alarm cleared ({code})"
                 log.info("alarm cleared", rule_id=action.rule_id, code=code,
                          device_id=device_id)
+        return written
 
     async def handle_entry(self, entry: dict[str, str]) -> None:
         self.stats["consumed"] += 1
@@ -225,10 +236,27 @@ class AlarmWorker:
         for action in evaluate(value, quality, rules, state, now):
             self._state[(action.rule_id, device_id)] = action.next_state
             if action.action is not Action.NO_CHANGE:
-                await self._apply(action, code_of[action.rule_id], entry, device_id,
-                                  tag_id)
+                written = await self._apply(action, code_of[action.rule_id], entry,
+                                            device_id, tag_id)
+                if written:
+                    self.heartbeat.wrote(written)
 
     async def run(self) -> None:
+        beat = self.heartbeat.start(self._stopping)
+        try:
+            await self._consume()
+        except Exception as exc:
+            self.heartbeat.crashed(exc)
+            raise
+        finally:
+            self._stopping.set()
+            # The heartbeat's last word, while Redis is still open to take it.
+            await beat
+            log.info("alarm worker stopped", **self.stats)
+            await close_redis()
+            await dispose_engine()
+
+    async def _consume(self) -> None:
         redis = get_redis()
         with contextlib.suppress(Exception):
             # Idempotent: the group may already exist from a previous run.
@@ -244,9 +272,14 @@ class AlarmWorker:
                 )
             except Exception as exc:
                 log.warning("stream read failed", error=str(exc))
+                self.heartbeat.failed(f"reading the stream: {exc}")
                 await asyncio.sleep(2)
                 continue
 
+            # One read of the stream is this worker's unit of work — an empty
+            # read included, since a quiet Plant is not a stalled worker. It
+            # counts as completed only if no entry in it failed.
+            clean = True
             for _stream, entries in batches or []:
                 for entry_id, fields in entries:
                     try:
@@ -254,13 +287,13 @@ class AlarmWorker:
                     except Exception as exc:
                         # One malformed entry must not stall alarming for every
                         # other Device. Acknowledged so it is not redelivered
-                        # forever, and logged loudly.
+                        # forever, and logged loudly — and now shown, too.
                         log.error("entry failed", entry_id=entry_id, error=str(exc))
+                        self.heartbeat.failed(exc)
+                        clean = False
                     await redis.xack(keys.STREAM_READINGS, CONSUMER_GROUP, entry_id)
-
-        log.info("alarm worker stopped", **self.stats)
-        await close_redis()
-        await dispose_engine()
+            if clean:
+                self.heartbeat.cycle()
 
 
 async def main() -> None:

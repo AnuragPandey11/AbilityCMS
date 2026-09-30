@@ -22,6 +22,7 @@ async def list_alarms(
     severity: str | None = Query(None, pattern="^(critical|high|medium|low)$"),
     plant_id: int | None = None,
     client_id: int | None = None,
+    device_id: int | None = None,
     since: datetime | None = None,
     limit: int = Query(100, ge=1, le=500),
     _: CurrentUser = Depends(require_permission("dashboard.view")),
@@ -29,21 +30,32 @@ async def list_alarms(
     # `client_id` is how a platform administrator narrows to one Client, in SQL
     # rather than in the browser, where it would filter the `limit` rows that
     # happened to come back. RLS still decides visibility; this only narrows.
+    # `device_id` narrows the same way, for a screen about one Device.
+    #
+    # `tag_code` is the rule's Tag: which signal the Alarm is about. A screen of
+    # contacts marks the one an open Alarm names, so the verdict on it is the
+    # rule's — its precedence, debounce and acknowledgement — never a guess in
+    # the browser about whether TRUE is good or bad. NULL for an absence rule,
+    # which is about no Tag.
     rows = (await session.execute(text("""
         SELECT a.id, a.state, a.severity, a.opened_at, a.acknowledged_at, a.resolved_at,
                a.message, a.trigger_value, a.classification, a.escalation_level,
-               a.device_id, a.plant_id, d.code AS device_code, r.code AS rule_code
+               a.device_id, a.plant_id, d.code AS device_code, r.code AS rule_code,
+               t.code AS tag_code
           FROM alarms a
           JOIN alarm_rules r ON r.id = a.rule_id
+          LEFT JOIN tags t ON t.id = r.tag_id
           LEFT JOIN devices d ON d.id = a.device_id
          WHERE (CAST(:state AS text) IS NULL OR a.state = :state)
            AND (CAST(:severity AS text) IS NULL OR a.severity = :severity)
            AND (CAST(:plant_id AS bigint) IS NULL OR a.plant_id = :plant_id)
            AND (CAST(:client_id AS bigint) IS NULL OR a.client_id = :client_id)
+           AND (CAST(:device_id AS bigint) IS NULL OR a.device_id = :device_id)
            AND (CAST(:since AS timestamptz) IS NULL OR a.opened_at >= :since)
          ORDER BY a.opened_at DESC LIMIT :limit
     """), {"state": state, "severity": severity, "plant_id": plant_id,
-           "client_id": client_id, "since": since, "limit": limit})).all()
+           "client_id": client_id, "device_id": device_id, "since": since,
+           "limit": limit})).all()
     return [dict(row._mapping) for row in rows]
 
 
