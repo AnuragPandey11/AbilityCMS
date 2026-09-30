@@ -141,34 +141,11 @@ ROLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     ("guest", "Guest", ("dashboard.view",)),
 )
 
-# ── Dashboards — tender §7. Which *types* a User may open (dimension A-3).
-DASHBOARDS: Final[tuple[tuple[str, str, int], ...]] = (
-    ("portfolio", "Portfolio", 10),
-    ("plant_overview", "Plant Overview", 20),
-    ("plant_list", "Plant List", 30),
-    ("single_plant", "Single Plant", 40),
-    ("sld", "Single Line Diagram", 50),
-    ("inverter_monitoring", "Inverter Monitoring", 60),
-    # The client's reference String Analysis screen (30 Sep 2026): every PV
-    # string of every Inverter at once, coloured by `domain/strings.py`.
-    ("string_analysis", "String Analysis", 61),
-    # Not tender §7 — the client's reference screens (28 Sep 2026): the Weather
-    # Station's readings and trends, historical Plant trends over a chosen
-    # window, and the Plant's meters. Granted like any other: a Client Admin
-    # sees them at once, anyone else once an administrator assigns them.
-    ("meteorological", "Meteorological", 62),
-    ("energy_analytics", "Energy Analytics", 64),
-    ("grid_monitoring", "MFM / Grid", 66),
-    # The client's reference screens for the Plant's HV equipment (30 Sep
-    # 2026): the Transformer's temperatures and protection contacts, the Power
-    # Plant Controller's setpoints and control enables, and every VCB's
-    # contacts. Granted like the three above.
-    ("transformer_monitoring", "Transformer", 67),
-    ("ppc_monitoring", "PPC", 68),
-    ("vcb_monitoring", "VCB", 69),
-    ("alarms", "Alarms", 70),
-    ("reports", "Reports", 80),
-)
+# ── Dashboards — dimension A-3, which *types* a User may open — are registered
+# by migration 0028, not here. Which screens a build contains is a fact about
+# the build, and `alembic upgrade head` is the deploy step that cannot be
+# skipped; a copy in this file could disagree with it. A new screen adds a
+# migration.
 
 # ── Ingress topic patterns (§5.1 and docs/BROKER_OBSERVATIONS.md §3).
 #
@@ -688,17 +665,10 @@ async def seed_catalog(session: AsyncSession) -> dict[str, int]:
         grants,
     )
 
-    counts["dashboards"] = await _upsert(
-        session,
-        """
-        INSERT INTO dashboards (code, name, sort_order)
-        VALUES (:code, :name, :sort_order)
-        ON CONFLICT (code) DO UPDATE
-            SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order
-        """,
-        [{"code": c, "name": n, "sort_order": o} for c, n, o in DASHBOARDS],
-    )
-
+    # `dashboards` is not seeded: migration 0028 owns that catalogue, because
+    # which screens a build contains is a fact about the build, and a copy here
+    # could disagree with it. The *slots* below remain seeded — they are the
+    # arrangement of one screen's figures, which a Client may deviate from.
     counts.update(await _seed_dashboard_slots(session))
 
     counts["topic_patterns"] = await _upsert(
