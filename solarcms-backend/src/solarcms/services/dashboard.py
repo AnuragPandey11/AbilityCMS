@@ -13,6 +13,13 @@ where it were permitted, scanning history to learn what a Device is doing *right
 now* would be the wrong tool: ingest already maintains exactly that in
 `live:device:{id}`.
 
+The one exception is a `counter_today` candidate — how far a lifetime register
+has advanced since the Plant's midnight — which needs where the register stood
+at midnight, and Redis holds only the latest value. It reads the 1-minute
+aggregate through its `_v` barrier view (`services/energy`), the same series and
+the same integration the KPI endpoint and the Reports use, so a figure here
+cannot disagree with the Daily Plant report over the same day.
+
 Isolation is inherited here rather than re-implemented: `devices`,
 `device_tag_bindings` and `device_health` all carry RLS, and this runs on the
 request session. That is the opposite of `plant_kpi.py`, which runs under the
@@ -21,15 +28,21 @@ scheduler's platform privileges and has to carry its own predicates.
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache import live
+from solarcms.domain.counters import device_advances
+from solarcms.domain.periods import period_start
 from solarcms.domain.sld_stages import SLD_STAGES, SldStages, build_stages
 from solarcms.domain.slots import (
+    KIND_COUNTER_TODAY,
     DeviceFacts,
     PlantFacts,
     ResolvedSlot,
@@ -37,6 +50,8 @@ from solarcms.domain.slots import (
     SlotSpec,
     resolve_all,
 )
+from solarcms.domain.tiering import Tier, select_tier
+from solarcms.services.energy import read_counter_series
 
 log = structlog.get_logger(__name__)
 
@@ -133,8 +148,43 @@ async def load_slot_specs(
     return specs, notes
 
 
+def counter_pairs(specs: Collection[SlotSpec]) -> set[tuple[str, str]]:
+    """The (Device Type, Tag) registers some `counter_today` candidate reads."""
+    return {
+        (candidate.device_type_code, candidate.tag_code)
+        for spec in specs for candidate in spec.candidates
+        if candidate.kind == KIND_COUNTER_TODAY
+        and candidate.device_type_code is not None and candidate.tag_code is not None
+    }
+
+
+async def _counters_today(
+    session: AsyncSession, plant_id: int, timezone: str | None,
+    pairs: Collection[tuple[str, str]], ac_capacity_kw: float | None,
+) -> dict[tuple[int, str], float]:
+    """How far each register in `pairs` has advanced since the Plant's midnight.
+
+    From the 1-minute tier, as `GET /plants/{id}/kpis?period=today` reads it:
+    a calendar "today" is under six hours old until dawn, when `select_tier`
+    would otherwise choose raw `readings`, which the API cannot read.
+    """
+    if not pairs:
+        return {}
+    try:
+        zone = ZoneInfo(timezone or "UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo("UTC")
+    now = datetime.now(UTC)
+    start = period_start("today", now, zone, None) or now
+    tier = select_tier(start, now, now, finest=Tier.AGG_1M)
+    found = await read_counter_series(
+        session, tier=tier, pairs=sorted(pairs), start=start, plant_ids=[plant_id])
+    return device_advances(found.get(plant_id, []), plant_ac_capacity_kw=ac_capacity_kw)
+
+
 async def gather(
-    session: AsyncSession, plant_id: int
+    session: AsyncSession, plant_id: int,
+    counter_today: Collection[tuple[str, str]] = (),
 ) -> tuple[PlantFacts, dict[str, str]]:
     """Everything the resolver needs about one Plant: its Devices, bindings and values.
 
@@ -142,10 +192,13 @@ async def gather(
     That is what lets a slot distinguish "this Plant has no settlement meter"
     from "the settlement meter has gone quiet" — the same blank tile, and
     entirely different phone calls.
+
+    `counter_today` names the registers whose advance since midnight some slot
+    reads (`counter_pairs`); none are read unless asked for.
     """
     attributes_sql = ", ".join(f"p.{column}" for column in PLANT_ATTRIBUTES)
     plant = (await session.execute(
-        text(f"SELECT {attributes_sql} FROM plants p WHERE p.id = :plant_id"),
+        text(f"SELECT {attributes_sql}, p.timezone FROM plants p WHERE p.id = :plant_id"),
         {"plant_id": plant_id},
     )).first()
     attributes: dict[str, float | None] = (
@@ -169,6 +222,11 @@ async def gather(
         return PlantFacts(plant_id=plant_id, devices=(), attributes=attributes), {}
 
     device_ids = [row.id for row in device_rows]
+    advances = (
+        await _counters_today(
+            session, plant_id, plant.timezone, counter_today, attributes.get("ac_capacity_kw"))
+        if plant is not None else {}
+    )
 
     # One query for every binding on the Plant rather than one per Device: a
     # 40-Inverter Plant would otherwise issue 40 round trips to render one screen.
@@ -213,6 +271,11 @@ async def gather(
                 online=row.comm_status == "online",
                 in_power_path=row.in_power_path,
                 sld_stage_override=row.sld_stage_override,
+                counter_today={
+                    tag_code: total
+                    for (device_id, tag_code), total in advances.items()
+                    if device_id == row.id
+                },
             )
         )
 
@@ -227,7 +290,7 @@ async def gather(
 async def render(session: AsyncSession, plant_id: int) -> dict[str, Any]:
     """The whole Plant dashboard: panels of resolved slots, plus the four SLD stages."""
     specs, notes = await load_slot_specs(session, plant_id)
-    facts, units = await gather(session, plant_id)
+    facts, units = await gather(session, plant_id, counter_pairs(specs))
 
     stage_by_type = {
         row.code: row.sld_stage

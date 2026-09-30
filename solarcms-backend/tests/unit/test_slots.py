@@ -24,6 +24,7 @@ from solarcms.domain.sld_stages import (
     build_stages,
 )
 from solarcms.domain.slots import (
+    KIND_COUNTER_TODAY,
     KIND_DEVICE_COUNT,
     KIND_DEVICE_TAG,
     KIND_PLANT_ATTRIBUTE,
@@ -413,3 +414,67 @@ def test_the_headline_row_is_answerable_by_a_bare_inverter_only_plant() -> None:
     assert by_code["kpi.current_power"].value == 240.0
     assert by_code["kpi.energy_today"].value == 1200.0
     assert by_code["kpi.plant_capacity"].value == 250.0
+
+
+# ── Today's energy from a lifetime register (`counter_today`) ──────────────
+
+EXPORT_TODAY = next(spec for spec in DEFAULT_SLOTS if spec.code == "energy.exported_today")
+
+
+def export_meter(
+    type_code: str, *, daily: float | None = None, advance: float | None = None,
+    binds_daily: bool = False,
+) -> DeviceFacts:
+    bound = {"ENERGY_EXPORT_TOTAL"} | ({"ENERGY_EXPORT_TODAY"} if binds_daily else set())
+    return DeviceFacts(
+        device_id=abs(hash(type_code)) % 10_000, code=type_code, device_type_code=type_code,
+        bound_tag_codes=frozenset(bound),
+        values={} if daily is None else {"ENERGY_EXPORT_TODAY": daily},
+        counter_today={} if advance is None else {"ENERGY_EXPORT_TOTAL": advance},
+        online=True, in_power_path=True,
+    )
+
+
+class TestCounterToday:
+    def test_a_meter_with_only_lifetime_registers_answers_from_the_advance(self) -> None:
+        facts = PlantFacts(plant_id=1, devices=(export_meter("MFM", advance=1_234.5),))
+        slot = resolve_slot(EXPORT_TODAY, facts)
+        assert slot.value == 1_234.5
+        assert slot.source is not None
+        assert slot.source.kind == KIND_COUNTER_TODAY
+        assert slot.source.tag_code == "ENERGY_EXPORT_TOTAL"
+        assert not slot.source.degraded
+
+    def test_the_meters_own_daily_register_beats_the_subtraction(self) -> None:
+        facts = PlantFacts(plant_id=1, devices=(
+            export_meter("MFM", daily=900.0, advance=1_234.5, binds_daily=True),))
+        slot = resolve_slot(EXPORT_TODAY, facts)
+        assert slot.value == 900.0
+        assert slot.source is not None and slot.source.kind == KIND_DEVICE_TAG
+
+    def test_the_settlement_meter_beats_an_mfm_whatever_it_publishes(self) -> None:
+        # Meter order follows PLANT_ENERGY_COUNTER_PRECEDENCE, as the Reports do.
+        facts = PlantFacts(plant_id=1, devices=(
+            export_meter("ABT_METER", advance=1_000.0),
+            export_meter("MFM", daily=990.0, binds_daily=True),
+        ))
+        slot = resolve_slot(EXPORT_TODAY, facts)
+        assert slot.value == 1_000.0
+        assert slot.source is not None and slot.source.device_type_code == "ABT_METER"
+
+    def test_too_few_readings_is_undefined_and_still_shown(self) -> None:
+        facts = PlantFacts(plant_id=1, devices=(export_meter("MFM"),))
+        slot = resolve_slot(EXPORT_TODAY, facts)
+        assert slot.value is None
+        assert slot.undefined_reason == UNDEFINED_NO_VALUE
+        assert not slot.hidden
+
+    def test_a_plant_with_no_meter_keeps_the_row(self) -> None:
+        slot = resolve_slot(EXPORT_TODAY, PlantFacts(plant_id=1, devices=(inverter("INV_1", 5.0),)))
+        assert slot.value is None
+        assert slot.undefined_reason == UNDEFINED_NO_SOURCE
+        assert not slot.hidden
+
+    def test_an_average_of_two_meters_exports_is_refused(self) -> None:
+        with pytest.raises(ValueError):
+            SlotCandidate(KIND_COUNTER_TODAY, 1, "MFM", "ENERGY_EXPORT_TOTAL", "avg")

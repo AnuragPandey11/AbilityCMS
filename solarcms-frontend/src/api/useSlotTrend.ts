@@ -263,8 +263,10 @@ export function provenanceOf(slot: ResolvedSlot | undefined): string | null {
   const source = slot?.source;
   if (!source) return null;
   if (source.kind === "plant_attribute") return "Plant record";
-  if (!source.is_aggregated) return source.device_type_code ?? null;
-  return `${source.aggregate} of ${source.device_count} ${source.device_type_code ?? "Device"}`;
+  const who = source.is_aggregated
+    ? `${source.aggregate} of ${source.device_count} ${source.device_type_code ?? "Device"}`
+    : source.device_type_code ?? null;
+  return source.kind === "counter_today" && who ? `${who}, since midnight` : who;
 }
 
 /**
@@ -337,6 +339,11 @@ export function useSlotSource(plantId: number | null, slotCode: string): SlotSou
       return slot.undefined_reason === "no_source"
         ? "No Device at this Plant can answer this figure."
         : "This slot declares no source.";
+    }
+    if (source.kind === "counter_today") {
+      // The figure is a lifetime register less its midnight reading; the
+      // register's own series is a different claim, so none is drawn.
+      return "This figure is a register's advance since midnight, which no single series answers.";
     }
     if (!tag && source.tag_code) return `Tag ${source.tag_code} is not in the catalogue.`;
     if (deviceIds.length === 0) {

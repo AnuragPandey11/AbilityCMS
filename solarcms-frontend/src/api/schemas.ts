@@ -1213,7 +1213,8 @@ export function parse<S extends z.ZodTypeAny>(
 // twelve machines were added together.
 
 export const SlotSourceSchema = z.object({
-  kind: z.enum(["device_tag", "plant_attribute", "device_count"]),
+  /** `counter_today`: a lifetime register's advance since the Plant's midnight. */
+  kind: z.enum(["device_tag", "plant_attribute", "device_count", "counter_today"]),
   device_type_code: z.string().nullable(),
   tag_code: z.string().nullable(),
   aggregate: z.string(),

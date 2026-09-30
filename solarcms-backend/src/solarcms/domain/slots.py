@@ -55,15 +55,24 @@ AGGREGATES: Final[tuple[str, ...]] = (
     "count",  # how many Devices of the Type exist
 )
 
-# Candidate kinds. Deliberately three, and deliberately closed: every additional
+# Candidate kinds. Deliberately few, and deliberately closed: every additional
 # kind is a new way for a number to reach the screen, and each one has to be
 # explainable to the person reading the tile.
 KIND_DEVICE_TAG: Final = "device_tag"            # aggregate a Tag over Devices of a Type
 KIND_PLANT_ATTRIBUTE: Final = "plant_attribute"  # a column on `plants` (capacity, …)
 KIND_DEVICE_COUNT: Final = "device_count"        # how many Devices, optionally online only
+# How far a lifetime register has advanced since the Plant's local midnight —
+# "the MFM's export counter, today". The fallback for a meter that publishes
+# only lifetime totals, and the same subtraction settlement makes from its
+# midnight readings. Always ranked after the Device's own daily register: a
+# published value beats a computed one.
+KIND_COUNTER_TODAY: Final = "counter_today"
 CANDIDATE_KINDS: Final[tuple[str, ...]] = (
-    KIND_DEVICE_TAG, KIND_PLANT_ATTRIBUTE, KIND_DEVICE_COUNT,
+    KIND_DEVICE_TAG, KIND_PLANT_ATTRIBUTE, KIND_DEVICE_COUNT, KIND_COUNTER_TODAY,
 )
+# The aggregates a register's advance may take. Energy adds; an average of two
+# meters' exports is not a quantity anything measured.
+COUNTER_TODAY_AGGREGATES: Final[tuple[str, ...]] = ("sum", "first")
 
 # Why a slot has no value. Carried rather than collapsed to null because these
 # three mean entirely different things to whoever is looking at the screen: the
@@ -100,10 +109,17 @@ class SlotCandidate:
             raise ValueError("plant_attribute candidate needs an attribute name")
         if self.kind == KIND_DEVICE_COUNT and not self.device_type_code:
             raise ValueError("device_count candidate needs a Device Type")
+        if self.kind == KIND_COUNTER_TODAY:
+            if not (self.device_type_code and self.tag_code):
+                raise ValueError("counter_today candidate needs both a Device Type and a Tag")
+            if self.aggregate not in COUNTER_TODAY_AGGREGATES:
+                raise ValueError(
+                    f"counter_today candidate cannot aggregate by {self.aggregate!r}")
 
     @property
     def describes_a_device(self) -> bool:
-        return self.kind in (KIND_DEVICE_TAG, KIND_DEVICE_COUNT)
+        return self.kind in (KIND_DEVICE_TAG, KIND_DEVICE_COUNT, KIND_COUNTER_TODAY)
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +179,10 @@ class DeviceFacts:
     # normal case, and slot resolution ignores this entirely — it matters only
     # to the four-stage fold.
     sld_stage_override: str | None = None
+    # How far each lifetime register advanced since the Plant's local midnight,
+    # by Tag code — `counter_today` candidates read this, never `values`. A Tag
+    # absent here had fewer than two readings today: undefined, never 0.0.
+    counter_today: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,11 +298,14 @@ def _evaluate(candidate: SlotCandidate, facts: PlantFacts) -> tuple[float | None
         return float(len(counted)), source
 
     assert candidate.tag_code is not None
-    contributing = [
-        d for d in devices
-        if candidate.tag_code in d.bound_tag_codes and candidate.tag_code in d.values
-    ]
-    values = [float(d.values[candidate.tag_code]) for d in contributing]
+    tag = candidate.tag_code
+    counter_today = candidate.kind == KIND_COUNTER_TODAY
+
+    def reading(device: DeviceFacts) -> Mapping[str, float]:
+        return device.counter_today if counter_today else device.values
+
+    contributing = [d for d in devices if tag in d.bound_tag_codes and tag in reading(d)]
+    values = [float(reading(d)[tag]) for d in contributing]
     if candidate.aggregate == "first":
         contributing, values = contributing[:1], values[:1]
     source = SlotSource(

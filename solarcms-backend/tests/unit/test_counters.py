@@ -17,6 +17,7 @@ from solarcms.domain.counters import (
     CounterSample,
     DeviceSeries,
     bucket_steps,
+    device_advances,
     integrate_counter,
     plant_energy,
     plant_irradiation,
@@ -155,6 +156,29 @@ class TestPlantEnergy:
             series, a.PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=None)
         assert result.value == 1e6
         assert result.jump_check is False
+
+
+class TestDeviceAdvances:
+    """Per Device, for a dashboard slot that picks and combines Devices itself."""
+
+    def test_each_device_advances_by_its_own_steps(self) -> None:
+        one = _series("MFM_1", "MFM", "ENERGY_EXPORT_TOTAL", 1_000.0, 1_010.0, 1_025.0)
+        two = _series("MFM_2", "MFM", "ENERGY_IMPORT_TOTAL", 50.0, 50.5)
+        found = device_advances([one, two], plant_ac_capacity_kw=2_000.0)
+        assert found == {(one.device_id, "ENERGY_EXPORT_TOTAL"): 25.0,
+                         (two.device_id, "ENERGY_IMPORT_TOTAL"): 0.5}
+
+    def test_one_reading_is_left_out_never_zero(self) -> None:
+        lone = _series("MFM_1", "MFM", "ENERGY_EXPORT_TOTAL", 1_000.0)
+        assert device_advances([lone], plant_ac_capacity_kw=2_000.0) == {}
+
+    def test_refuses_the_same_steps_plant_energy_refuses(self) -> None:
+        # A register that went backwards is not energy, here or in a Report.
+        series = _series("MFM_1", "MFM", "ENERGY_EXPORT_TOTAL", 1_000.0, 900.0, 910.0)
+        found = device_advances([series], plant_ac_capacity_kw=2_000.0)
+        report = plant_energy([series], [("MFM", "ENERGY_EXPORT_TOTAL")],
+                              plant_ac_capacity_kw=2_000.0)
+        assert found[(series.device_id, "ENERGY_EXPORT_TOTAL")] == report.value == 10.0
 
 
 class TestPlantIrradiation:

@@ -248,6 +248,37 @@ class PlantEnergy:
         return tuple(step for device in self.devices for step in device.integral.steps)
 
 
+def jump_rate(item: DeviceSeries, plant_ac_capacity_kw: float | None) -> float | None:
+    """The fastest a register may plausibly advance, per hour; None when no
+    capacity is recorded and a jump therefore cannot be caught.
+
+    A meter sees the whole Plant; an Inverter sees itself.
+    """
+    ceiling = item.rated_capacity_kw if item.device_type_code == "INVERTER" else None
+    ceiling = ceiling or plant_ac_capacity_kw
+    if not ceiling or ceiling <= 0:
+        return None
+    return ceiling * COUNTER_JUMP_CAPACITY_MARGIN
+
+
+def device_advances(
+    series: Sequence[DeviceSeries], *, plant_ac_capacity_kw: float | None,
+) -> dict[tuple[int, str], float]:
+    """How far each Device's register advanced over its series, by (Device, Tag).
+
+    Integrated exactly as `plant_energy` integrates one Device — the same
+    backwards and jump checks — but per Device, for a caller that chooses and
+    combines Devices itself (a dashboard slot). A series with fewer than two
+    samples has no step to count and is left out, never reported as 0.0.
+    """
+    return {
+        (item.device_id, item.tag_code): integrate_counter(
+            item.samples, max_rate_per_hour=jump_rate(item, plant_ac_capacity_kw)).total
+        for item in series
+        if len(item.samples) >= 2
+    }
+
+
 def plant_energy(
     series: Sequence[DeviceSeries],
     precedence: Sequence[tuple[str, str]],
@@ -284,14 +315,9 @@ def plant_energy(
         jump_check = True
         devices: list[DeviceEnergy] = []
         for item in usable:
-            # A meter sees the whole Plant; an Inverter sees itself.
-            ceiling = item.rated_capacity_kw if type_code == "INVERTER" else None
-            ceiling = ceiling or plant_ac_capacity_kw
-            if not ceiling or ceiling <= 0:
+            rate = jump_rate(item, plant_ac_capacity_kw)
+            if rate is None:
                 jump_check = False
-                rate = None
-            else:
-                rate = ceiling * COUNTER_JUMP_CAPACITY_MARGIN
             devices.append(DeviceEnergy(
                 item, integrate_counter(item.samples, max_rate_per_hour=rate)))
 

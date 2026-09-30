@@ -35,6 +35,12 @@ export function undefinedExplanation(slot: ResolvedSlot): string {
     case "no_source":
       return "No Device on this Plant is bound to a Tag that could answer this.";
     case "no_value":
+      if (slot.source?.kind === "counter_today") {
+        // Bound, but fewer than two readings since midnight: no step to count.
+        return `The ${titleCase(slot.source.device_type_code ?? "")} has not reported ${
+          slot.source.tag_code ?? "its register"
+        } twice since the Plant's midnight, so there is no advance to count yet.`;
+      }
       return sourceLabel(slot.source)
         ? `${sourceLabel(slot.source)} is registered here but is reporting nothing.`
         : "The source is registered here but is reporting nothing.";
@@ -45,15 +51,19 @@ export function undefinedExplanation(slot: ResolvedSlot): string {
   }
 }
 
-/** "ABT Meter", "Σ 8 Inverters", "Plant record" — where the number came from. */
+/**
+ * "ABT Meter", "Σ 8 Inverters", "Plant record", "MFM · since midnight" — where
+ * the number came from. The last is a subtraction from a lifetime register,
+ * not a daily register the meter published, and says so.
+ */
 export function sourceLabel(source: SlotSource | null): string {
   if (!source) return "";
   if (source.kind === "plant_attribute") return "Plant record";
   const type = titleCase(source.device_type_code ?? "");
   if (source.kind === "device_count") return type;
-  if (!source.is_aggregated) return type;
   const symbol = source.aggregate === "sum" ? "Σ" : source.aggregate;
-  return `${symbol} ${source.device_count} ${type}`;
+  const who = source.is_aggregated ? `${symbol} ${source.device_count} ${type}` : type;
+  return source.kind === "counter_today" ? `${who} · since midnight` : who;
 }
 
 function titleCase(code: string): string {

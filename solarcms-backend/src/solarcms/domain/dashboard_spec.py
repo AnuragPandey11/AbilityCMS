@@ -30,6 +30,7 @@ from solarcms.domain.assumptions import (
     PLANT_POWER_SOURCE_PRECEDENCE,
 )
 from solarcms.domain.slots import (
+    KIND_COUNTER_TODAY,
     KIND_DEVICE_COUNT,
     KIND_DEVICE_TAG,
     KIND_PLANT_ATTRIBUTE,
@@ -111,6 +112,32 @@ def _tag(
 def _attribute(priority: int, column: str) -> SlotCandidate:
     return SlotCandidate(
         kind=KIND_PLANT_ATTRIBUTE, priority=priority, plant_attribute=column
+    )
+
+
+def _since_midnight(priority: int, device_type: str, tag_code: str) -> SlotCandidate:
+    """A lifetime register's advance since the Plant's midnight (`counter_today`)."""
+    return SlotCandidate(
+        kind=KIND_COUNTER_TODAY, priority=priority, device_type_code=device_type,
+        tag_code=tag_code, aggregate=_METERED_AGGREGATE.get(device_type, "first"),
+    )
+
+
+def _meter_today(today_tag: str, lifetime_tag: str) -> tuple[SlotCandidate, ...]:
+    """Today's energy through a meter: each meter's own daily register, else its
+    lifetime register's advance since midnight — ABT Meter before MFM.
+
+    The meter order is `PLANT_ENERGY_COUNTER_PRECEDENCE`'s, so this row and the
+    Daily Plant report read the same instrument. Within one meter the daily
+    register comes first, because a published value beats a computed one; the
+    subtraction is what answers for a meter that sends only lifetime totals.
+    ⚠ PROPOSED (OPEN-14), like the precedence it follows.
+    """
+    return (
+        _tag(1, "ABT_METER", today_tag, "first"),
+        _since_midnight(2, "ABT_METER", lifetime_tag),
+        _tag(3, "MFM", today_tag, "first"),
+        _since_midnight(4, "MFM", lifetime_tag),
     )
 
 
@@ -345,21 +372,17 @@ _ENERGY_SUMMARY: Final[tuple[SlotSpec, ...]] = (
         code="energy.generated_today", label="Energy Generated", panel=PANEL_ENERGY_SUMMARY,
         position=1, unit_hint="kWh", candidates=(_tag(1, "INVERTER", "ENERGY_TODAY", "sum"),),
     ),
+    # Never hidden: a Plant with no meter says so here rather than dropping the
+    # row, because a missing export line reads as nothing having been exported.
     SlotSpec(
         code="energy.exported_today", label="Energy Exported", panel=PANEL_ENERGY_SUMMARY,
-        position=2, unit_hint="kWh",
-        candidates=(
-            _tag(1, "ABT_METER", "ENERGY_EXPORT_TODAY", "first"),
-            _tag(2, "MFM", "ENERGY_EXPORT_TODAY", "first"),
-        ),
+        position=2, unit_hint="kWh", hide_when_unresolved=False,
+        candidates=_meter_today("ENERGY_EXPORT_TODAY", "ENERGY_EXPORT_TOTAL"),
     ),
     SlotSpec(
         code="energy.imported_today", label="Energy Imported", panel=PANEL_ENERGY_SUMMARY,
-        position=3, unit_hint="kWh",
-        candidates=(
-            _tag(1, "ABT_METER", "ENERGY_IMPORT_TODAY", "first"),
-            _tag(2, "MFM", "ENERGY_IMPORT_TODAY", "first"),
-        ),
+        position=3, unit_hint="kWh", hide_when_unresolved=False,
+        candidates=_meter_today("ENERGY_IMPORT_TODAY", "ENERGY_IMPORT_TOTAL"),
     ),
     SlotSpec(
         code="energy.plant_start", label="Plant Start", panel=PANEL_ENERGY_SUMMARY,
@@ -565,10 +588,7 @@ _SLD_GRID: Final[tuple[SlotSpec, ...]] = (
     SlotSpec(
         code="sld.grid.energy_export_today", label="Exported Today", panel="sld.GRID",
         position=5, unit_hint="kWh",
-        candidates=(
-            _tag(1, "ABT_METER", "ENERGY_EXPORT_TODAY", "first"),
-            _tag(2, "MFM", "ENERGY_EXPORT_TODAY", "first"),
-        ),
+        candidates=_meter_today("ENERGY_EXPORT_TODAY", "ENERGY_EXPORT_TOTAL"),
     ),
 )
 
