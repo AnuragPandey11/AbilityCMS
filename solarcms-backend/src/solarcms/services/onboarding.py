@@ -6,6 +6,7 @@ aggregates, so a half-mapped Plant never drags fleet PR down.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -13,7 +14,9 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solarcms.domain.assumptions import TAG_SPECS, alias_for
+from solarcms.domain.assumptions import DEFAULT_PUBLISH_INTERVAL_S, TAG_SPECS, alias_for
+from solarcms.domain.commissioning import match_device_type, string_topic_owner
+from solarcms.services.device_topics import TopicRefused, attach_topic
 
 log = structlog.get_logger(__name__)
 
@@ -136,7 +139,7 @@ async def upsert_device(
 
 async def bind_tags(
     session: AsyncSession, client_id: int, device_id: int, source_keys: list[str],
-    device_type_code: str | None = None,
+    device_type_code: str | None = None, *, overwrite: bool = True,
 ) -> dict[str, int]:
     """Create per-Device Tag bindings from observed payload keys.
 
@@ -149,11 +152,21 @@ async def bind_tags(
     (`SOURCE_KEY_ALIASES_BY_DEVICE_TYPE`). Omitting it falls back to the global
     table, which is correct for most keys and wrong by 1000x for a few.
 
-    Returns {bound, unmapped}. An unmapped key is not an error: it means the
-    Device reports something the registry has no canonical Tag for yet, which is
-    exactly the signal that commissioning is incomplete.
+    Returns {bound, unmapped, kept}. An unmapped key is not an error: it means
+    the Device reports something the registry has no canonical Tag for yet,
+    which is exactly the signal that commissioning is incomplete.
+
+    `overwrite=False` adds only what is missing and leaves every existing
+    binding exactly as it is — its source key, and above all its scale, which
+    may be a per-Device correction somebody made by hand. That is the mode for
+    a Device already in service; `kept` counts the keys whose Tag was already
+    bound. `overwrite=True` is the repair a rebuild of the test Plant relies on.
     """
-    bound, unmapped = 0, 0
+    bound, unmapped, kept = 0, 0, 0
+    conflict = (
+        "DO UPDATE SET source_key = EXCLUDED.source_key, scale = EXCLUDED.scale"
+        if overwrite else "DO NOTHING"
+    )
     for source_key in source_keys:
         # ⚠ Type-aware, not a flat lookup. The client's broker sends `VRY` from
         # both an Inverter (800 V, LT terminals) and an MFM (11.037, an 11 kV
@@ -166,14 +179,14 @@ async def bind_tags(
             unmapped += 1
             continue
         spec = TAG_SPECS[tag_code]
-        await session.execute(text("""
+        written = (await session.execute(text(f"""
             INSERT INTO device_tag_bindings (client_id, device_id, tag_id, source_key,
                                              scale, value_offset, valid_min, valid_max)
             SELECT :client_id, :device_id, t.id, :source_key,
                    :scale, 0.0, :valid_min, :valid_max
               FROM tags t WHERE t.code = :tag_code
-            ON CONFLICT (device_id, tag_id) DO UPDATE
-                SET source_key = EXCLUDED.source_key, scale = EXCLUDED.scale
+            ON CONFLICT (device_id, tag_id) {conflict}
+            RETURNING id
         """), {
             "client_id": client_id, "device_id": device_id, "source_key": source_key,
             "tag_code": tag_code,
@@ -183,9 +196,12 @@ async def bind_tags(
             # observation about one Plant, not a rule — hence per-Device (T-1).
             "scale": 1.0,
             "valid_min": spec.valid_min, "valid_max": spec.valid_max,
-        })
-        bound += 1
-    return {"bound": bound, "unmapped": unmapped}
+        })).first()
+        if written is None:
+            kept += 1
+        else:
+            bound += 1
+    return {"bound": bound, "unmapped": unmapped, "kept": kept}
 
 
 async def bind_from_model(
@@ -482,32 +498,23 @@ class ObservedDevice:
     interval_s: int | None = None
 
 
+# Who commissioning writes as in `audit_log`. It runs from the CLI with no User,
+# and an audit row with no actor at all would read as a gap in the trail.
+COMMISSIONING_ACTOR: Final = "cli:commission-from-broker"
+
+
 async def infer_device_type(session: AsyncSession, device_code: str) -> str | None:
-    """Match a Device code against the Device Type catalogue, longest code first.
+    """Match a Device code against the Device Type catalogue.
 
-    `INVERTER_7` → `INVERTER`, `MFM` → `MFM`. Driven by the seeded catalogue
-    rather than a list in code, so a Client who adds a Type gets it for free and
-    no Plant or Client name ever reaches a code path (Guardrail 2).
-
-    Returns None when nothing matches, which is a question for the operator
-    rather than a default to fall back on.
+    Driven by the seeded catalogue rather than a list in code, so a Client who
+    adds a Type gets it for free and no Plant or Client name ever reaches a
+    code path (Guardrail 2). The rules are `domain/commissioning.
+    match_device_type`'s. Returns None when nothing matches, which is a question
+    for the operator rather than a default to fall back on.
     """
-    codes: list[str] = [str(r.code) for r in (await session.execute(
+    codes = [str(r.code) for r in (await session.execute(
         text("SELECT code FROM device_types"))).all()]
-    upper = device_code.upper()
-
-    if upper in codes:
-        return upper
-    # `INVERTER_7` -> INVERTER: the code carries a unit number after the Type.
-    forward = [c for c in codes if upper.startswith(c)]
-    if forward:
-        return max(forward, key=len)
-    # `MCR` -> MCR_SECTION: the Type name is the longer of the two, because the
-    # catalogue spells out what the client abbreviates. Only accepted when
-    # exactly one Type could be meant — `M` must stay a question for the
-    # operator rather than silently becoming MFM, MCR_SECTION or MODULE_TRACKER.
-    reverse = [c for c in codes if c.startswith(upper)]
-    return reverse[0] if len(reverse) == 1 else None
+    return match_device_type(device_code, codes)
 
 
 async def _find_plant(session: AsyncSession, item: ObservedDevice) -> Any:
@@ -540,105 +547,433 @@ async def _find_plant(session: AsyncSession, item: ObservedDevice) -> Any:
     ), {"code": item.plant_code})).first()
 
 
+_DEVICE_COLUMNS: Final = """
+    d.id, d.code, d.plant_id, d.client_id, d.collector_code, d.source_address,
+    d.expected_interval_s, dt.code AS type_code
+"""
+
+
+async def _registered_on(session: AsyncSession, topic: str) -> Any:
+    """The Device this exact topic is registered to, primary or extra, or None."""
+    return (await session.execute(text(f"""
+        SELECT {_DEVICE_COLUMNS}, rt.is_primary
+          FROM registered_topics rt
+          JOIN devices d        ON d.id = rt.device_id
+          JOIN device_models dm ON dm.id = d.device_model_id
+          JOIN device_types dt  ON dt.id = dm.device_type_id
+         WHERE rt.topic = :topic
+         ORDER BY rt.is_primary DESC
+         LIMIT 1
+    """), {"topic": topic})).first()
+
+
+async def _device_by_code(session: AsyncSession, plant_id: int, code: str) -> Any:
+    return (await session.execute(text(f"""
+        SELECT {_DEVICE_COLUMNS}
+          FROM devices d
+          JOIN device_models dm ON dm.id = d.device_model_id
+          JOIN device_types dt  ON dt.id = dm.device_type_id
+         WHERE d.plant_id = :plant_id AND d.code = :code
+    """), {"plant_id": plant_id, "code": code})).first()
+
+
+async def _bound_source_keys(session: AsyncSession, device_id: int) -> set[str]:
+    return {str(r.source_key) for r in (await session.execute(text(
+        "SELECT source_key FROM device_tag_bindings WHERE device_id = :id"
+    ), {"id": device_id})).all()}
+
+
+def _split_keys(
+    keys: tuple[str, ...], device_type: str | None
+) -> tuple[list[str], list[str]]:
+    mapped: list[str] = []
+    unmapped: list[str] = []
+    for key in keys:
+        tag = alias_for(key, device_type)
+        (mapped if tag and tag in TAG_SPECS else unmapped).append(key)
+    return mapped, unmapped
+
+
 async def plan_commissioning(
-    session: AsyncSession, observed: list[ObservedDevice]
+    session: AsyncSession, observed: list[ObservedDevice], *,
+    create_missing: bool = False,
 ) -> list[dict[str, Any]]:
-    """Work out what would be registered, and why, without writing anything."""
+    """Work out what would be done for each observed topic, writing nothing.
+
+    Every row gets one `action`:
+
+    * **refresh** — the topic is already registered (as a Device's primary or
+      as one of its extras). Only two things may change: the Device's
+      `expected_interval_s`, when this is its primary topic and the measured
+      interval differs, and bindings for keys that are not bound yet. Its name,
+      Block, Collector, wiring and every existing binding's scale are left
+      exactly as they are — they may be corrections a person made.
+    * **attach** — a `…_STRING*` topic (`domain/commissioning.
+      string_topic_owner`): the PV strings of a Device, recorded as one of that
+      Device's extra topics rather than as a Device of its own.
+    * **register** — equipment nobody has registered. When it is a string
+      topic whose owner publishes nothing else (an SMB known only by its
+      strings), the owner is registered with this topic as its primary.
+    * **blocked** — with the reason. Never resolved by guessing.
+
+    `create_missing` lets a topic whose Client or Plant does not exist yet
+    propose creating them, from the codes the topic carries.
+    """
     plan: list[dict[str, Any]] = []
+    # Codes this run will register from their own topic, so a string topic in
+    # the same window attaches to its owner rather than creating it.
+    publishing = {
+        (o.client_code, o.plant_code, o.device_code)
+        for o in observed if string_topic_owner(o.device_code) is None
+    }
+    owners_from_strings: set[tuple[str | None, str, str]] = set()
+    # Codes registered by this run. `devices` is unique on (plant, code), so a
+    # second topic carrying the same code — an `MFM` inside the MCR and another
+    # outside it — must be a question, not an INSERT that aborts the whole run.
+    registering: dict[tuple[str | None, str, str], str] = {}
+
     for item in sorted(observed, key=lambda o: o.topic):
-        device_type = await infer_device_type(session, item.device_code)
-        mapped: list[str] = []
-        unmapped: list[str] = []
-        for key in item.source_keys:
-            tag = alias_for(key, device_type)
-            (mapped if tag and tag in TAG_SPECS else unmapped).append(key)
-        plant = await _find_plant(session, item)
-        plan.append({
+        owner_code = string_topic_owner(item.device_code)
+        row: dict[str, Any] = {
             "topic": item.topic,
             "device_code": item.device_code,
-            "device_type": device_type,
+            "target_code": owner_code or item.device_code,
+            "client_code": item.client_code,
+            "plant_code": item.plant_code,
             # Shown in the plan so the operator can see the enclosure being
             # recorded — and see that no Device is being created for it.
             "collector_code": item.collector_code,
-            "plant_id": None if plant is None else plant.id,
-            "client_id": None if plant is None else plant.client_id,
-            "mapped_keys": len(mapped),
-            "unmapped_keys": unmapped,
             "interval_s": item.interval_s,
-            "blocked": device_type is None or plant is None,
-        })
+            "device_type": None, "device_id": None,
+            "plant_id": None, "client_id": None,
+            "action": "blocked", "reason": None, "blocked": True,
+            "mapped_keys": 0, "unmapped_keys": [], "new_keys": [],
+            "interval_change": None, "creates_client": False, "creates_plant": False,
+        }
+        plan.append(row)
+
+        def block(reason: str, row: dict[str, Any] = row) -> None:
+            row["action"], row["reason"], row["blocked"] = "blocked", reason, True
+
+        registered = await _registered_on(session, item.topic)
+        if registered is not None:
+            mapped, unmapped = _split_keys(item.source_keys, registered.type_code)
+            bound = await _bound_source_keys(session, registered.id)
+            change = None
+            if (registered.is_primary and item.interval_s
+                    and item.interval_s != registered.expected_interval_s):
+                change = (registered.expected_interval_s, item.interval_s)
+            row.update(
+                action="refresh", blocked=False, target_code=registered.code,
+                device_id=registered.id, device_type=registered.type_code,
+                plant_id=registered.plant_id, client_id=registered.client_id,
+                mapped_keys=len(mapped), unmapped_keys=unmapped,
+                new_keys=[k for k in mapped if k not in bound],
+                interval_change=change,
+            )
+            continue
+
+        plant = await _find_plant(session, item)
+        if plant is None:
+            if not (create_missing and item.client_code):
+                block("no such Plant" + (
+                    "; --create-missing would create it" if item.client_code else ""))
+                continue
+            client = (await session.execute(text(
+                "SELECT id, code FROM clients WHERE upper(code) = upper(:code)"
+            ), {"code": item.client_code})).first()
+            if client is not None and client.code != item.client_code:
+                # `kular-green` against `KULAR_GREEN` registers cleanly and then
+                # quarantines every new Device: the pattern path compares the
+                # Client code exactly. Fix the code, never fold it.
+                block(f"Client {client.code!r} differs from the topic's "
+                      f"{item.client_code!r} only by case; correct the Client's "
+                      f"code rather than create a second one")
+                continue
+            row.update(creates_client=client is None, creates_plant=True,
+                       client_id=None if client is None else client.id)
+        else:
+            row.update(plant_id=plant.id, client_id=plant.client_id)
+
+        target = (None if plant is None
+                  else await _device_by_code(session, plant.id, row["target_code"]))
+        if owner_code is not None:
+            if target is not None:
+                device_type = target.type_code
+                row["device_id"] = target.id
+                if target.collector_code != item.collector_code:
+                    block(f"{target.code} is in collector {target.collector_code!r} "
+                          f"but this topic publishes from {item.collector_code!r}; "
+                          f"a Device's topics cannot disagree about where it is")
+                    continue
+                row["action"] = "attach"
+            else:
+                device_type = await infer_device_type(session, owner_code)
+                key = (item.client_code, item.plant_code, owner_code)
+                if key in publishing or key in owners_from_strings:
+                    row["action"] = "attach"
+                else:
+                    owners_from_strings.add(key)
+                    row["action"] = "register"
+        else:
+            device_type = await infer_device_type(session, item.device_code)
+            if target is not None:
+                # Registered under this code, on a different topic: the client
+                # renamed a topic, or two topics claim one Device. Either way a
+                # person decides — repointing it here would silently move the
+                # Device's history onto whatever this topic turns out to be.
+                block(f"{target.code} is already registered on "
+                      f"{target.source_address!r}; if the topic was renamed, "
+                      f"see topic-migrations and change it there")
+                continue
+            row["action"] = "register"
+
+        if device_type is None:
+            block("no matching Device Type")
+            continue
+        if row["action"] == "register":
+            key = (item.client_code.upper() if item.client_code else None,
+                   item.plant_code.upper(), row["target_code"])
+            if key in registering:
+                block(f"{row['target_code']} is also published on "
+                      f"{registering[key]!r}; one Plant cannot hold two Devices "
+                      f"with one code, so a person must say which is which")
+                continue
+            registering[key] = item.topic
+        mapped, unmapped = _split_keys(item.source_keys, device_type)
+        row.update(device_type=device_type, blocked=False, mapped_keys=len(mapped),
+                   unmapped_keys=unmapped, new_keys=mapped)
     return plan
 
 
-async def commission_observed_devices(
-    session: AsyncSession, observed: list[ObservedDevice]
-) -> dict[str, Any]:
-    """Register the observed Devices with their Collector and Tag bindings.
+async def _placeholder_model(session: AsyncSession, device_type: str) -> int:
+    """The `REF-{type}` Model a broker-registered Device starts on.
 
-    Three deliberate choices:
+    Looked up before it is inserted, never upserted: an upsert would rewrite
+    the variant of a Model somebody may since have corrected.
+    """
+    found = (await session.execute(text("""
+        SELECT id FROM device_models
+         WHERE manufacturer = 'Unspecified' AND model_code = :code
+    """), {"code": f"REF-{device_type}"})).scalar()
+    if found is not None:
+        return int(found)
+    return await upsert_device_model(session, device_type, "Unspecified",
+                                     f"REF-{device_type}")
+
+
+async def _audit(
+    session: AsyncSession, client_id: int | None, action: str, entity_type: str,
+    entity_id: int, *, before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> None:
+    await session.execute(text("""
+        INSERT INTO audit_log (client_id, actor_email, action, entity_type,
+                               entity_id, before, after)
+        VALUES (:client_id, :actor, :action, :entity_type, :entity_id,
+                CAST(:before AS jsonb), CAST(:after AS jsonb))
+    """), {"client_id": client_id, "actor": COMMISSIONING_ACTOR, "action": action,
+           "entity_type": entity_type, "entity_id": entity_id,
+           "before": None if before is None else json.dumps(before, default=str),
+           "after": None if after is None else json.dumps(after, default=str)})
+
+
+async def _ensure_client_and_plant(
+    session: AsyncSession, client_code: str, plant_code: str, summary: dict[str, Any],
+) -> tuple[int, int]:
+    """Create the Client and Plant a topic names, if they do not exist yet.
+
+    Insert-only: an existing Client or Plant is returned untouched. Created as
+    `onboarding` / `commissioning`, so the Plant is excluded from Portfolio
+    figures until somebody has looked at its data, with provisional names and
+    no capacity — nothing has stated one, and CUF stays undefined until it is.
+    ⚠ The timezone is the platform default (Asia/Kolkata), which is an
+    assumption about where the Plant is, and one UPDATE to correct.
+    """
+    client_id = (await session.execute(text(
+        "SELECT id FROM clients WHERE code = :code"), {"code": client_code})).scalar()
+    if client_id is None:
+        client_id = (await session.execute(text("""
+            INSERT INTO clients (code, name, status, is_demo)
+            VALUES (:code, :name, 'onboarding', false)
+            RETURNING id
+        """), {"code": client_code,
+               "name": f"{client_code.replace('_', ' ')} (provisional)"})).scalar_one()
+        summary["clients_created"].append(client_code)
+        await _audit(session, client_id, "client.create", "clients", client_id,
+                     after={"code": client_code, "source": "broker topic"})
+
+    plant_id = (await session.execute(text(
+        "SELECT id FROM plants WHERE client_id = :client_id AND code = :code"
+    ), {"client_id": client_id, "code": plant_code})).scalar()
+    if plant_id is None:
+        # The region the test Plant was filed under, if this database has it;
+        # otherwise none. Nothing here has stated a region either way.
+        region_id = (await session.execute(text(
+            "SELECT id FROM regions WHERE code = 'IN-UNKNOWN'"))).scalar()
+        plant_id = (await session.execute(text("""
+            INSERT INTO plants (client_id, region_id, code, name, status, timezone)
+            VALUES (:client_id, :region_id, :code, :name, 'commissioning', 'Asia/Kolkata')
+            RETURNING id
+        """), {"client_id": client_id, "region_id": region_id, "code": plant_code,
+               "name": f"{plant_code.replace('_', ' ')} (provisional)"})).scalar_one()
+        await ensure_plant_kpi_device(session, client_id, plant_id, plant_code)
+        summary["plants_created"].append(f"{client_code}/{plant_code}")
+        await _audit(session, client_id, "plant.create", "plants", plant_id,
+                     after={"code": plant_code, "status": "commissioning",
+                            "source": "broker topic"})
+    return int(client_id), int(plant_id)
+
+
+async def commission_observed_devices(
+    session: AsyncSession, observed: list[ObservedDevice], *,
+    create_missing: bool = False,
+) -> dict[str, Any]:
+    """Carry out `plan_commissioning`, in an order that cannot clobber anything.
+
+    1. **Clients and Plants** the topics name, only with `create_missing`.
+    2. **register** — a plain INSERT, never an upsert. The plan has already
+       established nothing holds the code; were that to change underneath it,
+       failing loudly beats overwriting a Device somebody edited.
+    3. **attach** — the string topic becomes one of its owner's extra topics
+       (migration 0030), after step 2 so an owner registered in this same run
+       exists to attach to.
+    4. **refresh** — the measured interval on a Device's primary topic, and
+       bindings for keys not yet bound. Nothing else about the Device changes.
+
+    Three choices carried over from the original:
 
     * **`source_address` is the exact topic.** That is the resolver's *first*
       path — an exact match, before any pattern is tried — so it is immune to
       the case and shape problems that pattern matching has to care about.
     * **The Collector is recorded on the Device, and is never registered as a
       Device itself** (migration 0022). `{collector_code}` names the enclosure
-      the equipment sits in — an MCR, an ICR, a panel. It publishes nothing and
-      carries no current, so registering it as a Device invents a piece of
-      equipment and puts it in the electrical diagram, where the operator then
-      has to explain why the room is wired between the Inverters and the meter.
-      It is a box drawn around the Devices, not a box in the chain.
-
-      ⚠ This changed on 2026-09-19. It used to create an `MCR_SECTION` Device
-      and point every Device beneath it at that row through
-      `reports_via_device_id`. Devices registered by the old path are repaired
-      by `python -m solarcms.cli collectors-from-topics`, which is dry-run by
-      default; nothing here deletes them, because removing a row a human may
-      have since edited is a decision and not a side effect of a re-run.
+      the equipment sits in. Devices registered by the pre-0022 path are
+      repaired by `python -m solarcms.cli collectors-from-topics`.
     * **`parent_device_id` is left NULL.** The topic says where a Device *sits*,
-      never what it is *wired into*. Guessing the electrical tree from the
-      communication one is precisely the collapse I-10 forbids. The four-stage
-      diagram does not need it — it folds by Device Type — so the Plant is
-      readable while the real wiring is still unknown, and the hierarchy editor
-      is where the wiring is said.
+      never what it is *wired into* (I-10). The hierarchy editor is where the
+      wiring is said.
     """
+    plan = await plan_commissioning(session, observed, create_missing=create_missing)
+    items = {o.topic: o for o in observed}
     summary: dict[str, Any] = {
-        "devices": 0, "bound": 0, "unmapped": 0, "collectors": 0, "skipped": []
+        "devices": 0, "attached": 0, "refreshed": 0, "intervals": 0,
+        "bound": 0, "kept": 0, "unmapped": 0, "collectors": 0,
+        "clients_created": [], "plants_created": [], "skipped": [],
     }
     seen_collectors: set[tuple[int, str]] = set()
 
-    for item in sorted(observed, key=lambda o: o.topic):
-        device_type = await infer_device_type(session, item.device_code)
-        plant = await _find_plant(session, item)
-        if device_type is None or plant is None:
-            summary["skipped"].append(
-                {"topic": item.topic,
-                 "reason": "unknown Device Type" if plant else "no such Plant"}
-            )
-            continue
+    def skip(row: dict[str, Any], reason: str) -> None:
+        summary["skipped"].append({"topic": row["topic"], "reason": reason})
 
-        # A Collector is a name, so there is nothing to create and nothing to
-        # look up — only a count of the distinct enclosures this run touched,
-        # for the report the operator reads before accepting the plan.
-        if item.collector_code:
-            key = (plant.id, item.collector_code)
-            if key not in seen_collectors:
-                seen_collectors.add(key)
-                summary["collectors"] += 1
+    for row in plan:
+        if row["blocked"]:
+            skip(row, row["reason"])
+        elif row["creates_plant"]:
+            row["client_id"], row["plant_id"] = await _ensure_client_and_plant(
+                session, str(row["client_code"]), row["plant_code"], summary)
 
-        model_id = await upsert_device_model(
-            session, device_type, "Unspecified", f"REF-{device_type}"
-        )
-        device_id = await upsert_device(
-            session, plant.client_id, plant.id, model_id,
-            code=item.device_code, name=item.device_code.replace("_", " ").title(),
-            source_address=item.topic,
-            expected_interval_s=item.interval_s or 60,
-            collector_code=item.collector_code,
-        )
-        counts = await bind_tags(
-            session, plant.client_id, device_id, list(item.source_keys), device_type
-        )
+    for row in (r for r in plan if r["action"] == "register"):
+        item = items[row["topic"]]
+        model_id = await _placeholder_model(session, row["device_type"])
+        device_id = (await session.execute(text("""
+            INSERT INTO devices (client_id, plant_id, device_model_id, code, name,
+                                 collector_code, source_address, expected_interval_s,
+                                 status)
+            VALUES (:client_id, :plant_id, :model_id, :code, :name,
+                    :collector_code, :topic, :interval_s, 'active')
+            RETURNING id
+        """), {"client_id": row["client_id"], "plant_id": row["plant_id"],
+               "model_id": model_id, "code": row["target_code"],
+               "name": row["target_code"].replace("_", " ").title(),
+               "collector_code": item.collector_code, "topic": item.topic,
+               "interval_s": item.interval_s or DEFAULT_PUBLISH_INTERVAL_S,
+               })).scalar_one()
+        counts = await bind_tags(session, row["client_id"], device_id,
+                                 list(item.source_keys), row["device_type"],
+                                 overwrite=False)
+        await _audit(session, row["client_id"], "device.create", "devices", device_id,
+                     after={"code": row["target_code"], "topic": item.topic,
+                            "type": row["device_type"], **counts})
+        if item.collector_code and (row["plant_id"], item.collector_code) not in seen_collectors:
+            seen_collectors.add((row["plant_id"], item.collector_code))
+            summary["collectors"] += 1
         summary["devices"] += 1
         summary["bound"] += counts["bound"]
         summary["unmapped"] += counts["unmapped"]
+
+    for row in (r for r in plan if r["action"] == "attach"):
+        item = items[row["topic"]]
+        owner = await _device_by_code(session, row["plant_id"], row["target_code"])
+        if owner is None:
+            skip(row, f"{row['target_code']} was not registered, so there is "
+                      f"nothing to attach its strings to")
+            continue
+        try:
+            await attach_topic(session, owner.id, item.topic,
+                               note=f"PV strings of {owner.code}, seen on the broker")
+        except TopicRefused as exc:
+            skip(row, str(exc))
+            continue
+        counts = await bind_tags(session, owner.client_id, owner.id,
+                                 list(item.source_keys), owner.type_code,
+                                 overwrite=False)
+        await _audit(session, owner.client_id, "device.topic.add", "devices", owner.id,
+                     after={"topic": item.topic, **counts})
+        summary["attached"] += 1
+        summary["bound"] += counts["bound"]
+        summary["kept"] += counts["kept"]
+        summary["unmapped"] += counts["unmapped"]
+
+    for row in (r for r in plan if r["action"] == "refresh"):
+        touched = False
+        if row["interval_change"]:
+            old, new = row["interval_change"]
+            await session.execute(text(
+                "UPDATE devices SET expected_interval_s = :new WHERE id = :id"
+            ), {"new": new, "id": row["device_id"]})
+            await _audit(session, row["client_id"], "device.update", "devices",
+                         row["device_id"], before={"expected_interval_s": old},
+                         after={"expected_interval_s": new, "source": "measured"})
+            summary["intervals"] += 1
+            touched = True
+        if row["new_keys"]:
+            counts = await bind_tags(session, row["client_id"], row["device_id"],
+                                     row["new_keys"], row["device_type"],
+                                     overwrite=False)
+            await _audit(session, row["client_id"], "device.bindings.add", "devices",
+                         row["device_id"], after={"keys": row["new_keys"], **counts})
+            summary["bound"] += counts["bound"]
+            summary["kept"] += counts["kept"]
+            touched = True
+        if touched:
+            summary["refreshed"] += 1
     return summary
+
+
+async def devices_without_string_count(
+    session: AsyncSession, device_ids: list[int]
+) -> list[str]:
+    """Devices bound to PV-string Tags but with no string count recorded.
+
+    String Analysis draws strings only up to `devices.string_count`, which a
+    person sets in Tag Mapping: a register map publishes every input it has,
+    and an unused one reads zero exactly like a dead string. So bindings alone
+    never set it — this only names who still needs it.
+    """
+    if not device_ids:
+        return []
+    # Named with Client and Plant: Device codes repeat across Plants, and a
+    # bare `INVERTER_1` would stand for every Client's first Inverter at once.
+    rows = (await session.execute(text("""
+        SELECT DISTINCT c.code AS client_code, p.code AS plant_code, d.code
+          FROM devices d
+          JOIN plants p  ON p.id = d.plant_id
+          JOIN clients c ON c.id = p.client_id
+          JOIN device_tag_bindings b ON b.device_id = d.id
+          JOIN tags t ON t.id = b.tag_id
+         WHERE d.id = ANY(:ids) AND d.string_count IS NULL
+           AND t.code ~ '^PV[0-9]+_CURRENT$'
+         ORDER BY 1, 2, 3
+    """), {"ids": device_ids})).all()
+    return [f"{r.client_code}/{r.plant_code}/{r.code}" for r in rows]

@@ -422,7 +422,7 @@ export function OnboardingWizard(): JSX.Element {
   const plantCodes: PublishingCode[] | undefined = publishingPlants.data?.map((p) => ({
     code: p.plant_code,
     unregistered: p.registered_plant_id === null,
-    title: `${p.device_count} device(s), last heard ${formatAge((Date.now() - Date.parse(p.last_seen)) / 1000)} ago.`,
+    title: `${p.device_count} device(s), last heard ${formatAge((Date.now() - Date.parse(p.last_seen)) / 1000)}.`,
   }));
   const plantCodePrefilled = usePrefillOnce(plant.code, plantCodes, (code) =>
     setPlant((current) => ({ ...current, code })),

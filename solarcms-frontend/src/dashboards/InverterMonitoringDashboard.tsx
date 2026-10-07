@@ -43,7 +43,7 @@ import { useLatestValues } from "@/api/useLatestValues";
 import { qk } from "@/api/queryKeys";
 import * as devicesApi from "@/api/endpoints/devices";
 import type { DeviceDetail, DeviceListItem } from "@/api/schemas";
-import { Panel, InfoHint, SelectBox } from "@/components/ui";
+import { Button, Panel, InfoHint, SelectBox } from "@/components/ui";
 import {AwaitingDeviceDataState, EmptyState, ErrorState, SkeletonKpiRow, SkeletonTable} from "@/components/state";
 import { CommStatusBadge, LastSeen, PlantPicker } from "@/components/domain";
 import { DataTable, type Column } from "@/components/tables/DataTable";
@@ -64,6 +64,7 @@ import {
 } from "@/components/icons";
 import { UNDEFINED_DISPLAY, formatNumber, formatValue } from "@/format/value";
 import { InverterCard, inverterCardTagIds } from "@/components/devices/InverterCard";
+import { StatusMeaningsDrawer, useStatusLookup } from "@/components/devices/StatusMeanings";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
@@ -184,6 +185,10 @@ export function InverterMonitoringDashboard(): JSX.Element {
   // Timestamps render in the Plant's zone, never the browser's (Guardrail 11).
   const plantQuery = usePlant(plantId);
   const timezone = plantQuery.data?.timezone ?? DEFAULT_TIMEZONE;
+  /** What each status code (`STS`) means at this Plant, as the client recorded it. */
+  const { lookup: statusLookup } = useStatusLookup(plantId);
+  const [meaningsOpen, setMeaningsOpen] = useState(false);
+  const typeNames = useMemo(() => new Map([[INVERTER_TYPE_CODE, "Inverter"]]), []);
 
   /**
    * Which measure the bars compare, as a Tag id.
@@ -500,6 +505,14 @@ export function InverterMonitoringDashboard(): JSX.Element {
               ))}
             </SelectBox>
           ) : null}
+          {plantId !== null && inverters.length > 0 ? (
+            <Button
+              onClick={() => setMeaningsOpen(true)}
+              title="What each status code the Inverters send means at this Plant"
+            >
+              Status meanings
+            </Button>
+          ) : null}
           <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
         </div>
       </header>
@@ -666,6 +679,7 @@ export function InverterMonitoringDashboard(): JSX.Element {
                               }
                               onSelect={setInspecting}
                               selected={inspecting?.id === row.device.id}
+                              statusLookup={statusLookup}
                             />
                           </div>
                         );
@@ -761,6 +775,16 @@ export function InverterMonitoringDashboard(): JSX.Element {
           />
         ) : null}
       </Drawer>
+
+      {plantId !== null ? (
+        <StatusMeaningsDrawer
+          open={meaningsOpen}
+          onClose={() => setMeaningsOpen(false)}
+          plantId={plantId}
+          plantName={plantQuery.data?.name ?? "this Plant"}
+          typeNames={typeNames}
+        />
+      ) : null}
     </div>
   );
 }

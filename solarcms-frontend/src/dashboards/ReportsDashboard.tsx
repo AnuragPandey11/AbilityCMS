@@ -25,32 +25,25 @@
  * that only the ABT Meter may produce.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { usePlant, useReportTable } from "@/api/hooks";
 import * as reportsApi from "@/api/endpoints/reports";
 import type { ReportFormat, ReportKind, ReportPeriod } from "@/api/endpoints/reports";
-import type { ReportCellValue, ReportColumn, ReportTable } from "@/api/schemas";
 import { triggerDownload } from "@/api/client";
 import { isApiError } from "@/api/problem";
 import { usePermission } from "@/auth/usePermission";
 import { usePlantScope } from "@/state/usePlantScope";
 import { PlantPicker } from "@/components/domain";
-import { Button, Panel, SegmentedControl, inputClass } from "@/components/ui";
-import { DataTable, type Column } from "@/components/tables/DataTable";
-import { EmptyState, ErrorState, ForbiddenState, SkeletonTable } from "@/components/state";
-import { IconExport, IconWarning } from "@/components/icons";
-import { DEFAULT_TIMEZONE, timezoneLabel, toDateTimeInput } from "@/format/datetime";
-import {
-  columnHeading,
-  customRangeEnd,
-  customRangeProblem,
-  formatReportCell,
-  formatReportPeriod,
-  isNumericColumn,
-  shiftDate,
-} from "./reports/format";
+import { Button, Panel, SegmentedControl } from "@/components/ui";
+import { EmptyState, ForbiddenState } from "@/components/state";
+import { IconExport } from "@/components/icons";
+import { DEFAULT_TIMEZONE, toDateTimeInput } from "@/format/datetime";
+import { customRangeEnd, customRangeProblem } from "./reports/format";
+import { MAX_CUSTOM_DAYS, ReportPeriodPicker } from "./reports/ReportPeriodPicker";
 import { printHtml } from "./reports/printHtml";
 import { ClientReportRuns } from "./reports/ClientReportRuns";
+import { ReportPreview } from "./reports/ReportPreview";
+import { CustomReportBuilder } from "./reports/CustomReportBuilder";
 
 const KINDS: { value: ReportKind; label: string; hint: string }[] = [
   {
@@ -76,17 +69,6 @@ const KINDS: { value: ReportKind; label: string; hint: string }[] = [
   { value: "alarm", label: "Alarm Report", hint: "Every Alarm opened in the period." },
 ];
 
-const PERIODS: { value: ReportPeriod; label: string; hint?: string }[] = [
-  { value: "today", label: "Today", hint: "Since the Plant's midnight." },
-  { value: "yesterday", label: "Yesterday" },
-  { value: "last_7_days", label: "Last 7 Days", hint: "Today and the six days before it." },
-  { value: "last_30_days", label: "Last 30 Days", hint: "Today and the 29 days before it." },
-  { value: "custom", label: "Custom" },
-];
-
-// Mirrors `domain/periods.MAX_REPORT_DAYS`; the server enforces it regardless.
-const MAX_CUSTOM_DAYS = 366;
-
 const FORMATS: { format: ReportFormat; label: string; hint: string }[] = [
   { format: "csv", label: "CSV", hint: "The rows only — opens as a table anywhere." },
   { format: "xlsx", label: "Excel", hint: "The table, with its Plant, period and notes." },
@@ -103,13 +85,6 @@ function unbroken<T extends { label: string }>(options: T[]): (T & { label: JSX.
 }
 
 const KIND_OPTIONS = unbroken(KINDS);
-const PERIOD_OPTIONS = unbroken(PERIODS);
-
-interface PreviewRow {
-  index: number;
-  cells: Record<string, ReportCellValue>;
-  flags: Record<string, string>;
-}
 
 type Notice = { tone: "info" | "bad"; text: string };
 
@@ -120,7 +95,6 @@ export function ReportsDashboard(): JSX.Element {
   const zone = plantQuery.data?.timezone ?? DEFAULT_TIMEZONE;
   // The Plant's wall clock, `YYYY-MM-DDTHH:MM`, which the inputs also hold.
   const now = toDateTimeInput(Date.now(), zone);
-  const today = now.slice(0, 10);
 
   const [kind, setKind] = useState<ReportKind>("daily_plant");
   const [period, setPeriod] = useState<ReportPeriod>("today");
@@ -131,14 +105,13 @@ export function ReportsDashboard(): JSX.Element {
   const [toTime, setToTime] = useState("23:59");
   const [exporting, setExporting] = useState<ReportFormat | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  /**
+   * The ready-made reports, or one built from any Devices' readings. Standard
+   * first and by default: the common case should not have to see a builder.
+   */
+  const [mode, setMode] = useState<"standard" | "custom">("standard");
 
   const choosePeriod = (next: ReportPeriod) => {
-    // Custom opens on the last seven days rather than two empty inputs: a
-    // range to adjust is quicker than one to invent.
-    if (next === "custom" && (!fromDate || !toDate)) {
-      setToDate(today);
-      setFromDate(shiftDate(today, -6));
-    }
     setPeriod(next);
     setNotice(null);
   };
@@ -147,7 +120,7 @@ export function ReportsDashboard(): JSX.Element {
   const rangeProblem =
     period === "custom" ? customRangeProblem(range, now, MAX_CUSTOM_DAYS) : null;
   const query: reportsApi.ReportTableQuery | null =
-    canGenerate && plantId !== null && rangeProblem === null
+    mode === "standard" && canGenerate && plantId !== null && rangeProblem === null
       ? { kind, plantId, period, ...(period === "custom" ? range : {}) }
       : null;
   // Today's row is still being written; a range that has already stopped is not.
@@ -195,17 +168,38 @@ export function ReportsDashboard(): JSX.Element {
         <div className="min-w-0">
           <h1 className="page-title">Reports</h1>
           <p className="mt-1.5 text-sm text-ink-muted">
-            Generate and export Plant reports (CSV / Excel / PDF).
+            {mode === "standard"
+              ? "Generate and export Plant reports (CSV / Excel / PDF)."
+              : "Any readings from any of your Plants' Devices, at the interval you choose."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
-          <PlantPicker
-            plants={plants}
-            value={plantId}
-            onChange={setPlantId}
-            label="Plant"
+          <SegmentedControl
+            label="Kind of report"
             size="lg"
+            value={mode}
+            onChange={(next) => {
+              setMode(next);
+              setNotice(null);
+            }}
+            options={[
+              { value: "standard", label: "Standard", hint: "The ready-made Plant reports." },
+              {
+                value: "custom",
+                label: "Build your own",
+                hint: "Choose Plants, Devices, readings and the interval yourself.",
+              },
+            ]}
           />
+          {mode === "standard" ? (
+            <PlantPicker
+              plants={plants}
+              value={plantId}
+              onChange={setPlantId}
+              label="Plant"
+              size="lg"
+            />
+          ) : null}
         </div>
       </header>
 
@@ -214,6 +208,8 @@ export function ReportsDashboard(): JSX.Element {
           title="No Plants assigned"
           detail="A report is about one Plant, and this account has none. An administrator assigns Plants under Users."
         />
+      ) : mode === "custom" ? (
+        <CustomReportBuilder plants={plants} startPlantId={plantId} />
       ) : (
         <>
           <Panel title="Report generator">
@@ -236,82 +232,21 @@ export function ReportsDashboard(): JSX.Element {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div className="min-w-0">
                   <p className="field-label mb-2">Period</p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="max-w-full overflow-x-auto">
-                      <SegmentedControl
-                        label="Period"
-                        value={period}
-                        onChange={choosePeriod}
-                        options={PERIOD_OPTIONS}
-                      />
-                    </div>
-                    {period === "custom" ? (
-                      <div className="flex flex-wrap items-center gap-2">
-                        {/* Each day keeps its time beside it when the row wraps.
-                            Sized by wrappers: the shared input class is full-width. */}
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-40">
-                            <input
-                              type="date"
-                              aria-label="First day"
-                              value={fromDate}
-                              max={toDate || today}
-                              onChange={(event) => setFromDate(event.target.value)}
-                              className={inputClass}
-                              aria-describedby="report-range-note"
-                            />
-                          </div>
-                          <div className="w-32">
-                            <input
-                              type="time"
-                              aria-label="Start time"
-                              value={fromTime}
-                              max={fromDate === today ? now.slice(11, 16) : undefined}
-                              onChange={(event) => setFromTime(event.target.value)}
-                              className={inputClass}
-                              aria-describedby="report-range-note"
-                            />
-                          </div>
-                        </div>
-                        <span className="text-xs text-ink-muted">to</span>
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-40">
-                            <input
-                              type="date"
-                              aria-label="Last day"
-                              value={toDate}
-                              min={fromDate || undefined}
-                              max={today}
-                              onChange={(event) => setToDate(event.target.value)}
-                              className={inputClass}
-                              aria-describedby="report-range-note"
-                            />
-                          </div>
-                          <div className="w-32">
-                            <input
-                              type="time"
-                              aria-label="End time"
-                              value={toTime}
-                              min={fromDate === toDate ? fromTime : undefined}
-                              onChange={(event) => setToTime(event.target.value)}
-                              className={inputClass}
-                              aria-describedby="report-range-note"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                  {rangeProblem ? (
-                    <p id="report-range-note" className="mt-2 text-xs text-bad">
-                      {rangeProblem}
-                    </p>
-                  ) : period === "custom" ? (
-                    <p id="report-range-note" className="mt-2 text-xs text-ink-faint">
-                      Times are the Plant's clock ({timezoneLabel(zone)}). The report stops at
-                      the end time; 23:59 runs to the end of the day.
-                    </p>
-                  ) : null}
+                  <ReportPeriodPicker
+                    period={period}
+                    onPeriod={choosePeriod}
+                    range={range}
+                    onRange={(next) => {
+                      setFromDate(next.fromDate);
+                      setFromTime(next.fromTime);
+                      setToDate(next.toDate);
+                      setToTime(next.toTime);
+                    }}
+                    now={now}
+                    zone={zone}
+                    problem={rangeProblem}
+                    noteId="report-range-note"
+                  />
                 </div>
 
                 <div className="flex flex-wrap gap-2 lg:shrink-0">
@@ -357,182 +292,11 @@ export function ReportsDashboard(): JSX.Element {
         </>
       )}
 
-      <ClientReportRuns />
+      {mode === "standard" ? <ClientReportRuns /> : null}
     </div>
   );
 }
 
 function describe(error: unknown): string {
   return isApiError(error) ? error.displayMessage : "Could not download the report.";
-}
-
-function ReportPreview({
-  table,
-  loading,
-  fetching,
-  stale,
-  error,
-  retry,
-  waitingForRange,
-}: {
-  table: ReportTable | undefined;
-  loading: boolean;
-  fetching: boolean;
-  stale: boolean;
-  error: unknown;
-  retry: () => void;
-  waitingForRange: boolean;
-}): JSX.Element {
-  const zone = table?.plant.timezone ?? DEFAULT_TIMEZONE;
-
-  const rows = useMemo<PreviewRow[]>(() => {
-    if (!table) return [];
-    const flags = new Map<number, Record<string, string>>();
-    for (const flag of table.flags) {
-      flags.set(flag.row, { ...(flags.get(flag.row) ?? {}), [flag.key]: flag.reason });
-    }
-    return table.rows.map((cells, index) => ({ index, cells, flags: flags.get(index) ?? {} }));
-  }, [table]);
-
-  const columns = useMemo<Column<PreviewRow>[]>(
-    () =>
-      (table?.columns ?? []).map((column) => ({
-        key: column.key,
-        header: columnHeading(column),
-        align: isNumericColumn(column) ? "right" : "left",
-        render: (row) => (
-          <ReportCell
-            column={column}
-            value={row.cells[column.key]}
-            flag={row.flags[column.key]}
-            zone={zone}
-          />
-        ),
-        sortValue: (row) => row.cells[column.key] ?? null,
-        filterValue: (row) => formatReportCell(column, row.cells[column.key], zone),
-      })),
-    [table, zone],
-  );
-
-  const count = table?.rows.length ?? 0;
-  const title = table
-    ? `${table.title} — preview (${count} ${count === 1 ? "row" : "rows"})`
-    : "Preview";
-  const subtitle = table
-    ? `${table.plant.name} (${table.plant.code}) · ${formatReportPeriod(table)} · ${timezoneLabel(
-        table.plant.timezone,
-      )} time`
-    : undefined;
-
-  let body: JSX.Element;
-  if (error && !table) {
-    body = (
-      <div className="p-4">
-        <ErrorState error={error} retry={retry} />
-      </div>
-    );
-  } else if (!table) {
-    body = waitingForRange ? (
-      <p className="p-4 text-xs text-ink-faint">Choose a valid range to see the report.</p>
-    ) : loading ? (
-      <div className="p-4">
-        <SkeletonTable rows={6} columns={6} />
-      </div>
-    ) : (
-      <p className="p-4 text-xs text-ink-faint">Choose a Plant to see the report.</p>
-    );
-  } else {
-    body = (
-      <>
-        {error ? (
-          // The last good table stays, marked as not the one asked for.
-          <div className="border-b border-line p-4">
-            <ErrorState error={error} retry={retry} />
-          </div>
-        ) : null}
-        <div
-          className={`p-4 transition-opacity ${stale ? "opacity-50" : ""}`}
-          aria-busy={stale}
-        >
-          <DataTable
-            rows={rows}
-            columns={columns}
-            rowKey={(row) => row.index}
-            emptyMessage="No rows for this period."
-            filterPlaceholder="Filter rows…"
-            minColumnWidth={120}
-          />
-        </div>
-        {table.notes.length > 0 ? (
-          <div className="border-t border-line px-4 py-3">
-            <p className="text-xs font-medium text-ink-muted">How these figures were made</p>
-            <ul className="mt-1.5 list-disc space-y-1 pl-4 text-xs leading-snug text-ink-faint">
-              {table.notes.map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </>
-    );
-  }
-
-  return (
-    <Panel
-      title={title}
-      subtitle={subtitle}
-      padding="p-0"
-      actions={
-        fetching ? (
-          <span className="text-xs text-ink-faint" role="status">
-            Updating…
-          </span>
-        ) : null
-      }
-    >
-      {body}
-    </Panel>
-  );
-}
-
-function ReportCell({
-  column,
-  value,
-  flag,
-  zone,
-}: {
-  column: ReportColumn;
-  value: ReportCellValue | undefined;
-  flag: string | undefined;
-  zone: string;
-}): JSX.Element {
-  const text = formatReportCell(column, value, zone);
-  const numeric = isNumericColumn(column);
-  if (value === null || value === undefined) {
-    return (
-      <span className="whitespace-nowrap text-ink-faint" title="Nothing to read — not zero.">
-        {text}
-      </span>
-    );
-  }
-  if (flag) {
-    // Shown unaltered and marked, never clamped (Guardrail 33).
-    return (
-      <span
-        className="inline-flex items-center gap-1 whitespace-nowrap text-warn tabular-nums"
-        title={flag}
-      >
-        <IconWarning size={12} />
-        {text}
-      </span>
-    );
-  }
-  // Figures, dates and times never break across lines; only a long sentence
-  // (an Alarm's message) wraps, at a width it can be read at.
-  const layout = numeric
-    ? "whitespace-nowrap tabular-nums"
-    : column.kind === "text" && text.length > 40
-      ? "block min-w-[18rem] whitespace-normal"
-      : "whitespace-nowrap";
-  return <span className={layout}>{text}</span>;
 }

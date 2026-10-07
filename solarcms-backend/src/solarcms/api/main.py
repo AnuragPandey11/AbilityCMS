@@ -16,14 +16,17 @@ from solarcms.api.routers import (
     auth,
     catalog,
     clients,
+    data_issues,
     devices,
     discovery,
+    forecast,
     health,
     operations,
     plants,
     readings,
     regions,
     reports,
+    status_codes,
     users,
 )
 from solarcms.api.ws import router as ws_router
@@ -70,7 +73,8 @@ def create_app() -> FastAPI:
     for router in (auth.router, clients.router, plants.router,
                    plants.blocks_router, devices.router, discovery.router,
                    catalog.router, regions.router, readings.router, alarms.router,
-                   reports.router, operations.router,
+                   reports.router, operations.router, data_issues.router, forecast.router,
+                   status_codes.router,
                    users.router, health.router, audit.router, ws_router):
         app.include_router(router)
 

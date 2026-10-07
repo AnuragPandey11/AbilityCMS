@@ -66,6 +66,33 @@ class Batch:
         self.stream_entries.clear()
         self.opened_at = datetime.now(UTC)
 
+    def take(self) -> Batch:
+        """Hand over everything buffered and start empty, with no await between.
+
+        ⚠ The only safe way to flush. `flush` used to copy the lists, await the
+        COPY, and *then* clear — so a second flush started in that await (the
+        2 s timer and the per-message check both call it) wrote the same rows
+        again, and a message buffered in that await was cleared without ever
+        being written. Measured on 7 Oct 2026: one raw row in five on
+        KULAR_GREEN stored twice, same microsecond, same `seq`.
+        """
+        taken = Batch(
+            readings=self.readings, raw=self.raw,
+            stream_entries=self.stream_entries, opened_at=self.opened_at,
+        )
+        self.readings = []
+        self.raw = []
+        self.stream_entries = []
+        self.opened_at = datetime.now(UTC)
+        return taken
+
+    def restore(self, taken: Batch) -> None:
+        """Put a batch whose write failed back in front, to be retried in order."""
+        self.readings[:0] = taken.readings
+        self.raw[:0] = taken.raw
+        self.stream_entries[:0] = taken.stream_entries
+        self.opened_at = min(self.opened_at, taken.opened_at)
+
     @property
     def is_empty(self) -> bool:
         return not self.readings and not self.raw
@@ -81,6 +108,9 @@ class IngestWorker:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.batch = Batch()
+        # One flush writes at a time, so batches commit in the order they
+        # were taken and a retry never races the next batch.
+        self._flush_lock = asyncio.Lock()
         self.patterns: list[TopicPattern] = []
         self._pool: asyncpg.Pool | None = None
         self._stopping = asyncio.Event()
@@ -286,37 +316,39 @@ class IngestWorker:
         history if a binding scale is later found wrong (MASTER §5.3), so a
         Reading that exists without its raw payload would be unrepairable.
         """
-        if self.batch.is_empty or self._pool is None:
-            return
-        readings = list(self.batch.readings)
-        raw = list(self.batch.raw)
-        stream_entries = list(self.batch.stream_entries)
+        async with self._flush_lock:
+            if self.batch.is_empty or self._pool is None:
+                return
+            # Taken, not copied: rows buffered while this one writes belong to
+            # the next flush, and nothing taken here can be written twice.
+            taken = self.batch.take()
+            readings, raw = taken.readings, taken.raw
 
-        try:
-            async with self._pool.acquire() as connection, connection.transaction():
-                if readings:
-                    await connection.copy_records_to_table(
-                        "readings", records=readings, columns=list(READINGS_COLUMNS)
-                    )
-                if raw:
-                    await connection.copy_records_to_table(
-                        "mqtt_raw", records=raw, columns=list(MQTT_RAW_COLUMNS)
-                    )
-        except Exception as exc:
-            # Recorded before it propagates: the batch stays buffered for the
-            # next attempt, and the page says why nothing is being saved.
-            self.heartbeat.failed(exc)
-            raise
-        self.heartbeat.wrote(f"{len(readings):,} readings, {len(raw):,} raw messages")
+            try:
+                async with self._pool.acquire() as connection, connection.transaction():
+                    if readings:
+                        await connection.copy_records_to_table(
+                            "readings", records=readings, columns=list(READINGS_COLUMNS)
+                        )
+                    if raw:
+                        await connection.copy_records_to_table(
+                            "mqtt_raw", records=raw, columns=list(MQTT_RAW_COLUMNS)
+                        )
+            except Exception as exc:
+                # Put back in front for the next attempt, and recorded before it
+                # propagates so the page says why nothing is being saved.
+                self.batch.restore(taken)
+                self.heartbeat.failed(exc)
+                raise
+            self.heartbeat.wrote(f"{len(readings):,} readings, {len(raw):,} raw messages")
 
-        # Only after commit. The alarm worker must never see a Reading that a
-        # rolled-back transaction means never happened.
-        await live.publish_to_alarm_stream(stream_entries)
+            # Only after commit. The alarm worker must never see a Reading that
+            # a rolled-back transaction means never happened.
+            await live.publish_to_alarm_stream(taken.stream_entries)
 
-        self.stats["stored"] += len(readings)
-        self.stats["flushes"] += 1
-        log.debug("flushed", readings=len(readings), raw=len(raw))
-        self.batch.clear()
+            self.stats["stored"] += len(readings)
+            self.stats["flushes"] += 1
+            log.debug("flushed", readings=len(readings), raw=len(raw))
 
     async def _flush_loop(self) -> None:
         """Time-based flush, so a trickle of messages is not held indefinitely.

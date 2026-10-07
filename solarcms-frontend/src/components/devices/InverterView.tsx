@@ -19,8 +19,10 @@
  *   Model and V on another is labelled as each.
  * - **Operating status** — `GET /devices/{id}/operating-status`: the Plant's
  *   start/stop rule on this machine's own output. The Inverter's own status
- *   code is shown beside it *as sent*: nobody has supplied what its values
- *   mean, and "512 → Running" would be a translation this screen invented.
+ *   code has a tile of its own beside it, with the meaning the client recorded
+ *   for this Plant (Status meanings, migration 0032) — and *as sent* where
+ *   nobody has, because "512 → Running" invented here would be read as the
+ *   Inverter's own word.
  * - **Strings** — PV1 to PV*n*, where *n* is the unit's recorded string count.
  *   With none recorded, none of the group is bound, and the section says so.
  *
@@ -58,6 +60,8 @@ import { FittedFigure } from "@/components/charts/FittedFigure";
 import { Skeleton } from "@/components/state";
 import { usePermission } from "@/auth/usePermission";
 import { UNDEFINED_DISPLAY, digitsForUnit, formatDigital, formatHeadline, isDigital } from "@/format/value";
+import { STATUS_KIND_TONE, STATUS_KIND_WORD, type StatusMeaning } from "@/format/statusCode";
+import { StatusMeaningsDrawer, useStatusLookup } from "./StatusMeanings";
 import { formatDateTime, formatTime } from "@/format/datetime";
 
 // ── The layout ───────────────────────────────────────────────────────────────
@@ -273,16 +277,11 @@ function clock(at: string | null, timeZone: string): string {
 function operatingTile(
   status: DeviceOperatingStatus | undefined,
   isLoading: boolean,
-  code: Filled,
   timeZone: string,
 ): JSX.Element {
-  const codeNote =
-    code.value !== null
-      ? `Status code ${code.value}`
-      : undefined;
-  const codeTitle =
-    " The Inverter's own status code is shown as sent: what each value means has not been " +
-    "supplied (TAG_CATALOGUE §2.4 leaves it blank), so it is not translated into a word.";
+  // The Inverter's own status code has its own tile beside this one.
+  const codeNote = undefined;
+  const codeTitle = "";
   if (!status) {
     return (
       <StateTile
@@ -357,6 +356,69 @@ function operatingTile(
         />
       );
   }
+}
+
+/**
+ * The Inverter's own status, as the client described its code for this Plant.
+ * Where nobody has, the code itself is the word — shown as sent, never guessed.
+ */
+function deviceStatusTile(
+  code: Filled,
+  meaning: StatusMeaning | null,
+  onEdit: (() => void) | null,
+): JSX.Element {
+  const edit = onEdit ? (
+    <button
+      type="button"
+      onClick={onEdit}
+      className="font-medium text-accent hover:underline"
+    >
+      {meaning ? "Edit meanings" : "Set what it means"}
+    </button>
+  ) : null;
+  if (code.value === null) {
+    return (
+      <StateTile
+        label="Inverter status"
+        word={UNDEFINED_DISPLAY}
+        tone="faint"
+        detail={code.reason ?? undefined}
+        title={code.reason ?? undefined}
+      />
+    );
+  }
+  if (!meaning) {
+    return (
+      <StateTile
+        label="Inverter status"
+        word={`Code ${code.value}`}
+        tone="ink"
+        detail={
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span>No meaning recorded</span>
+            {edit}
+          </span>
+        }
+        title={`The Inverter sent status code ${code.value}. No meaning has been recorded for this code at this Plant, so it is shown as sent.`}
+      />
+    );
+  }
+  return (
+    <StateTile
+      label="Inverter status"
+      word={meaning.label}
+      tone={STATUS_KIND_TONE[meaning.kind]}
+      detail={
+        <span className="flex flex-wrap items-center gap-x-2">
+          <span>
+            Code {code.value} · {STATUS_KIND_WORD[meaning.kind].toLowerCase()}
+          </span>
+          {edit}
+        </span>
+      }
+      title={`Status code ${code.value}, which this Plant records as “${meaning.label}”.${meaning.note ? ` ${meaning.note}` : ""}`}
+    />
+  );
 }
 
 const COMM: Record<CommStatus, { word: string; tone: Tone; note: string }> = {
@@ -502,6 +564,13 @@ export function InverterView({
   const detail = detailQuery.data as DeviceDetail | undefined;
   const operatingQuery = useDeviceOperatingStatus(device.id);
   const latest = useDeviceLatest(device.id);
+  const plantId = detail?.plant_id;
+  const { lookup: statusLookup, canEdit: canEditMeanings } = useStatusLookup(plantId);
+  const [meaningsOpen, setMeaningsOpen] = useState(false);
+  const typeNames = useMemo(
+    () => new Map([[device.type_code, device.type_name ?? device.type_code]]),
+    [device.type_code, device.type_name],
+  );
   // Bindings say "not bound" where this session may read them. For everybody
   // else the honest reason is the weaker "nothing received".
   const canReadBindings = usePermission("config.modify");
@@ -665,7 +734,7 @@ export function InverterView({
           <div className="grid grid-cols-2 gap-3">
             <FigureTile filled={efficiency} />
             <FigureTile filled={temperature} />
-            {operatingTile(operatingQuery.data, operatingQuery.isLoading, statusCode, timeZone)}
+            {operatingTile(operatingQuery.data, operatingQuery.isLoading, timeZone)}
             <StateTile
               label="Comm Status"
               word={comm.word}
@@ -675,6 +744,15 @@ export function InverterView({
               }
               title={comm.note}
             />
+            <div className="col-span-2">
+              {deviceStatusTile(
+                statusCode,
+                statusCode.tag && statusCode.value !== null
+                  ? statusLookup(device.type_code, statusCode.tag.code, statusCode.value)
+                  : null,
+                canEditMeanings && plantId != null ? () => setMeaningsOpen(true) : null,
+              )}
+            </div>
           </div>
         </Panel>
       </div>
@@ -776,6 +854,15 @@ export function InverterView({
             ))}
           </div>
         </details>
+      ) : null}
+      {plantId != null ? (
+        <StatusMeaningsDrawer
+          open={meaningsOpen}
+          onClose={() => setMeaningsOpen(false)}
+          plantId={plantId}
+          plantName="this Plant"
+          typeNames={typeNames}
+        />
       ) : null}
     </div>
   );

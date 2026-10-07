@@ -55,6 +55,8 @@ import {
   formatNumber,
 } from "@/format/value";
 import { ageSeconds, formatAge } from "@/format/datetime";
+import { NO_MEANINGS, type StatusLookup } from "@/format/statusCode";
+import { StatusCodeValue } from "./StatusMeanings";
 
 /** Each position and the Tags that can fill it, preferred first. */
 const POSITIONS = {
@@ -65,6 +67,9 @@ const POSITIONS = {
   dcInput: ["DC_POWER"],
   energyToday: ["ENERGY_TODAY"],
   energyTotal: ["ENERGY_TOTAL", "ENERGY_CUMULATIVE_MWH"],
+  // The Inverter's own status code (`STS`), shown with the meaning the client
+  // recorded for this Plant, or as sent where nobody has.
+  status: ["DEVICE_STATUS"],
 } as const satisfies Record<string, readonly string[]>;
 
 /** Segments in the load meter. 24 puts a boundary at every quarter. */
@@ -323,6 +328,7 @@ export function InverterCard({
   positionNote,
   onSelect,
   selected,
+  statusLookup = NO_MEANINGS,
 }: {
   device: DeviceListItem;
   /** The INVERTER Type's curated columns, from the catalogue. */
@@ -341,6 +347,8 @@ export function InverterCard({
   positionNote?: string;
   onSelect: (device: DeviceListItem) => void;
   selected?: boolean;
+  /** What each status code means at this Plant; omitted, codes show as sent. */
+  statusLookup?: StatusLookup;
 }): JSX.Element {
   const comm = device.comm_status ?? "unknown";
   const style = COMM_CARD_STYLE[comm];
@@ -352,6 +360,8 @@ export function InverterCard({
   const dcInput = pick(POSITIONS.dcInput);
   const energyToday = pick(POSITIONS.energyToday);
   const energyTotal = pick(POSITIONS.energyTotal);
+  const status = pick(POSITIONS.status);
+  const statusValue = valueOf(status, values);
 
   const powerValue = valueOf(power, values);
   const powerHighlighted = power !== null && power.tagId === highlightTagId;
@@ -364,7 +374,7 @@ export function InverterCard({
   // The remaining curated columns. The one being compared is kept on the card
   // even when it is not among the first few, so its "#n" has a number beside it.
   const placed = new Set(
-    [power, efficiency, dcInput, energyToday, energyTotal].map((field) => field?.code),
+    [power, efficiency, dcInput, energyToday, energyTotal, status].map((field) => field?.code),
   );
   const remaining = columns.filter((column) => !placed.has(column.tag_code));
   const others = remaining.slice(0, MAX_OTHERS);
@@ -408,6 +418,16 @@ export function InverterCard({
               · {age === null ? "never seen" : formatAge(age)}
             </span>
           </div>
+          {status && statusValue !== undefined ? (
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px]">
+              <span className="shrink-0 text-ink-faint">Status</span>
+              <StatusCodeValue
+                value={statusValue}
+                meaning={statusLookup(device.type_code, status.code, statusValue)}
+                size="xs"
+              />
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {position !== undefined ? (

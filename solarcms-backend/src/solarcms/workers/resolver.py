@@ -9,7 +9,8 @@ Resolution order:
 1. **Exact match on `devices.source_address`.** MASTER §3.7 established that this
    column already *is* the data-source mapping, which is why
    `data_source_connections` was dropped. It covers both topic shapes with no
-   parsing at all.
+   parsing at all. Then an exact match on `device_topics.topic` — a Device's
+   extra topics, such as an Inverter's PV strings (migration 0030).
 2. **Pattern match against the ingress registry**, then lookup by the captured
    codes. This is what lets the canonical contract and a legacy shape coexist as
    data rather than as branches in code (I-1).
@@ -162,6 +163,20 @@ async def _device_row(session: AsyncSession, topic: str, patterns: list[TopicPat
          WHERE d.source_address = :topic AND d.status <> 'decommissioned'
     """), {"topic": topic})
     row = exact.first()
+    if row is not None:
+        return row
+
+    # An extra topic of a Device — an Inverter's PV strings published on a
+    # topic of their own (migration 0030). Still an exact match, tried before
+    # any pattern: `…/INVERTER_1_STRING16` would otherwise parse to a Device
+    # code nobody has, and be quarantined while its Inverter is registered.
+    extra = await session.execute(text("""
+        SELECT d.id, d.client_id, d.plant_id, d.expected_interval_s
+          FROM device_topics t
+          JOIN devices d ON d.id = t.device_id
+         WHERE t.topic = :topic AND d.status <> 'decommissioned'
+    """), {"topic": topic})
+    row = extra.first()
     if row is not None:
         return row
 

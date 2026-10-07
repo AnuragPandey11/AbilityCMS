@@ -32,6 +32,7 @@ import {
   IconInverter,
   IconIrradiance,
   IconMapping,
+  IconDataIssues,
   IconMeter,
   IconOverview,
   IconPlant,
@@ -203,6 +204,9 @@ export interface AdminLink {
  */
 export const ADMIN_LINKS: AdminLink[] = [
   { to: "/admin/clients", label: "Clients", permission: "system.admin", icon: IconClient },
+  // The hub for everything the broker sends that is not being kept or not
+  // trusted; first after Clients, because it is where the work is listed.
+  { to: "/admin/data-issues", label: "Data Issues", permission: "config.modify", icon: IconDataIssues },
   { to: "/admin/plant-setup", label: "Plants & Devices", permission: "plant.manage", icon: IconDevices },
   { to: "/admin/hierarchy", label: "Wiring & Diagram", permission: "plant.manage", icon: IconWiring },
   { to: "/admin/bindings", label: "Tag Mapping", permission: "config.modify", icon: IconMapping },

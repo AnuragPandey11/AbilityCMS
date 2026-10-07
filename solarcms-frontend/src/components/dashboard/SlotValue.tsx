@@ -85,7 +85,7 @@ function titleCase(code: string): string {
  */
 export function slotText(slot: ResolvedSlot): string {
   if (slot.value === null) return UNDEFINED_DISPLAY;
-  // The unit decides where it can: three decimals for a ratio, none for a
+  // The unit decides where it can: two decimals for a ratio, none for a
   // count — "17.00 count" invites the reader to look for a precision that
   // cannot exist. Everything else follows magnitude.
   return formatNumber(slot.value, { digits: digitsForUnit(slot.unit) });
@@ -115,7 +115,7 @@ export function Provenance({ slot }: { slot: ResolvedSlot }): JSX.Element | null
 export function SlotTile({ slot }: { slot: ResolvedSlot }): JSX.Element {
   const isUndefined = slot.value === null;
   const explanation = undefinedExplanation(slot);
-  // A ratio is three decimals and always short; a quantity can be a lifetime
+  // A ratio is two decimals and always short; a quantity can be a lifetime
   // energy counter, which is compacted rather than scaled down to fit. The unit
   // the backend supplied is passed through untouched either way (§4.1).
   const headline =

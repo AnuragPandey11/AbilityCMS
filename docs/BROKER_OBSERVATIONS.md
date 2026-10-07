@@ -1,7 +1,10 @@
 # Broker Observations — Client Test Broker
 
-**Version:** 1.2 · **Date:** 16 September 2026 · **Status:** Evidence, not decisions
+**Version:** 1.3 · **Date:** 6 October 2026 · **Status:** Evidence, not decisions
 
+> ⚠ **The broker changed again by 6 October 2026** — a 30 s cycle, per-string
+> topics, and two more Clients. **§8 records it; read §8 first.**
+>
 > ⚠ **The broker changed between 10 and 16 September 2026.** Payload keys on
 > `KULAR_GREEN/DATA` were replaced wholesale, and the weather topic was renamed.
 > Everything in §1 below describes the *10 September* broker and is retained as
@@ -256,6 +259,10 @@ durations, or counters? And are the weather sensors known to be unserviceable?
 | B-12 | The broker publishes 25 keys across 3 topics; the schedule lists ~75 signals for 7 Device Types. When do the remaining signals start publishing? | Scope, tender §8–§11 |
 | B-13 | At ~2.78 s, is per-Reading fidelity wanted, or is one Reading per minute sufficient? Throttling at 60 s discards ~95% and adds 60 s to alarm detection latency. | Retention volume, alarm latency (BACKEND_SPEC §12.4) |
 | B-14 | Payload keys on `KULAR_GREEN/DATA` changed wholesale between 10 and 16 Sep, and the weather topic was renamed `MMS`→`WMS`. **Is there a change process for either?** Every Plant is one silent rename away from decoding nothing. | §7, commissioning |
+| B-15 | Is `{device}_STRING{n}` a stable convention — always the owning Device's code plus `_STRING`, `n` the last string in the message? Are `In`/`Pn` string current (A) and string power (kW)? Why does KULAR_GREEN publish every `Pn` as 0? | §8.2, OPEN-24 |
+| B-16 | VARDHMAN_GROUP `MAIN_MFM`: `P` ≈ 772 kW is ~10× √3·V·I·PF (≈ 76 kW). Which is wrong — a CT ratio on the currents, or the power? And is this meter generation or the mill's own load? | §8.4, OPEN-14/15 |
+| B-17 | ISPL `INVERTER1` sends `EFF` −1 and `CE`/`DE`/`ME`/`PVV`/`PVI` 0 while producing ~390 kW. Is −1 a "not available" sentinel, and will the energy and DC registers be populated? | §8.4 |
+| B-18 | The same key carries different units on different Clients (`VRY` kV vs V; `AGHI` kWh/m² vs Wh/m²). Please supply a per-Client unit sheet — every one so far has been inferred from arithmetic (OPEN-15). | §8.4 |
 
 ---
 
@@ -310,10 +317,80 @@ still unstated (B-7).
 
 ---
 
+## 8. The broker, 6 October 2026 — a 30 s cycle, per-string topics, two new Clients
+
+A 180-second probe of `SCMS/V1/#` (the lowercase `scms/v1/#` delivered nothing),
+then commissioning and 150 s of the production ingest path against a copy of the
+KULAR_GREEN database. 73 topics, every one publishing every **~30 s**.
+
+### 8.1 KULAR_GREEN's existing Devices: unchanged content, faster cycle
+
+All 22 registered topics are still published with exactly the keys they are bound
+to, so every binding still decodes. Only the cadence changed: **~30 s**, against
+`expected_interval_s` 86 on every Device. Nothing alarmed because the sweep
+reads a Device as degraded at 2× its interval, and a faster Device is never
+late — it is only slower to be *noticed* silent (172 s instead of 60 s).
+Refreshed from measurement by `commission-from-broker`.
+
+### 8.2 PV strings arrive on topics of their own
+
+| Topic | Keys |
+|---|---|
+| `…/MCR/INVERTER_n_STRING16` (KULAR_GREEN, ×17) | `I1..I16`, `P1..P16` |
+| `…/MCR/INVERTER_n_STRING28` (KULAR_GREEN, ×17) | `I17..I28`, `P17..P28` |
+| `…/MCR/INVERTER_n_STRING` (VARDHMAN_GROUP, ×4) | `I1..I16`, `P1..P16` |
+| `…/MCR/SMB1_STRING16`, `…/SMB1_STRING24` (ISPL) | `I1..I16`/`P1..P16`, `I17..I24`/`P17..P24` |
+
+**They are the Inverter's own inputs, not a second instrument.** In the first
+round observed, INVERTER_1's `I1..I28` summed to 148.49 A — *exactly* its own
+`PVI` in the same round. After ingest, the stored `PV1..PV28_CURRENT` of all 17
+KULAR_GREEN Inverters summed exactly to each one's own `DC_CURRENT`. On
+VARDHMAN_GROUP `P1` 8.99 against `I1` 11.0 A at `PVV` 795.9 V (8.75 kW) puts `Pn`
+in kW; KULAR_GREEN sends every `Pn` as 0 (B-15).
+
+Registered as **extra topics of their Device** (migration 0030), never as Devices:
+a string topic's Device code begins with `INVERTER`, so the old commissioning
+would have registered 34 power-less "Inverters" on KULAR_GREEN alone. ISPL's SMB1
+publishes nothing else, so it is registered from its first string topic and the
+second is its extra. 2–12 inputs per KULAR_GREEN Inverter read 0 A at midday —
+unused or dead, which the data cannot tell apart — so `devices.string_count` is
+left for a person to set (it is never inferred).
+
+### 8.3 Two Clients nobody has registered
+
+| Client | Plant | Devices |
+|---|---|---|
+| `ISPL` | `UNIT1` | `ICOG_MFM`; `MCR/INVERTER1`; `MCR/SMB1` (strings only); `WMS` |
+| `VARDHMAN_GROUP` | `SPINNING_AND_GENERAL_MILLS` | `MAIN_MFM`; `MFM`; `MCR/INVERTER_1..4` (+ strings); `WMS`; `WMS_WEST` |
+
+`MAIN_MFM` and `ICOG_MFM` match no Type by prefix; commissioning now matches a
+Type as a whole `_`-delimited token. ⚠ `VARDHMAN_GROUP` is not the fabricated
+`VARDHMAN` on the Docker machine — different code, no collision.
+
+### 8.4 The same key, a different unit
+
+| Device | Key | Observed | Reading | Bound as |
+|---|---|---|---|---|
+| ISPL `ICOG_MFM` | `VRY`/`VYB`/`VBR` | 10,200 | volts: √3 × 10.20 kV × 22.43 A × 0.998 = 395.5 kW vs `P` 392.7 | `HV_VOLTAGE_*` × 0.001 |
+| ISPL `WMS` | `AGHI`/`AGTI` | 1,490.8 → 1,504.1 in ~150 s | Wh/m²: +13.3 is plausible at ~540 W/m², +13.3 kWh/m² impossible | `GHI/GTI_CUMULATIVE` × 0.001 |
+| VARDHMAN_GROUP `MFM` | `VRY`/`VYB`/`VBR` | 419 | LT volts: √3 × 0.419 kV × 270 A × 1.0 = 195.9 kW vs `P` 191.5 | `AC_VOLTAGE_*` |
+| VARDHMAN_GROUP `MAIN_MFM` | `VRY`/`VYB`/`VBR` | 420 | LT volts; `P` is ~10× V·I (B-16) | `AC_VOLTAGE_*` |
+
+⚠ The VARDHMAN_GROUP meters are the dangerous kind: under the MFM alias (kV),
+420 passes the 0–800 kV range check and would have been stored as a *good*
+420 kV. Applied as per-Device binding corrections from
+`docs/binding_corrections/2026-10-06-broker-units.json`, each with its
+evidence, audited. All ⚠ ASSUMED (OPEN-15). Also observed and left as data, not
+corrected: ISPL `INVERTER1` `EFF` −1 (its derived DC power is stored *flagged*,
+B-17); `WMS_WEST` and VARDHMAN_GROUP `WMS` send 0 for most fields.
+
+---
+
 ## 6. Change log
 
 | Version | Date | Change |
 |---|---|---|
+| 1.3 | 6 Oct 2026 | **§8: a 30 s cycle, per-string topics, two new Clients.** KULAR_GREEN's 22 Devices unchanged in content, now every ~30 s (registered at 86). Each Inverter's PV strings published on `…_STRINGnn` topics, proven to be its own inputs (string currents sum exactly to its `PVI`/`DC_CURRENT`) and recorded as extra topics of that Device (migration 0030). Clients `ISPL` and `VARDHMAN_GROUP` publishing unregistered. Four meters/WMS publish units that contradict their Type's alias; corrected per Device with evidence. Added B-15 to B-18. |
 | 1.2 | 16 Sep 2026 | **§7: the broker changed.** `KULAR_GREEN/DATA` replaced all eight payload keys with short codes, so `MFM-01` decodes nothing while still reading as online. The weather topic moved from `MMS` to `WMS` and is being quarantined, leaving the Plant with no irradiance and therefore no computable PR. Both key families added to `SOURCE_KEY_ALIASES`; bindings and topics deliberately **not** rewritten automatically. Added B-14. |
 | 1.1 | 10 Sep 2026 | Cross-referenced against the client's signal schedule (`TAG_CATALOGUE.md`). Hypotheses §4.1 (irradiance is daily kWh/m²) and §4.2 (power in kW) corroborated by the client's own units; neither confirmed. Noted that the published `PerformanceRatio` corresponds to no signal on any Device Type and is therefore pipeline-computed. Added B-11 and B-12. |
 | 1.0 | 10 Sep 2026 | Initial observations from the `KULAR_GREEN` test broker: topic shape, payload keys, rates, and the ten questions above. |

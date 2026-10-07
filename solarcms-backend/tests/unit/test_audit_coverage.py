@@ -23,6 +23,9 @@ AUDIT_EXEMPT = {
     # Delegates to _insert_devices, which writes one audit row per Device created
     # — including for the bulk path, which shares the same helper.
     ("POST", "/devices"): "audited inside _insert_devices",
+    # A read: the custom report's definition is too long for a query string, so
+    # the preview takes it as a body. It writes nothing; its download is audited.
+    ("POST", "/custom/table"): "a read that takes its definition as a body",
 }
 
 

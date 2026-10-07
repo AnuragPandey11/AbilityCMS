@@ -897,13 +897,18 @@ async def parse_device_topic(
 
     taken = None
     if cleaned:
-        taken = (await session.execute(text(
-            "SELECT id, code FROM devices WHERE source_address = :t"
-        ), {"t": cleaned})).first()
+        # Primary or extra topic (migration 0030) — either way it is taken.
+        taken = (await session.execute(text("""
+            SELECT d.id, d.code, rt.is_primary
+              FROM registered_topics rt JOIN devices d ON d.id = rt.device_id
+             WHERE rt.topic = :t
+             ORDER BY rt.is_primary DESC LIMIT 1
+        """), {"t": cleaned})).first()
         if taken is not None:
             problems.append(
-                f"{taken.code} is already registered on this exact topic. Two "
-                f"Devices cannot share one, because the topic is what decides "
+                f"{taken.code} is already registered on this exact topic"
+                f"{'' if taken.is_primary else ' (as one of its extra topics)'}. "
+                f"Two Devices cannot share one, because the topic is what decides "
                 f"which Device a message belongs to.")
 
     return {

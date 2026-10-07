@@ -44,7 +44,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthProvider";
 import { usePermissions } from "@/auth/usePermission";
 import { useDashboards, dashboardLabel } from "@/auth/useDashboard";
-import { useAlarms } from "@/api/hooks";
+import { useAlarms, useDataIssuesSummary } from "@/api/hooks";
 import { LiveIndicator } from "@/live/LiveIndicator";
 import { SystemHealthPill } from "@/components/layout/SystemHealthPill";
 import { BrandMark } from "@/components/layout/BrandMark";
@@ -116,6 +116,11 @@ export function AppShell(): JSX.Element {
   // badge that stays lit after that teaches people to stop looking at it.
   const alarmsQuery = useAlarms({ state: "active" });
   const openAlarms = alarmsQuery.data?.length ?? 0;
+
+  // Data being lost or wrong, not yet fixed or marked as known. Never setup,
+  // which can stand for months: a badge that never goes out is not read.
+  const dataIssuesQuery = useDataIssuesSummary(has("config.modify"));
+  const openDataIssues = dataIssuesQuery.data?.open_urgent ?? 0;
 
   // A-1. The active Client is context, and switching resets everything. Named
   // rather than numbered: "Client #2" tells someone their own company's row id
@@ -221,6 +226,17 @@ export function AppShell(): JSX.Element {
                 >
                   <link.icon size={17} />
                   <NavLabel collapsed={collapsed}>{link.label}</NavLabel>
+                  {link.to === "/admin/data-issues" && openDataIssues > 0 ? (
+                    // Amber, not red: data that needs attention, not an Alarm.
+                    <span
+                      className={`ml-auto rounded-full bg-warn px-1.5 py-px text-[10px] font-semibold tabular-nums text-black/80 ${
+                        collapsed ? "lg:absolute lg:right-1 lg:top-0.5 lg:ml-0 lg:px-1 lg:ring-2 lg:ring-nav" : ""
+                      }`}
+                      title={`${openDataIssues} data issue(s) open: data being lost or looking wrong`}
+                    >
+                      {openDataIssues}
+                    </span>
+                  ) : null}
                 </NavLink>
               ))}
             </>

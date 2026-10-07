@@ -71,6 +71,8 @@ interface Row {
   code: string;
   device: DeviceListItem | null;
   found: DiscoveredDevice | null;
+  /** Discovered topics that are this Device's extra topics — its PV strings. */
+  extra: DiscoveredDevice[];
 }
 
 export function PlantEditor(): JSX.Element {
@@ -160,16 +162,25 @@ export function PlantEditor(): JSX.Element {
   const rows: Row[] = useMemo(() => {
     const forThisPlant = discovered.data?.find((p) => p.plant_code === plant?.code);
     const byTopic = new Map<string, Row>();
+    // A Device's extra topics (an Inverter's PV strings on `…_STRING16`,
+    // migration 0030) belong to its row. Matched on the topic like the primary
+    // — listing them as rows of their own would offer each Inverter's strings
+    // as a second, unregistered Inverter.
+    const byExtraTopic = new Map<string, Row>();
 
     for (const device of devices) {
       const key = device.source_address ?? `device:${device.id}`;
-      byTopic.set(key, { key, code: device.code, device, found: null });
+      const row: Row = { key, code: device.code, device, found: null, extra: [] };
+      byTopic.set(key, row);
+      for (const topic of device.extra_topics ?? []) byExtraTopic.set(topic, row);
     }
     for (const found of forThisPlant?.devices ?? []) {
       const existing = byTopic.get(found.topic);
+      const owner = byExtraTopic.get(found.topic);
       if (existing) existing.found = found;
+      else if (owner) owner.extra.push(found);
       else byTopic.set(found.topic, {
-        key: found.topic, code: found.device_code, device: null, found,
+        key: found.topic, code: found.device_code, device: null, found, extra: [],
       });
     }
 
@@ -235,16 +246,26 @@ export function PlantEditor(): JSX.Element {
       if (!row.found || modelId === null || plantId === null) {
         throw new Error("choose a Device Model first");
       }
+      // A string topic whose owner publishes nothing else (an SMB known only
+      // by `SMB1_STRING16`) registers the *owner*, never a Device called
+      // `SMB1_STRING16`.
+      const code = row.found.string_owner_code ?? row.found.device_code;
+      const observedKeys = observed.data?.keys.map((key) => key.source_key) ?? [];
       return devicesApi.createDevice(plantId, {
-        code: row.found.device_code,
-        name: row.found.device_code.replace(/[_-]+/g, " "),
+        code,
+        name: code.replace(/[_-]+/g, " "),
         device_model_id: modelId,
         source_address: row.found.topic,
         // Read from the topic, never chosen — the topic decides the enclosure.
         collector_code: row.found.collector_code,
         // Measured, not the assumed 60s. Health thresholds multiply this.
         expected_interval_s: observed.data?.interval_s ?? 60,
-        bind_from_model: true,
+        // What it was seen sending, and only that: a Device on its Type's
+        // placeholder Model would otherwise decode nothing, and the Model's
+        // schedule adds signals it never sends. The schedule is the fallback
+        // only when nothing has been seen.
+        bind_from_model: observedKeys.length === 0,
+        observed_keys: observedKeys,
       });
     },
     onSuccess: (created) => {
@@ -259,6 +280,33 @@ export function PlantEditor(): JSX.Element {
     },
     onError: (err) =>
       setError(isApiError(err) ? err.displayMessage : "Could not register the Device."),
+  });
+
+  // A PV-string topic belongs to its Inverter: attached, never registered as a
+  // second one — which would carry no power and be ranked on Inverter Monitoring.
+  const attach = useMutation({
+    mutationFn: ({ ownerId, topic }: { ownerId: number; topic: string }) =>
+      devicesApi.addDeviceTopic(ownerId, topic, "Attached from Plants & Devices"),
+    onSuccess: (_result, { topic }) => {
+      setError(null);
+      setNote(`Attached ${topic.split("/").pop() ?? topic}. Its readings are now stored with that Device.`);
+      setExpanded(null);
+      refresh();
+    },
+    onError: (err) =>
+      setError(isApiError(err) ? err.displayMessage : "Could not attach the topic."),
+  });
+
+  const detach = useMutation({
+    mutationFn: ({ deviceId, topic }: { deviceId: number; topic: string }) =>
+      devicesApi.removeDeviceTopic(deviceId, topic),
+    onSuccess: (_result, { topic }) => {
+      setError(null);
+      setNote(`Detached ${topic.split("/").pop() ?? topic}. Its readings so far are kept.`);
+      refresh();
+    },
+    onError: (err) =>
+      setError(isApiError(err) ? err.displayMessage : "Could not detach the topic."),
   });
 
   const changeStatus = useMutation({
@@ -409,8 +457,15 @@ export function PlantEditor(): JSX.Element {
                   </button>
                 ))}
                 <Link
-                  to="/admin/hierarchy"
+                  to="/admin/data-issues"
                   className="ml-auto rounded-control border border-line bg-surface-raised px-3 py-1.5 text-xs text-ink-muted hover:text-ink"
+                  title="Everything this Plant's equipment sends that is not being kept or not trusted."
+                >
+                  Data Issues →
+                </Link>
+                <Link
+                  to="/admin/hierarchy"
+                  className="rounded-control border border-line bg-surface-raised px-3 py-1.5 text-xs text-ink-muted hover:text-ink"
                   title="Say what each Device feeds into, beside the diagram it produces."
                 >
                   Wiring &amp; Diagram →
@@ -478,6 +533,16 @@ export function PlantEditor(): JSX.Element {
                           onModel={(id) => setModelFor({ ...modelFor, [row.key]: id })}
                           onRegister={() => register.mutate(row)}
                           registering={register.isPending}
+                          onAttach={(ownerId, topic) => attach.mutate({ ownerId, topic })}
+                          attaching={attach.isPending}
+                          onDetach={(topic) => {
+                            if (!row.device) return;
+                            const ok = window.confirm(
+                              `Detach ${topic}?\n\nIts readings so far are kept. Its next ` +
+                                `messages are thrown away until it is attached again.`,
+                            );
+                            if (ok) detach.mutate({ deviceId: row.device.id, topic });
+                          }}
                           onStatus={(status) =>
                             row.device && changeStatus.mutate({ id: row.device.id, status })
                           }
@@ -629,7 +694,7 @@ function NewPlantPanel({
   const plantCodes: PublishingCode[] | undefined = discovered.data?.map((p) => ({
     code: p.plant_code,
     unregistered: p.registered_plant_id === null,
-    title: `${p.device_count} device(s), last heard ${AGE(p.last_seen)} ago.`,
+    title: `${p.device_count} device(s), last heard ${AGE(p.last_seen)}.`,
   }));
   const codePrefilled = usePrefillOnce(form.code, plantCodes, setCode);
 
@@ -946,7 +1011,7 @@ function AddDeviceByTopic({
 /** One Device: a scannable line, expanding into everything about it. */
 function DeviceRow({
   row, open, onToggle, observed, models, modelId, onModel,
-  onRegister, registering, onStatus, onRemove, canDiscover,
+  onRegister, registering, onAttach, attaching, onDetach, onStatus, onRemove, canDiscover,
 }: {
   canDiscover: boolean;
   row: Row;
@@ -958,6 +1023,9 @@ function DeviceRow({
   onModel: (id: number | null) => void;
   onRegister: () => void;
   registering: boolean;
+  onAttach: (ownerId: number, topic: string) => void;
+  attaching: boolean;
+  onDetach: (topic: string) => void;
   onStatus: (status: string) => void;
   onRemove: () => void;
 }): JSX.Element {
@@ -965,6 +1033,9 @@ function DeviceRow({
   const found = row.found;
   const topic = device?.source_address ?? found?.topic ?? null;
   const collector = device?.collector_code ?? found?.collector_code ?? null;
+  // An unattached PV-string topic whose Inverter is registered here: attach it.
+  const ownerId = !device ? (found?.string_owner_device_id ?? null) : null;
+  const ownerCode = found?.string_owner_code ?? null;
 
   return (
     <li className={`rounded border ${device ? "border-line" : "border-warn/40 bg-warn/5"}`}>
@@ -984,6 +1055,8 @@ function DeviceRow({
           <Badge tone="neutral">
             stopped publishing
           </Badge>
+        ) : ownerId !== null ? (
+          <Badge tone="warn">strings of {ownerCode} — not attached, data being discarded</Badge>
         ) : (
           <Badge tone="warn">not registered — data being discarded</Badge>
         )}
@@ -1005,7 +1078,7 @@ function DeviceRow({
               publishing" would assert a fact we have no basis for — and it did,
               against every Device, for anyone who was not a Super Admin. */}
           {found
-            ? `${found.messages} msg · ${AGE(found.last_seen)} ago`
+            ? `${found.messages} msg · ${AGE(found.last_seen)}`
             : canDiscover
               ? "not publishing"
               : ""}
@@ -1022,6 +1095,37 @@ function DeviceRow({
             >
               <span className="font-mono">{topic ?? "—"}</span>
             </Fact>
+            {device?.extra_topics?.length ? (
+              <Fact
+                label="Also fed by"
+                hint="Extra topics whose messages are this Device's too — its PV strings, published separately. Same Collector, same bindings."
+                wrap
+              >
+                <ul className="space-y-0.5">
+                  {(device.extra_topics ?? []).map((extraTopic) => {
+                    const heard = row.extra.find((f) => f.topic === extraTopic);
+                    return (
+                      <li key={extraTopic} className="font-mono">
+                        {extraTopic}
+                        {heard ? (
+                          <span className="ml-2 font-sans text-ink-faint">
+                            {heard.messages} msg · {AGE(heard.last_seen)}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => onDetach(extraTopic)}
+                          className="ml-2 font-sans text-ink-muted hover:text-bad hover:underline"
+                          title="Stop this topic feeding the Device. Its readings so far are kept."
+                        >
+                          detach
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Fact>
+            ) : null}
             <Fact label="Collector" hint="Read from the topic. A Collector is an enclosure, never a Device.">
               {collector ?? "none"}
             </Fact>
@@ -1040,8 +1144,28 @@ function DeviceRow({
             </Fact>
           </dl>
 
+          {/* ── A string topic of a registered Inverter: attach, not register ── */}
+          {!device && found && ownerId !== null ? (
+            <div className="rounded border border-line bg-surface p-3">
+              <p className="text-xs leading-relaxed text-ink">
+                This topic carries the PV string readings of <strong>{ownerCode}</strong>. Attach it,
+                and its readings are stored as part of {ownerCode} — registering it as a Device of
+                its own would add a second {ownerCode} with no power to every screen.
+              </p>
+              <div className="mt-2">
+                <Button
+                  variant="primary"
+                  disabled={attaching}
+                  onClick={() => onAttach(ownerId, found.topic)}
+                >
+                  {attaching ? "Attaching…" : `Attach to ${ownerCode ?? "its Inverter"}`}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           {/* ── Not registered: choose a Model and confirm ─────────────── */}
-          {!device && found ? (
+          {!device && found && ownerId === null ? (
             <div className="rounded border border-line bg-surface p-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field
@@ -1069,7 +1193,7 @@ function DeviceRow({
                     disabled={modelId === null || registering}
                     onClick={onRegister}
                   >
-                    {registering ? "Registering…" : `Register ${row.code}`}
+                    {registering ? "Registering…" : `Register ${ownerCode ?? row.code}`}
                   </Button>
                 </div>
               </div>

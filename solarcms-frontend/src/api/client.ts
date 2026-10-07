@@ -147,8 +147,21 @@ export async function requestText(
   return (await sendForFile(path, params)).text();
 }
 
-async function sendForFile(path: string, params?: QueryParams): Promise<Response> {
-  const response = await send(path, { params });
+/**
+ * A file made from a request body — a custom report's definition is too long
+ * for a query string, so its download is a POST.
+ */
+export async function postForBlob(path: string, params: QueryParams, body: unknown): Promise<Blob> {
+  return (await sendForFile(path, params, body)).blob();
+}
+
+/** The printable page for a POSTed definition. */
+export async function postForText(path: string, params: QueryParams, body: unknown): Promise<string> {
+  return (await sendForFile(path, params, body)).text();
+}
+
+async function sendForFile(path: string, params?: QueryParams, body?: unknown): Promise<Response> {
+  const response = await send(path, { params, body, method: body === undefined ? "GET" : "POST" });
   if (!response.ok) {
     let body: unknown = null;
     try {

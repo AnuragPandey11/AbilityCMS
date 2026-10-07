@@ -124,7 +124,9 @@ export function RailTile({
       {footnote ? (
         <p className={`${visual ? gap : "mt-2"} text-xs leading-snug text-ink-faint`}>{footnote}</p>
       ) : null}
-      {action ? <div className={gap}>{action}</div> : null}
+      {/* Pinned to the foot, so tiles in one row keep their buttons level
+          whether or not a drawing fills the space above. */}
+      {action ? <div className={`mt-auto ${dense ? "pt-2" : "pt-3"}`}>{action}</div> : null}
     </div>
   );
 }

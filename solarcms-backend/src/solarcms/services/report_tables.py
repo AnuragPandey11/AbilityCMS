@@ -143,6 +143,8 @@ class ReportTable:
     flags: list[tuple[int, str, str]] = field(default_factory=list)
     source_tier: str | None = None
     truncated: bool = False
+    # A custom report's own name; the standard ones are titled by their kind.
+    title_text: str | None = None
 
     def __post_init__(self) -> None:
         # A column of dashes needs its reason stated once, or it reads as a
@@ -160,7 +162,7 @@ class ReportTable:
 
     @property
     def title(self) -> str:
-        return REPORT_KINDS[self.kind]
+        return self.title_text or REPORT_KINDS.get(self.kind, "Report")
 
     @property
     def filename_stem(self) -> str:

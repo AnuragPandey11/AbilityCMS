@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { request, requestBlob, requestText, type QueryParams } from "../client";
+import {
+  postForBlob,
+  postForText,
+  request,
+  requestBlob,
+  requestText,
+  type QueryParams,
+} from "../client";
 import {
   ReportDefinitionSchema,
   ReportRunRequestSchema,
@@ -97,6 +104,134 @@ export function reportFilename(table: ReportTable, format: ReportFormat): string
   const first = at(table.first_day, table.from_time, "00:00");
   const last = at(table.last_day, table.to_time, "23:59");
   return `${table.plant.code}_${table.kind}_${first}_${last}.${format}`;
+}
+
+// ── Custom reports: any Devices' readings, across Plants, at any interval ────
+
+export type CustomAggregation = "auto" | "avg" | "min" | "max" | "last" | "change";
+
+/** One column: a Device and one reading it sends. */
+export interface SeriesRef {
+  device_id: number;
+  tag_code: string;
+}
+
+/**
+ * What a custom report reads. `series` names each Device and reading, so a
+ * saved report reopens exactly as it was built. The period takes the standard
+ * reports' names and is resolved on the first chosen Plant's clock.
+ */
+export interface CustomReportDefinition {
+  name?: string | null;
+  /** The Plants chosen in the builder, so a saved report reopens on them. */
+  plant_ids?: number[];
+  series: SeriesRef[];
+  interval_minutes: number;
+  aggregation: CustomAggregation;
+  period: ReportPeriod;
+  from_date?: string | null;
+  to_date?: string | null;
+  from_time?: string | null;
+  to_time?: string | null;
+}
+
+export const CatalogTagSchema = z.object({
+  code: z.string(),
+  name: z.string(),
+  unit: z.string().nullable(),
+  category: z.string().nullable(),
+  cumulative: z.boolean(),
+});
+export type CatalogTag = z.infer<typeof CatalogTagSchema>;
+
+export const CustomCatalogSchema = z.object({
+  plants: z.array(
+    z.object({
+      id: z.number(),
+      code: z.string(),
+      name: z.string(),
+      timezone: z.string(),
+      client_code: z.string().nullable(),
+    }),
+  ),
+  devices: z.array(
+    z.object({
+      id: z.number(),
+      code: z.string(),
+      name: z.string().nullable(),
+      plant_id: z.number(),
+      type_code: z.string(),
+      type_name: z.string(),
+      tags: z.array(CatalogTagSchema),
+    }),
+  ),
+});
+export type CustomCatalog = z.infer<typeof CustomCatalogSchema>;
+export type CatalogDevice = CustomCatalog["devices"][number];
+
+export const SavedReportSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  definition: z.unknown(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  created_by: z.number().nullable(),
+  created_by_email: z.string().nullable(),
+  can_change: z.boolean(),
+});
+export type SavedReport = z.infer<typeof SavedReportSchema>;
+
+/** The chosen Plants' Devices and the readings each one sends. */
+export async function customCatalog(plantIds: number[]): Promise<CustomCatalog> {
+  return parse(
+    CustomCatalogSchema,
+    await request("/reports/custom/catalog", { params: { plant_ids: plantIds } }),
+    "GET /reports/custom/catalog",
+  );
+}
+
+export async function customTable(definition: CustomReportDefinition): Promise<ReportTable> {
+  return parse(
+    ReportTableSchema,
+    await request("/reports/custom/table", { method: "POST", body: definition }),
+    "POST /reports/custom/table",
+  );
+}
+
+export async function exportCustomReport(
+  definition: CustomReportDefinition,
+  format: ReportFormat,
+): Promise<Blob> {
+  return postForBlob("/reports/custom/export", { format }, definition);
+}
+
+export async function customReportPage(definition: CustomReportDefinition): Promise<string> {
+  return postForText("/reports/custom/export", { format: "html" }, definition);
+}
+
+export async function listSavedReports(): Promise<SavedReport[]> {
+  return parse(
+    z.array(SavedReportSchema),
+    await request("/reports/custom/saved"),
+    "GET /reports/custom/saved",
+  );
+}
+
+/** Save a new report, or replace one by id. Returns the saved report's id. */
+export async function saveReport(
+  name: string,
+  definition: CustomReportDefinition,
+  id?: number,
+): Promise<number> {
+  const body = await request(
+    id === undefined ? "/reports/custom/saved" : `/reports/custom/saved/${id}`,
+    { method: id === undefined ? "POST" : "PUT", body: { name, definition } },
+  );
+  return parse(z.object({ id: z.number() }), body, "save custom report").id;
+}
+
+export async function deleteSavedReport(id: number): Promise<void> {
+  await request(`/reports/custom/saved/${id}`, { method: "DELETE" });
 }
 
 // ── Report definitions and runs: a Client's Reports, rendered by the scheduler

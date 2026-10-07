@@ -129,6 +129,13 @@ class DeviceCreate(BaseModel):
     # default because the alternative — a Device that exists and decodes nothing
     # — looks identical to a broken Device on every screen that shows it.
     bind_from_model: bool = True
+    # The payload keys this Device was *observed* sending, bound through the
+    # Type-aware alias table exactly as `commission-from-broker` binds them.
+    # Needed because a Device registered from the broker is usually on its
+    # Type's placeholder Model, whose schedule is empty: without this it would be
+    # registered with no bindings and decode nothing. Adds only — a key the
+    # Model already bound keeps its binding.
+    observed_keys: list[str] | None = Field(default=None, max_length=1000)
 
     # Note: "parent must share the Plant" (I-3) is enforced by a composite foreign
     # key in the schema, not here. A structural constraint cannot be bypassed by a
@@ -218,3 +225,26 @@ class BindingUpsert(BaseModel):
 
 class BindingsReplace(BaseModel):
     bindings: list[BindingUpsert]
+
+
+class BindingPatch(BaseModel):
+    """Edit one binding. What is sent is written, what is omitted is left alone.
+
+    `valid_min`/`valid_max` may be sent as `null` to fall back to the Tag's own
+    range. `source_key` renames the key the Tag is read from — the fix for a
+    payload key the equipment renamed — and keeps the scale and range.
+    """
+
+    source_key: str | None = Field(default=None, min_length=1, max_length=256)
+    scale: float | None = None
+    value_offset: float | None = None
+    valid_min: float | None = None
+    valid_max: float | None = None
+    enabled: bool | None = None
+
+
+class DeviceTopicCreate(BaseModel):
+    """An extra topic for a Device, such as an Inverter's PV strings (0030)."""
+
+    topic: str = Field(min_length=1, max_length=512)
+    note: str | None = Field(default=None, max_length=500)

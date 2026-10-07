@@ -41,6 +41,13 @@ export const DiscoveredDeviceSchema = z.object({
   ever_quarantined: z.boolean(),
   registered_device_id: z.number().nullable(),
   /**
+   * `false` for a topic that feeds a Device whose own topic is another one —
+   * an Inverter's PV strings on `…/INVERTER_1_STRING16` (migration 0030). Such
+   * a row belongs under that Device, never as equipment of its own. `null`
+   * when nothing is registered on the topic.
+   */
+  is_primary_topic: z.boolean().nullable().optional(),
+  /**
    * Measured gap between messages on this topic, so liveness is judged against
    * its own cadence. `null` when it has been seen once and there is no gap.
    */
@@ -56,6 +63,14 @@ export const DiscoveredDeviceSchema = z.object({
   status: z.enum(["live", "silent"]).optional(),
   /** Dismissed from discovery by somebody. Hidden unless asked for. */
   ignored: z.boolean().optional(),
+  /**
+   * For a PV-string topic (`INVERTER_3_STRING16`), the Device whose strings it
+   * carries, read from its code — and that Device's id where it is registered in
+   * the same Collector, so the topic is *attached* rather than registered as a
+   * second Inverter.
+   */
+  string_owner_code: z.string().nullable().optional(),
+  string_owner_device_id: z.number().nullable().optional(),
 });
 export type DiscoveredDevice = z.infer<typeof DiscoveredDeviceSchema>;
 
@@ -143,4 +158,12 @@ export async function discoverTopic(
     }),
     "GET /discovery/topic",
   );
+}
+
+/**
+ * Stop offering a topic as something to register. Reversible and audited; it
+ * hides the topic and deletes nothing.
+ */
+export async function ignoreTopic(topic: string, reason: string | null): Promise<void> {
+  await request("/discovery/ignored", { method: "POST", body: { topic, reason } });
 }

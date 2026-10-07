@@ -104,10 +104,12 @@ async def _unregistered_conditions(
                max(m.time) AS last_seen,
                count(*)    AS messages,
                EXTRACT(EPOCH FROM (max(m.time) - min(m.time))) AS span_s,
-               bool_or(d.id IS NOT NULL) AS registered,
+               bool_or(rt.device_id IS NOT NULL) AS registered,
                bool_or(i.topic IS NOT NULL) AS ignored
           FROM mqtt_raw_v m
-          LEFT JOIN devices d ON d.source_address = m.topic
+          -- Primary or extra topic (migration 0030): an Inverter's string
+          -- topic is its own, never unregistered equipment.
+          LEFT JOIN registered_topics rt ON rt.topic = m.topic
           LEFT JOIN discovery_ignored_topics i ON i.topic = m.topic
          WHERE m.time > now() - interval '24 hours'
          GROUP BY m.topic
@@ -181,7 +183,9 @@ async def _plant_silence_conditions(
     counts = {
         r.plant_id: r.messages for r in (await session.execute(text("""
             SELECT d.plant_id, count(*) AS messages
-              FROM mqtt_raw_v m JOIN devices d ON d.source_address = m.topic
+              FROM mqtt_raw_v m
+              JOIN registered_topics rt ON rt.topic = m.topic
+              JOIN devices d ON d.id = rt.device_id
              WHERE m.time > now() - make_interval(secs => :window)
              GROUP BY d.plant_id
         """), {"window": PLANT_SILENCE_WINDOW_S})).all()

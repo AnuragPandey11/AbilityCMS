@@ -16,6 +16,7 @@ import { useMemo } from "react";
 import type { ResolvedSlot } from "@/api/schemas";
 import type { SlotTrend } from "@/api/useSlotTrend";
 import type { ComparisonSeries, SeriesLine } from "./PowerComparisonChart";
+import type { WmsIrradiance } from "./useWmsIrradiance";
 import {
   IRRADIANCE_UNIT,
   POWER_UNIT,
@@ -26,18 +27,52 @@ import {
 } from "./powerComparison";
 import { formatNumber } from "@/format/value";
 
-export type CompareKey = "radiation" | "exp_ac" | "exp_dc";
+/**
+ * `wms:<TAG>` is one of the weather stations' own W/m² series — GTI, GHI and
+ * whatever else they send (`useWmsIrradiance`), found in the data.
+ */
+export type CompareKey = "radiation" | "exp_ac" | "exp_dc" | `wms:${string}`;
 
 /** Direct radiation on by default: the client's reference chart draws it. */
 export const COMPARE_DEFAULT: readonly CompareKey[] = ["radiation"];
 
 /** Palette slot per series, fixed so a curve keeps its colour when others toggle. */
-export const COMPARE_SLOT: Record<"power" | CompareKey, number> = {
+export const COMPARE_SLOT: Record<"power" | "radiation" | "exp_ac" | "exp_dc", number> = {
   power: 0,
   radiation: 1,
   exp_dc: 2,
   exp_ac: 3,
 };
+
+/**
+ * The palette slot for any option. A station series takes the slots after the
+ * fixed four, by its place in the catalogue's order (GTI, GHI, …), so its
+ * colour does not change when another is switched on or off.
+ */
+export function compareSlot(key: "power" | CompareKey, catalogue: readonly string[]): number {
+  if (key in COMPARE_SLOT) return COMPARE_SLOT[key as keyof typeof COMPARE_SLOT];
+  const index = catalogue.indexOf(key.slice("wms:".length));
+  // Eight validated slots; a fifth station series would share the last.
+  return Math.min(7, 4 + Math.max(0, index));
+}
+
+/** Offered by name even before the data is known — the two the client asked for. */
+const ALWAYS_OFFERED = ["GTI", "GHI"];
+
+/** What the standard irradiance measures are, in a line. */
+const MEANING: Record<string, string> = {
+  GTI: "Sunlight on the plane of the panels (global tilted irradiance).",
+  GHI: "Sunlight on level ground (global horizontal irradiance).",
+  DIFFUSE_RADIATION: "Sunlight scattered by the sky, not straight from the sun.",
+};
+
+/**
+ * A Tag's name, or its code where the name is only the code in other case —
+ * the catalogue calls GTI "Gti", which reads as a word nobody uses.
+ */
+export function readingLabel(tag: { code: string; name: string }): string {
+  return /^[A-Za-z]+$/.test(tag.name) && tag.name.toUpperCase() === tag.code ? tag.code : tag.name;
+}
 
 export interface CompareOption {
   value: CompareKey;
@@ -52,6 +87,7 @@ export function usePowerComparison({
   radiation,
   irradiance,
   efficiency,
+  wms,
   environment,
   dcCapacityKwp,
   acCapacityKw,
@@ -64,6 +100,8 @@ export function usePowerComparison({
   irradiance: SlotTrend;
   /** `sld.inv.efficiency` — the Inverters' own efficiency, in %, for the AC reference. */
   efficiency: SlotTrend;
+  /** The weather stations' own W/m² series in this window (GTI, GHI, …). */
+  wms: WmsIrradiance;
   /** The `environment` panel, to tell "no weather station" from "not loaded". */
   environment: ResolvedSlot[] | undefined;
   dcCapacityKwp: number | null | undefined;
@@ -161,6 +199,42 @@ export function usePowerComparison({
       },
     ];
 
+    // The weather stations' own series: GTI and GHI always listed, anything
+    // else they send listed once it is seen, each disabled with its reason.
+    const catalogueCodes = wms.catalogue.map((tag) => tag.code);
+    const stations =
+      wms.stationCount === 1 ? "the weather station" : `the mean of ${wms.stationCount} weather stations`;
+    const stationOptions: CompareOption[] = [];
+    for (const tag of wms.catalogue) {
+      const found = wms.series.find((entry) => entry.tagCode === tag.code);
+      if (!found && !ALWAYS_OFFERED.includes(tag.code)) continue;
+      const reason =
+        wms.stationCount === 0
+          ? "No weather station is registered at this Plant."
+          : perWm2 === null
+            ? noLock
+            : (wrongPowerUnit ??
+              (found
+                ? null
+                : wms.isLoading
+                  ? "Loading the weather station's readings…"
+                  : wms.isError
+                    ? "The weather station's readings could not be loaded."
+                    : `No weather station here sent ${tag.name} in this window.`));
+      stationOptions.push({
+        value: `wms:${tag.code}`,
+        label: readingLabel(tag),
+        description:
+          `${MEANING[tag.code] ? `${MEANING[tag.code]} ` : ""}From ${stations}, on the ` +
+          "right-hand axis, locked to the DC nameplate.",
+        disabledReason: reason,
+        line: "solid",
+      });
+    }
+    // Beside Direct radiation: the measured sunlight together, the two
+    // nameplate references after it.
+    options.splice(1, 0, ...stationOptions);
+
     const on = (key: CompareKey) =>
       chosen.has(key) && !options.find((option) => option.value === key)?.disabledReason;
 
@@ -190,6 +264,21 @@ export function usePowerComparison({
         note: `${radiation.provenance ?? "WMS"} · DIRECT_RADIATION`,
       });
     }
+    for (const entry of wms.series) {
+      const key: CompareKey = `wms:${entry.tagCode}`;
+      if (!on(key)) continue;
+      series.push({
+        key,
+        label: readingLabel({ code: entry.tagCode, name: entry.label }),
+        unit: entry.unit,
+        points: entry.points,
+        axis: "radiation",
+        line: "solid",
+        slot: compareSlot(key, catalogueCodes),
+        fill: false,
+        note: `${wms.stationCount === 1 ? "WMS" : `mean of ${wms.stationCount} WMS`} · ${entry.tagCode}`,
+      });
+    }
     const dcReference =
       (on("exp_dc") || on("exp_ac")) && dcCapacityKwp ? expectedDcKw(irradiance.points, dcCapacityKwp) : [];
     if (on("exp_dc")) {
@@ -202,7 +291,7 @@ export function usePowerComparison({
         line: "dashed",
         slot: COMPARE_SLOT.exp_dc,
         fill: false,
-        note: options[2]?.description,
+        note: options.find((option) => option.value === "exp_dc")?.description,
       });
     }
     if (on("exp_ac") && acCapacityKw && eta !== null) {
@@ -215,12 +304,13 @@ export function usePowerComparison({
         line: "dotted",
         slot: COMPARE_SLOT.exp_ac,
         fill: false,
-        note: options[1]?.description,
+        note: options.find((option) => option.value === "exp_ac")?.description,
       });
     }
 
     const usesIrradiance = on("exp_dc") || on("exp_ac");
     const usesEfficiency = on("exp_ac");
+    const stationSeriesOn = wms.series.filter((entry) => on(`wms:${entry.tagCode}`));
     return {
       series,
       options,
@@ -228,12 +318,14 @@ export function usePowerComparison({
       flaggedCount:
         power.flaggedCount +
         (on("radiation") ? radiation.flaggedCount : 0) +
-        (usesIrradiance ? irradiance.flaggedCount : 0),
+        (usesIrradiance ? irradiance.flaggedCount : 0) +
+        stationSeriesOn.reduce((total, entry) => total + entry.flaggedCount, 0),
       isLoading:
         power.isLoading ||
         (on("radiation") && radiation.isLoading) ||
         (usesIrradiance && irradiance.isLoading) ||
-        (usesEfficiency && efficiency.isLoading),
+        (usesEfficiency && efficiency.isLoading) ||
+        (wms.isLoading && [...chosen].some((key) => key.startsWith("wms:"))),
     };
     // Deliberately the parts, not the objects: `useSlotTrend` returns a fresh
     // object every render, and depending on it would rebuild every series each
@@ -246,6 +338,7 @@ export function usePowerComparison({
     irradiance.points, irradiance.unit, irradiance.unavailableReason, irradiance.flaggedCount,
     irradiance.isLoading,
     efficiency.points, efficiency.unit, efficiency.unavailableReason, efficiency.isLoading,
+    wms.series, wms.catalogue, wms.stationCount, wms.isLoading, wms.isError,
     environment, dcCapacityKwp, acCapacityKw, chosen,
   ]);
 }

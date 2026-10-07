@@ -1008,6 +1008,34 @@ SOURCE_KEY_ALIASES_BY_DEVICE_TYPE: Final[dict[str, dict[str, str]]] = {
     },
 }
 
+# ── PV-string short keys — ⚠ ASSUMED, observed 6 Oct 2026 ────────────────────
+# The client's broker began publishing per-string figures on topics of their
+# own (`…/MCR/INVERTER_1_STRING16`, `…_STRING28`, `…/SMB1_STRING24`) under the
+# keys `I1`..`I28` and `P1`..`P28`. Read as PVn current and PVn power because
+# the arithmetic closes on the first reading taken: KULAR_GREEN INVERTER_1's
+# I1..I28 summed to 148.49 A, which is *exactly* that Inverter's own `PVI` in
+# the same round — so these are the machine's own PV inputs, not a second
+# instrument. On VARDHMAN_GROUP `P1` 8.99 against `I1` 11.0 A at `PVV` 795.9 V
+# (8.75 kW) puts `Pn` in kW.
+#
+# Type-scoped, never global, for the reason `ON` and `TRIP` are: `I1` and `P1`
+# are generic words a meter or a protection relay could equally use for
+# something else. OPEN-24 (a)/(c) — still to be confirmed by the client.
+for _type in ("INVERTER", "SMB"):
+    _scoped = SOURCE_KEY_ALIASES_BY_DEVICE_TYPE.setdefault(_type, {})
+    for _n in range(1, MAX_PV_STRINGS + 1):
+        _scoped[f"I{_n}"] = f"PV{_n}_CURRENT"
+        _scoped[f"P{_n}"] = f"PV{_n}_ACTIVE_POWER"
+
+# A topic whose Device code ends `_STRING`, optionally followed by a number,
+# carries the PV strings of the Device named before the suffix: `INVERTER_1_
+# STRING16` is strings 1..16 of INVERTER_1 and `SMB1_STRING24` strings 17..24 of
+# SMB1. ⚠ ASSUMED — a publisher convention seen on three Clients on 6 Oct 2026,
+# not a stated contract (B-15). The suffix's number is the last string in the
+# message, never a string count: it is a register map's upper bound, and how
+# many inputs are wired stays `devices.string_count`, set by a person.
+STRING_TOPIC_DEVICE_SUFFIX: Final = r"_STRING\d*"
+
 
 def alias_for(source_key: str, device_type_code: str | None = None) -> str | None:
     """The Tag a payload key maps to, Device Type taken into account.
@@ -1296,3 +1324,105 @@ BROKER_QUIET_AFTER_S: Final = 600
 # once a process has stayed up for SUPERVISOR_STABLE_AFTER_S.
 SUPERVISOR_MAX_BACKOFF_S: Final = 60
 SUPERVISOR_STABLE_AFTER_S: Final = 60
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Data Issues — what the broker sends that the platform cannot use or does not
+# trust (`domain/data_issues.py`, the Data Issues screen). ⚠ ASSUMED, all of it:
+# these decide when something is *worth showing an administrator*, never how a
+# value is stored or computed, so a wrong one costs a missed or noisy row.
+# ════════════════════════════════════════════════════════════════════════════
+
+# How far back a Device's own messages are read to learn which keys it sends.
+# Several cycles of the slowest cadence seen on the client's broker (86 s), so a
+# key that rides in only some messages is still seen.
+DATA_ISSUE_PAYLOAD_WINDOW_S: Final = 2 * 3600
+# At most this many recent messages per topic. Enough to cover messages that
+# carry different subsets of keys; few enough to stay cheap on a 30 s cycle.
+DATA_ISSUE_PAYLOAD_MESSAGES: Final = 20
+# How far back rejected (flagged) values are counted.
+DATA_ISSUE_FLAGGED_WINDOW_S: Final = 3600
+# A Tag is reported when its latest value was rejected, or when at least this
+# share of the window's values were. Below it, one empty message in a hundred
+# is noise rather than something to fix.
+DATA_ISSUE_FLAGGED_SHARE: Final = 0.10
+# The recorded interval is called wrong when the measured one is more than this
+# many times slower (the health sweep then reads a healthy Device as late)…
+DATA_ISSUE_INTERVAL_SLOWER: Final = 1.5
+# …or less than this fraction of it (silence is noticed later than it could be).
+DATA_ISSUE_INTERVAL_FASTER: Final = 0.5
+# Gaps needed before a measured interval is trusted at all.
+DATA_ISSUE_INTERVAL_MIN_GAPS: Final = 5
+# Two messages on one topic closer than this fraction of its interval cannot
+# both be live: they are a backlog replayed by the broker after a reconnect,
+# stored at the moment they *arrived* because this broker's payloads carry no
+# time of measurement (BROKER_OBSERVATIONS §2.2).
+DATA_ISSUE_REPLAY_GAP_FRACTION: Final = 0.2
+# A replay is reported once at least this many messages arrived that way inside
+# one minute — one early message is jitter, not a backlog.
+DATA_ISSUE_REPLAY_MIN_MESSAGES: Final = 5
+# How far back replays are looked for.
+DATA_ISSUE_REPLAY_WINDOW_S: Final = 24 * 3600
+# A PV input above a Device's string count is said to carry current when it has
+# read more than this in the last day — the same order as the String Analysis
+# thresholds, so "hidden but working" and "no current" agree.
+DATA_ISSUE_STRING_CURRENT_A: Final = 0.5
+# How far back that "has read more than" is judged. A day, so a String Analysis
+# opened at night still knows which inputs carried current at noon.
+DATA_ISSUE_STRING_WINDOW_S: Final = 24 * 3600
+# A rejected value within this fraction of its Tag's range of zero is how
+# equipment says "nothing" — 0 Hz from an Inverter that has shut down for the
+# night, -1 W/m² from a pyranometer in the dark — and no mapping can change
+# it, so it is not reported as an issue (the charts already count it). A
+# value far outside its range is a unit, a scale or a sentinel (6553.5 is a
+# 16-bit register's "no reading"), and is.
+DATA_ISSUE_IDLE_ZERO_FRACTION: Final = 0.01
+# How many recent messages of an unregistered topic its interval is measured
+# over — as discovery's topic view measures it, by the median gap.
+DATA_ISSUE_INTERVAL_SAMPLE: Final = 50
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Forecasting — from the Plant's own history only (`domain/forecast.py`).
+# ⚠ PROPOSED, and chosen by the user on 8 Oct 2026 over a weather service: no
+# weather forecast is used, so nothing here can foresee a cloudy tomorrow. Each
+# figure is a method parameter, not a fact about any Plant.
+# ════════════════════════════════════════════════════════════════════════════
+
+# Days of the Plant's recent output that make its daily profile. Two weeks: long
+# enough that one cloudy day does not decide the shape, short enough that the
+# season (the sun setting earlier each week in October) has not moved it far.
+FORECAST_HISTORY_DAYS: Final = 14
+# Fewer days than this at a time of day, and no forecast is made for it.
+FORECAST_MIN_DAYS: Final = 3
+# The "clear day" envelope: this quantile of the days' output at each time of
+# day. Not the maximum, which one reflection off a cloud edge would set.
+FORECAST_ENVELOPE_QUANTILE: Final = 0.9
+# The band drawn around a forecast: the days' output between these quantiles.
+FORECAST_BAND_LOW_QUANTILE: Final = 0.1
+FORECAST_BAND_HIGH_QUANTILE: Final = 0.9
+# How many of the latest 15-minute buckets judge how bright it is *now*
+# (output ÷ envelope) — two, so one passing cloud does not swing the forecast.
+FORECAST_CLEARNESS_BUCKETS: Final = 2
+# Below this share of the envelope's daily peak (dawn, dusk, night) the ratio
+# is noise over a near-zero denominator, and the typical day is used instead.
+FORECAST_ENVELOPE_FLOOR_SHARE: Final = 0.05
+# Brighter than the clear-day envelope is real (light focused off a cloud edge)
+# but does not last, so "as bright as now" is never carried forward above this.
+FORECAST_CLEARNESS_CAP: Final = 1.2
+# How long "as bright as now" is trusted: its weight falls in a straight line
+# from 1 now to 0 this many hours ahead, the typical day taking over.
+FORECAST_PERSISTENCE_HOURS: Final = 3.0
+# A day's register counts as complete once it has stopped rising for this long
+# before the day's last reading — generation over, the total final. A day cut
+# short by an outage is left out of the history rather than read as a poor day.
+FORECAST_REGISTER_SETTLED_MIN: Final = 60
+# A daily register falling below this share of the day's highest value so far
+# has restarted (its own midnight need not be the Plant's); a smaller dip — one
+# Inverter of a summed figure going quiet — has not. The frontend's yesterday
+# figure uses the same share (`useYesterdayEnergy.RESET_SHARE`).
+REGISTER_RESET_SHARE: Final = 0.5
+# Days the method is checked against what happened (forecast vs actual).
+FORECAST_BACKTEST_DAYS: Final = 7
+# How long one Plant's forecast is reused before being worked out again.
+FORECAST_CACHE_S: Final = 60

@@ -197,9 +197,10 @@ describe("digitsForUnit", () => {
     expect(formatValue(17, "count")).toBe("17 count");
   });
 
-  it("gives a ratio three decimals", () => {
-    expect(digitsForUnit("ratio")).toBe(3);
-    expect(formatValue(0.9876, "ratio")).toBe("0.988 ratio");
+  it("gives a power factor two decimals", () => {
+    expect(digitsForUnit("ratio")).toBe(2);
+    expect(formatValue(0.9876, "ratio")).toBe("0.99 ratio");
+    expect(formatValue(-0.5, "ratio")).toBe("-0.50 ratio");
   });
 
   it("leaves every other unit to the magnitude rule", () => {

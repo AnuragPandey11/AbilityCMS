@@ -165,7 +165,7 @@ export function ClientsAdmin(): JSX.Element {
   const clientCodes: PublishingCode[] | undefined = discovered.data?.map((d) => ({
     code: d.client_code,
     unregistered: d.registered_client_id === null,
-    title: `${d.plant_codes.length} plant(s), last heard ${AGE(d.last_seen)} ago.`,
+    title: `${d.plant_codes.length} plant(s), last heard ${AGE(d.last_seen)}.`,
   }));
   // Above the permission check, as every hook must be. Only while the
   // new-Client form is open: filling a hidden field would
@@ -481,7 +481,7 @@ export function ClientsAdmin(): JSX.Element {
                       </div>
                       <div className="mt-0.5 text-[11px] text-ink-faint">
                         {entry.found
-                          ? `${entry.found.plant_codes.length} plant(s) · last heard ${AGE(entry.found.last_seen)} ago`
+                          ? `${entry.found.plant_codes.length} plant(s) · last heard ${AGE(entry.found.last_seen)}`
                           : canDiscoverNote}
                       </div>
                     </button>
@@ -870,7 +870,7 @@ function BrokerActivity({ clientCode }: { clientCode: string }): JSX.Element {
                               ) : null}
                               {topic.data.last_seen ? (
                                 <span className="text-ink-faint">
-                                  last heard {AGE(topic.data.last_seen)} ago
+                                  last heard {AGE(topic.data.last_seen)}
                                 </span>
                               ) : null}
                             </div>

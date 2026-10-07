@@ -11,7 +11,8 @@ from sqlalchemy import text
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.domain.periods import report_window
-from solarcms.services import report_tables
+from solarcms.schemas.reports import CustomReportDefinition, CustomReportSave
+from solarcms.services import custom_reports, report_tables
 from solarcms.services.storage import LocalArtifactStore, get_store
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -74,6 +75,22 @@ _MEDIA_TYPES = {
 }
 
 
+def _rendered(table: report_tables.ReportTable, file_format: str) -> bytes:
+    if file_format == "csv":
+        return ("﻿" + report_tables.render_csv(table)).encode("utf-8")
+    if file_format == "xlsx":
+        return report_tables.render_xlsx(table)
+    if file_format == "pdf":
+        pdf = report_tables.render_pdf(table)
+        if pdf is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "PDF rendering is not installed on this server; the Excel download "
+                "carries the same table, or print the page to PDF.")
+        return pdf
+    return report_tables.render_html(table).encode("utf-8")
+
+
 @router.get("/tables/{kind}/export")
 async def export_report_table(
     kind: str, plant_id: int, session: SessionDep,
@@ -95,21 +112,7 @@ async def export_report_table(
     table, _now = await _report_table(session, kind, plant_id, period, from_date, to_date,
                                       from_time, to_time)
 
-    content: bytes
-    if file_format == "csv":
-        content = ("﻿" + report_tables.render_csv(table)).encode("utf-8")
-    elif file_format == "xlsx":
-        content = report_tables.render_xlsx(table)
-    elif file_format == "pdf":
-        pdf = report_tables.render_pdf(table)
-        if pdf is None:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "PDF rendering is not installed on this server; the Excel download "
-                "carries the same table, or print the page to PDF.")
-        content = pdf
-    else:
-        content = report_tables.render_html(table).encode("utf-8")
+    content = _rendered(table, file_format)
 
     await session.execute(text("""
         INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
@@ -130,6 +133,161 @@ async def export_report_table(
         headers={"Content-Disposition":
                  f'{disposition}; filename="{table.filename_stem}.{file_format}"'},
     )
+
+
+# ── Custom reports: any Devices' readings, across Plants, at any interval ────
+
+
+async def _custom_table(
+    session: SessionDep, definition: CustomReportDefinition, now: datetime,
+) -> report_tables.ReportTable:
+    try:
+        return await custom_reports.build(session, definition, now)
+    except custom_reports.ReportRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+
+@router.get("/custom/catalog")
+async def custom_report_catalog(
+    session: SessionDep,
+    plant_ids: list[int] = Query(..., min_length=1, max_length=50),
+    _: CurrentUser = Depends(require_permission("report.generate")),
+) -> dict[str, Any]:
+    """The chosen Plants' Devices and the readings each one sends — the builder's lists."""
+    return await custom_reports.catalog(session, plant_ids)
+
+
+@router.post("/custom/table")
+async def custom_report_table(
+    body: CustomReportDefinition, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("report.generate")),
+) -> dict[str, Any]:
+    """A custom report's table, as JSON — the screen's preview."""
+    now = datetime.now(UTC)
+    return report_tables.to_payload(await _custom_table(session, body, now), now)
+
+
+@router.post("/custom/export")
+async def export_custom_report(
+    body: CustomReportDefinition, session: SessionDep,
+    file_format: str = Query(..., alias="format", pattern="^(csv|xlsx|pdf|html)$"),
+    user: CurrentUser = Depends(require_permission("report.generate")),
+) -> Response:
+    """The same table as a file, computed afresh like every Report download."""
+    table = await _custom_table(session, body, datetime.now(UTC))
+    content = _rendered(table, file_format)
+    await session.execute(text("""
+        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
+        VALUES (:client_id, :user_id, 'report.export', 'plants', :plant_id,
+                CAST(:after AS jsonb))
+    """), {"client_id": table.plant.client_id, "user_id": user.user_id,
+           "plant_id": table.plant.id,
+           "after": json.dumps({"kind": "custom", "format": file_format,
+                                "definition": body.model_dump(mode="json")})})
+    disposition = "inline" if file_format == "html" else "attachment"
+    return Response(
+        content=content, media_type=_MEDIA_TYPES[file_format],
+        headers={"Content-Disposition":
+                 f'{disposition}; filename="{table.filename_stem}.{file_format}"'},
+    )
+
+
+@router.get("/custom/saved")
+async def list_saved_custom_reports(
+    session: SessionDep,
+    user: CurrentUser = Depends(require_permission("report.generate")),
+) -> list[dict[str, Any]]:
+    """Custom reports saved in this Client, newest first (shared within it)."""
+    rows = (await session.execute(text("""
+        SELECT r.id, r.name, r.definition, r.created_at, r.updated_at, r.created_by,
+               u.email AS created_by_email
+          FROM custom_reports r LEFT JOIN users u ON u.id = r.created_by
+         ORDER BY r.updated_at DESC
+    """))).all()
+    return [
+        {**dict(row._mapping),
+         "can_change": row.created_by == user.user_id or "config.modify" in user.permissions}
+        for row in rows
+    ]
+
+
+async def _saved_owner(session: SessionDep, report_id: int) -> Any:
+    row = (await session.execute(text(
+        "SELECT id, client_id, created_by, name FROM custom_reports WHERE id = :id"
+    ), {"id": report_id})).first()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such saved report")
+    return row
+
+
+def _may_change(row: Any, user: CurrentUser) -> None:
+    # Shared within the Client for everyone to run; changed by the person who
+    # saved it, or by an administrator.
+    if row.created_by != user.user_id and "config.modify" not in user.permissions:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Only the person who saved this report, or an administrator, "
+                            "can change or remove it.")
+
+
+@router.post("/custom/saved", status_code=status.HTTP_201_CREATED)
+async def save_custom_report(
+    body: CustomReportSave, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("report.generate")),
+) -> dict[str, Any]:
+    row = (await session.execute(text("""
+        INSERT INTO custom_reports (client_id, name, definition, created_by)
+        VALUES (:client_id, :name, CAST(:definition AS jsonb), :user)
+        RETURNING id, name, created_at
+    """), {"client_id": user.client_id, "name": body.name.strip(),
+           "definition": body.definition.model_dump_json(), "user": user.user_id})).first()
+    assert row is not None
+    await session.execute(text("""
+        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
+        VALUES (:client_id, :user_id, 'custom_report.save', 'custom_reports', :id,
+                CAST(:after AS jsonb))
+    """), {"client_id": user.client_id, "user_id": user.user_id, "id": row.id,
+           "after": json.dumps({"name": body.name.strip()})})
+    return dict(row._mapping)
+
+
+@router.put("/custom/saved/{report_id}")
+async def update_custom_report(
+    report_id: int, body: CustomReportSave, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("report.generate")),
+) -> dict[str, Any]:
+    _may_change(await _saved_owner(session, report_id), user)
+    row = (await session.execute(text("""
+        UPDATE custom_reports SET name = :name, definition = CAST(:definition AS jsonb),
+               updated_at = now()
+         WHERE id = :id RETURNING id, name, updated_at
+    """), {"id": report_id, "name": body.name.strip(),
+           "definition": body.definition.model_dump_json()})).first()
+    assert row is not None
+    await session.execute(text("""
+        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
+        VALUES (:client_id, :user_id, 'custom_report.update', 'custom_reports', :id,
+                CAST(:after AS jsonb))
+    """), {"client_id": user.client_id, "user_id": user.user_id, "id": report_id,
+           "after": json.dumps({"name": body.name.strip()})})
+    return dict(row._mapping)
+
+
+@router.delete("/custom/saved/{report_id}", status_code=status.HTTP_204_NO_CONTENT,
+               response_class=Response)
+async def delete_custom_report(
+    report_id: int, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("report.generate")),
+) -> Response:
+    owner = await _saved_owner(session, report_id)
+    _may_change(owner, user)
+    await session.execute(text("DELETE FROM custom_reports WHERE id = :id"), {"id": report_id})
+    await session.execute(text("""
+        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, before)
+        VALUES (:client_id, :user_id, 'custom_report.delete', 'custom_reports', :id,
+                CAST(:before AS jsonb))
+    """), {"client_id": user.client_id, "user_id": user.user_id, "id": report_id,
+           "before": json.dumps({"name": owner.name})})
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ── Report definitions and runs: a Client's Reports, rendered by the scheduler

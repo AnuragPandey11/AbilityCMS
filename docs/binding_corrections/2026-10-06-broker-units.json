@@ -1,0 +1,60 @@
+{
+  "description": "Per-Device binding corrections for the Clients first observed on the client's broker on 6 Oct 2026 (BROKER_OBSERVATIONS.md section 8). Each is ASSUMED, not client-confirmed (OPEN-15): the evidence is arithmetic over values published in the same round. Apply after `commission-from-broker --create-missing --apply` has registered the Devices: `python -m solarcms.cli apply-binding-corrections --file ../docs/binding_corrections/2026-10-06-broker-units.json` (dry run), then again with --apply.",
+  "corrections": [
+    {
+      "topic": "SCMS/V1/ISPL/UNIT1/ICOG_MFM",
+      "source_key": "VRY", "tag": "HV_VOLTAGE_RY", "scale": 0.001,
+      "evidence": "Published in volts on an 11 kV feeder: sqrt(3) * 10.20 kV * 22.43 A * PF 0.998 = 395.5 kW against P 392.7 kW in the same message (0.7%). Unscaled it would be 10,200 kV."
+    },
+    {
+      "topic": "SCMS/V1/ISPL/UNIT1/ICOG_MFM",
+      "source_key": "VYB", "tag": "HV_VOLTAGE_YB", "scale": 0.001,
+      "evidence": "As VRY on the same meter: 10,189 V published, an 11 kV feeder."
+    },
+    {
+      "topic": "SCMS/V1/ISPL/UNIT1/ICOG_MFM",
+      "source_key": "VBR", "tag": "HV_VOLTAGE_BR", "scale": 0.001,
+      "evidence": "As VRY on the same meter: 10,120 V published, an 11 kV feeder."
+    },
+    {
+      "topic": "SCMS/V1/ISPL/UNIT1/WMS",
+      "source_key": "AGHI", "tag": "GHI_CUMULATIVE", "scale": 0.001,
+      "evidence": "Published in Wh/m2: 1490.8 rising to 1504.1 (+13.3) over ~150 s at GHI ~540 W/m2. +13.3 Wh/m2 is plausible (~22 expected); +13.3 kWh/m2 in 150 s is physically impossible. KULAR_GREEN's WMS publishes the same key in kWh/m2 (3.83, +0.0245 over the same window)."
+    },
+    {
+      "topic": "SCMS/V1/ISPL/UNIT1/WMS",
+      "source_key": "AGTI", "tag": "GTI_CUMULATIVE", "scale": 0.001,
+      "evidence": "Published identical to AGHI on every message observed (1490.779 .. 1504.087), so the same unit."
+    },
+    {
+      "topic": "SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MAIN_MFM",
+      "source_key": "VRY", "tag": "AC_VOLTAGE_RY", "scale": 1.0,
+      "evidence": "An LT meter in volts (419.8 .. 420.9). The MFM alias reads VRY as an 11 kV feeder in kV, under which 420 would pass the 0..800 kV range check as a valid 420 kV. Note: P 772 kW is ~10x sqrt(3) * V * I * PF (76 kW) on this meter; that gap is a client question (B-16) and is not corrected here."
+    },
+    {
+      "topic": "SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MAIN_MFM",
+      "source_key": "VYB", "tag": "AC_VOLTAGE_YB", "scale": 1.0,
+      "evidence": "As VRY on the same LT meter (418.0 .. 419.0 V)."
+    },
+    {
+      "topic": "SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MAIN_MFM",
+      "source_key": "VBR", "tag": "AC_VOLTAGE_BR", "scale": 1.0,
+      "evidence": "As VRY on the same LT meter (417.8 .. 418.8 V)."
+    },
+    {
+      "topic": "SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MFM",
+      "source_key": "VRY", "tag": "AC_VOLTAGE_RY", "scale": 1.0,
+      "evidence": "An LT meter in volts: sqrt(3) * 0.419 kV * 270 A * PF 1.0 = 195.9 kW against P 191.5 kW in the same message (2%). Unscaled under the MFM alias it would be stored as a valid 419 kV."
+    },
+    {
+      "topic": "SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MFM",
+      "source_key": "VYB", "tag": "AC_VOLTAGE_YB", "scale": 1.0,
+      "evidence": "As VRY on the same LT meter (419.0 .. 419.6 V)."
+    },
+    {
+      "topic": "SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MFM",
+      "source_key": "VBR", "tag": "AC_VOLTAGE_BR", "scale": 1.0,
+      "evidence": "As VRY on the same LT meter (419.9 .. 420.8 V)."
+    }
+  ]
+}

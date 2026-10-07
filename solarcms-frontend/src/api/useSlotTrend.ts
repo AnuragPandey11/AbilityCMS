@@ -76,6 +76,11 @@ const TIER_FOR: Record<TrendRange, Tier> = {
   "30d": "agg_1d",
 };
 
+/** The tier a range is read at — for a series drawn beside a slot's trend. */
+export function tierForRange(range: TrendRange): Tier {
+  return TIER_FOR[range];
+}
+
 const HOURS_FOR: Record<Exclude<TrendRange, "today">, number> = {
   "24h": 24,
   "7d": 24 * 7,

@@ -8,6 +8,9 @@
 
 import { useQueries, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import * as catalogApi from "./endpoints/catalog";
+import * as dataIssuesApi from "./endpoints/dataIssues";
+import * as forecastApi from "./endpoints/forecast";
+import * as statusCodesApi from "./endpoints/statusCodes";
 import * as regionsApi from "./endpoints/regions";
 import * as plantsApi from "./endpoints/plants";
 import * as devicesApi from "./endpoints/devices";
@@ -429,6 +432,67 @@ export function usePlantCommissioning(plantId: number | null, enabled = true) {
     queryFn: () => plantsApi.commissioningReport(plantId as number),
     enabled: plantId !== null && enabled,
     ...FEW_SECONDS,
+  });
+}
+
+/**
+ * What the broker sends that one Plant cannot use or does not trust.
+ *
+ * Refreshed every minute: the issues are judged against the last few cycles
+ * of each Device's own messages, so a fix shows as resolved within a cycle or
+ * two of the equipment's next message — and the screen says when it checked.
+ */
+export function useDataIssues(plantId: number | null) {
+  return useQuery({
+    queryKey: qk.dataIssues(plantId ?? 0),
+    queryFn: () => dataIssuesApi.plantDataIssues(plantId as number),
+    enabled: plantId !== null,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+}
+
+/** Open counts per Plant, for the navigation badge. */
+export function useDataIssuesSummary(enabled = true) {
+  return useQuery({
+    queryKey: qk.dataIssuesSummary(),
+    queryFn: dataIssuesApi.dataIssuesSummary,
+    enabled,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    // A badge that fails to load must not take the menu with it.
+    retry: false,
+  });
+}
+
+/**
+ * What each status code means at a Plant. Meanings change when somebody edits
+ * them, so a minute is fresh enough; the editor invalidates on save.
+ */
+export function useStatusCodes(plantId: number | null | undefined) {
+  return useQuery({
+    queryKey: qk.statusCodes(plantId ?? 0),
+    queryFn: () => statusCodesApi.plantStatusCodes(plantId as number),
+    enabled: plantId != null,
+    ...SIXTY_SECONDS,
+    // A missing meaning shows the code as sent; it must never blank a card.
+    retry: false,
+  });
+}
+
+/**
+ * A Plant's forecast. The server caches it for a minute and its history moves
+ * every fifteen, so one request a minute is plenty — and it never blocks the
+ * figure it sits beside: the caller renders without it until it arrives.
+ */
+export function usePlantForecast(plantId: number | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: qk.forecast(plantId ?? 0),
+    queryFn: () => forecastApi.plantForecast(plantId as number),
+    enabled: enabled && plantId != null,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    retry: false,
   });
 }
 

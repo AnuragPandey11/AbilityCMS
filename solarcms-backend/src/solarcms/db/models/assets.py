@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -25,6 +26,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Numeric,
     String,
@@ -310,6 +312,75 @@ class PlantCollector(Base):
     created_at: Mapped[datetime] = created_at()
 
 
+class DeviceTopic(Base):
+    """A topic beyond `devices.source_address` that feeds the same Device.
+
+    Created by migration 0030, for an Inverter whose PV strings arrive on topics
+    of their own (`INVERTER_1_STRING16`, `INVERTER_1_STRING28`). The resolver
+    matches it exactly, as it does the primary topic, so origin is still the
+    topic's alone (Guardrail 5); this only lets more than one topic name the
+    same Device. `registered_topics` (a view) is the union of both, and is what
+    every "is this topic registered" question reads.
+
+    ⚠ A topic is never one Device's primary and another's extra. No constraint
+    spans the two tables, so the API and the CLI refuse it.
+
+    Modelled so `alembic revision --autogenerate` does not propose dropping it;
+    the routers use explicit SQL.
+    """
+
+    __tablename__ = "device_topics"
+    __table_args__ = (
+        UniqueConstraint("topic", name="uq_device_topics_topic"),
+        CheckConstraint("length(btrim(topic)) > 0", name="device_topic_not_blank"),
+        Index("ix_device_topics_device", "device_id"),
+    )
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), nullable=False
+    )
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = created_at()
+
+
+class DataIssueAcknowledgement(Base):
+    """A data issue a person has marked as known. Created by migration 0031.
+
+    `issue_key` is the issue's stable fingerprint (`domain.data_issues.DataIssue
+    .key`). The Data Issues screen moves an acknowledged issue to its own
+    section — never hides it — and the row can be removed to bring it back.
+
+    Modelled so `alembic revision --autogenerate` does not propose dropping it;
+    the router uses explicit SQL.
+    """
+
+    __tablename__ = "data_issue_acknowledgements"
+    __table_args__ = (
+        UniqueConstraint("plant_id", "issue_key",
+                         name="uq_data_issue_acknowledgements_plant_key"),
+        CheckConstraint("length(btrim(issue_key)) > 0", name="data_issue_key_not_blank"),
+    )
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    plant_id: Mapped[int] = mapped_column(
+        ForeignKey("plants.id", ondelete="CASCADE"), nullable=False
+    )
+    issue_key: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = created_at()
+
+
 class PlantDeviceCount(Base):
     """The planned Device count per Device Type. Created by migration 0019.
 
@@ -385,3 +456,38 @@ class PlantDashboardSlotOverride(Base):
     hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created_at()
+
+
+class DeviceStatusCode(Base):
+    """What one status code means at one Plant (migration 0032), as the client says.
+
+    Modelled so `alembic revision --autogenerate` does not propose dropping it;
+    the router uses explicit SQL.
+    """
+
+    __tablename__ = "device_status_codes"
+    __table_args__ = (
+        UniqueConstraint("plant_id", "device_type_id", "tag_id", "code",
+                         name="uq_device_status_codes_plant_type_tag_code"),
+        CheckConstraint("kind IN ('normal', 'standby', 'warning', 'fault')",
+                        name="device_status_code_kind"),
+        CheckConstraint("length(btrim(label)) > 0", name="device_status_code_label"),
+    )
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    plant_id: Mapped[int] = mapped_column(
+        ForeignKey("plants.id", ondelete="CASCADE"), nullable=False
+    )
+    device_type_id: Mapped[int] = mapped_column(
+        ForeignKey("device_types.id", ondelete="RESTRICT"), nullable=False
+    )
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id", ondelete="RESTRICT"), nullable=False)
+    code: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="normal")
+    note: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    updated_at: Mapped[datetime] = created_at()

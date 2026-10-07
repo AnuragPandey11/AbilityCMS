@@ -51,6 +51,7 @@ from sqlalchemy import text
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.domain.absence import classify_topic_liveness
 from solarcms.domain.assumptions import TAG_SPECS, alias_for
+from solarcms.domain.commissioning import string_topic_owner
 from solarcms.domain.decoding import TopicPattern, normalise_payload, parse_topic
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
@@ -207,16 +208,44 @@ async def discover_plants(
               FROM plants p JOIN clients c ON c.id = p.client_id
         """))).all()
     }
+    # Primary topics and extra ones (migration 0030) alike: an Inverter's
+    # `…_STRING16` topic is registered — to that Inverter — and must never be
+    # offered as equipment awaiting registration.
     registered_devices = {
-        r.source_address: r.id for r in (await session.execute(text(
-            "SELECT id, source_address FROM devices WHERE source_address IS NOT NULL"
+        r.topic: (r.device_id, r.is_primary) for r in (await session.execute(text(
+            "SELECT topic, device_id, is_primary FROM registered_topics"
         ))).all()
+    }
+
+    # A string topic not yet attached names its owner in its own code
+    # (`INVERTER_3_STRING16` → INVERTER_3). The owner is offered only where it
+    # is registered in the *same* Collector: the topic decides the enclosure
+    # (Guardrail 13), and `attach_topic` refuses anything else.
+    owners = {
+        (r.plant_code, r.code, r.collector_code): r.id
+        for r in (await session.execute(text("""
+            SELECT d.id, d.code, d.collector_code, p.code AS plant_code
+              FROM devices d
+              JOIN plants p ON p.id = d.plant_id
+              JOIN clients c ON c.id = p.client_id
+             WHERE c.code = :client_code AND d.status <> 'decommissioned'
+        """), {"client_code": client_code})).all()
     }
 
     out: list[dict[str, Any]] = []
     for plant in sorted(plants.values(), key=lambda p: p["plant_code"]):
         for device in plant["devices"]:
-            device["registered_device_id"] = registered_devices.get(device["topic"])
+            owner = registered_devices.get(device["topic"])
+            device["registered_device_id"] = owner[0] if owner else None
+            # False only for a topic that feeds a Device whose own topic is
+            # another one — the screen lists it under that Device, not as a row.
+            device["is_primary_topic"] = owner[1] if owner else None
+            string_owner = string_topic_owner(device["device_code"])
+            device["string_owner_code"] = string_owner
+            device["string_owner_device_id"] = (
+                owners.get((plant["plant_code"], string_owner, device["collector_code"]))
+                if string_owner else None
+            )
         plant["devices"].sort(
             key=lambda d: (d["collector_code"] or "", d["device_code"])
         )
@@ -293,7 +322,8 @@ async def discover_topic(
     # this morning still has quarantined history, and reporting it as "no
     # Device registered" tells the operator to fix something already fixed.
     registered_device_id = (await session.execute(text(
-        "SELECT id FROM devices WHERE source_address = :topic"
+        "SELECT device_id FROM registered_topics WHERE topic = :topic "
+        "ORDER BY is_primary DESC LIMIT 1"
     ), {"topic": topic})).scalar()
     flat, payload_timestamp = normalise_payload(payload)
 
@@ -386,8 +416,10 @@ async def ignore_topic(
     row = (await session.execute(text("""
         INSERT INTO discovery_ignored_topics (client_id, topic, reason, created_by)
         VALUES (
-            (SELECT p.client_id FROM devices d JOIN plants p ON p.id = d.plant_id
-              WHERE d.source_address = :topic LIMIT 1),
+            (SELECT p.client_id FROM registered_topics rt
+               JOIN devices d ON d.id = rt.device_id
+               JOIN plants p ON p.id = d.plant_id
+              WHERE rt.topic = :topic LIMIT 1),
             :topic, :reason, :user_id
         )
         ON CONFLICT (topic) DO UPDATE SET reason = EXCLUDED.reason

@@ -5,6 +5,9 @@
     python -m solarcms.cli onboard-test-plant
     python -m solarcms.cli commission-from-broker --seconds 45
     python -m solarcms.cli commission-from-broker --seconds 45 --apply
+    python -m solarcms.cli commission-from-broker --topic 'SCMS/V1/#' --seconds 75 \
+        --create-missing --apply
+    python -m solarcms.cli apply-binding-corrections --file FILE.json --apply
     python -m solarcms.cli collectors-from-topics
     python -m solarcms.cli collectors-from-topics --apply --retire-devices
     python -m solarcms.cli create-client-user --email a@b.com --password ... \
@@ -110,17 +113,23 @@ async def _create_superadmin(email: str, password: str, full_name: str) -> int:
 
 async def _commission_from_broker(
     host: str | None, port: int | None, topic: str | None,
-    seconds: float, apply: bool,
+    seconds: float, apply: bool, create_missing: bool = False,
 ) -> int:
-    """Listen to the broker, then register what is publishing but not registered.
+    """Listen to the broker, then reconcile what is publishing with what is registered.
 
-    Dry run by default. The proposal is printed in full — every Device, its
-    inferred Type, and any payload key the registry has no Tag for — because
-    nobody should accept a fleet of equipment they have not read.
+    Dry run by default. The proposal is printed in full — every topic, what
+    would be done with it and why, and any payload key the registry has no Tag
+    for — because nobody should accept a fleet of equipment they have not read.
+
+    Safe to re-run against a Plant already in service: a registered Device is
+    only *refreshed* (its measured interval, and bindings for keys it has
+    started sending), never re-registered — so its name, Block, wiring and any
+    hand-corrected scale survive. See `services/onboarding.plan_commissioning`.
     """
     from solarcms.services.onboarding import (
         ObservedDevice,
         commission_observed_devices,
+        devices_without_string_count,
         plan_commissioning,
     )
     try:
@@ -183,33 +192,98 @@ async def _commission_from_broker(
                         "quarantined to mqtt_raw, never attributed by inference "
                         "(Guardrail 5)", topic=topic_name)
 
-        plan = await plan_commissioning(session, observed)
-        print(f"\n{'TOPIC':<52} {'TYPE':<12} {'KEYS':>5}  NOTE")
-        for row in plan:
-            note = ""
-            if row["blocked"]:
-                note = "BLOCKED: " + (
-                    "no matching Device Type" if row["device_type"] is None
-                    else "no such Plant")
-            elif row["unmapped_keys"]:
-                note = "unmapped: " + ", ".join(row["unmapped_keys"])
-            print(f"{row['topic']:<52} {row['device_type']!s:<12} "
-                  f"{row['mapped_keys']:>5}  {note}")
-
-        blocked = sum(1 for row in plan if row["blocked"])
-        print(f"\n  {len(plan)} topics, {blocked} blocked, "
-              f"{len(unparsed)} unmatched by any pattern")
+        plan = await plan_commissioning(session, observed, create_missing=create_missing)
+        _print_plan(plan, unparsed)
 
         if not apply:
-            print("\n  Dry run. Nothing written. Re-run with --apply to register.\n")
+            print("\n  Dry run. Nothing written. Re-run with --apply to write this plan.\n")
             return 0
 
-        summary = await commission_observed_devices(session, observed)
+        summary = await commission_observed_devices(
+            session, observed, create_missing=create_missing)
+        touched = [r["device_id"] for r in plan if r["device_id"]]
+        touched += [r.id for r in (await session.execute(text(
+            "SELECT device_id AS id FROM registered_topics WHERE topic = ANY(:t)"
+        ), {"t": [o.topic for o in observed]})).all()]
+        uncounted = await devices_without_string_count(session, sorted(set(touched)))
     # Every observed topic, not only those registered: clearing an entry costs
     # one lookup on the next message, and a skipped topic's miss is still true.
     await _invalidate_resolutions(item.topic for item in observed)
     log.info("commissioned from broker", **summary)
+    if uncounted:
+        print(f"\n  {len(uncounted)} Device(s) now receive PV-string Tags but have no "
+              f"string count, so String Analysis will not draw their strings:\n    "
+              + ", ".join(uncounted)
+              + "\n  Set each one's string count under Tag Mapping (Device settings)."
+                " It is never inferred: an unused input reads zero, like a dead one.\n")
     return 0
+
+
+def _print_plan(plan: list[dict[str, Any]], unparsed: list[str]) -> None:
+    print(f"\n{'TOPIC':<62} {'ACTION':<9} {'TYPE':<12} {'KEYS':>4}  NOTE")
+    for row in plan:
+        notes: list[str] = []
+        if row["blocked"]:
+            notes.append(f"BLOCKED: {row['reason']}")
+        else:
+            if row["creates_client"]:
+                notes.append(f"creates Client {row['client_code']}")
+            if row["creates_plant"]:
+                notes.append(f"creates Plant {row['plant_code']}")
+            if row["target_code"] != row["device_code"]:
+                notes.append(f"strings of {row['target_code']}")
+            if row["interval_change"]:
+                old, new = row["interval_change"]
+                notes.append(f"interval {old}s -> {new}s")
+            if row["action"] == "refresh" and row["new_keys"]:
+                notes.append(f"binds {len(row['new_keys'])} new key(s)")
+            if row["unmapped_keys"]:
+                notes.append("unmapped: " + ", ".join(row["unmapped_keys"]))
+            if row["action"] == "refresh" and not notes:
+                notes.append("unchanged")
+        print(f"{row['topic']:<62} {row['action']:<9} {row['device_type']!s:<12} "
+              f"{row['mapped_keys']:>4}  {'; '.join(notes)}")
+
+    actions = {a: sum(1 for r in plan if r["action"] == a)
+               for a in ("register", "attach", "refresh", "blocked")}
+    print(f"\n  {len(plan)} topics: {actions['register']} to register, "
+          f"{actions['attach']} to attach to their Device, "
+          f"{actions['refresh']} already registered, {actions['blocked']} blocked; "
+          f"{len(unparsed)} unmatched by any pattern")
+
+
+async def _apply_binding_corrections(path: str, apply: bool) -> int:
+    """Apply a reviewed file of per-Device binding corrections. Dry run by default.
+
+    A binding's Tag and scale are per-Device (MASTER §5.2, T-1): the same key
+    means volts on one meter and kilovolts on the next, and no alias table can
+    know which. So a correction is data — a row naming the topic, the key, the
+    Tag it should land on, the scale, and the evidence for it — never a code
+    path named after a Device (Guardrail 2). Every change is audited.
+    """
+    import json
+    from pathlib import Path
+
+    from solarcms.services.binding_corrections import apply_corrections
+
+    try:
+        corrections = json.loads(Path(path).read_text())["corrections"]
+    except (OSError, ValueError, KeyError) as exc:
+        log.error("cannot read the corrections file", path=path, error=str(exc))
+        return 1
+
+    async with scoped_session(SecurityContext.platform(user_id=0), role=None) as session:
+        results = await apply_corrections(session, corrections, apply=apply)
+        for row in results:
+            print(f"  {row['status']:<10} {row['topic']} {row['source_key']}: "
+                  f"{row['detail']}")
+        if not apply:
+            # apply_corrections writes nothing in a dry run; nothing to undo.
+            print("\n  Dry run. Nothing written. Re-run with --apply to write.\n")
+            return 0
+    await _invalidate_resolutions(sorted({r["topic"] for r in results}))
+    failed = sum(1 for r in results if r["status"] == "refused")
+    return 1 if failed else 0
 
 
 async def _backfill_device(device_id: int, apply: bool) -> int:
@@ -465,6 +539,19 @@ def main(argv: list[str] | None = None) -> int:
     commission.add_argument("--seconds", type=float, default=45.0)
     commission.add_argument("--apply", action="store_true",
                             help="write the plan. Without it, nothing is written.")
+    commission.add_argument(
+        "--create-missing", action="store_true",
+        help="create the Client and Plant a topic names when they do not exist "
+             "(status commissioning, provisional names). Add a login afterwards "
+             "with create-client-user.")
+
+    corrections = sub.add_parser(
+        "apply-binding-corrections",
+        help="apply a reviewed file of per-Device binding corrections (Tag, scale)")
+    corrections.add_argument("--file", required=True,
+                             help="JSON file: {\"corrections\": [...]}")
+    corrections.add_argument("--apply", action="store_true",
+                             help="write the changes. Without it, nothing is written.")
 
     backfill = sub.add_parser(
         "backfill-device",
@@ -508,7 +595,10 @@ def main(argv: list[str] | None = None) -> int:
                 return await _create_superadmin(args.email, args.password, args.full_name)
             if args.command == "commission-from-broker":
                 return await _commission_from_broker(
-                    args.host, args.port, args.topic, args.seconds, args.apply)
+                    args.host, args.port, args.topic, args.seconds, args.apply,
+                    args.create_missing)
+            if args.command == "apply-binding-corrections":
+                return await _apply_binding_corrections(args.file, args.apply)
             if args.command == "create-client-user":
                 return await _create_client_user(
                     args.email, args.password,

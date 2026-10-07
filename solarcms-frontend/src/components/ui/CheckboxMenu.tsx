@@ -23,6 +23,9 @@ export interface CheckboxOption<T extends string> {
   swatch?: ReactNode;
 }
 
+/** `w-72`, the list's width, for deciding which edge it hangs from. */
+const PANEL_WIDTH_PX = 288;
+
 export function CheckboxMenu<T extends string>({
   label,
   ariaLabel,
@@ -38,6 +41,13 @@ export function CheckboxMenu<T extends string>({
   onChange: (next: Set<T>) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  /**
+   * Which edge of the button the list hangs from. Right by default (the menu
+   * usually ends a toolbar), left when that would run it off the screen —
+   * on a phone the button wraps to the left edge, and a right-hung list was
+   * cut off there, labels and all.
+   */
+  const [hangLeft, setHangLeft] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -76,7 +86,11 @@ export function CheckboxMenu<T extends string>({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => setOpen((shown) => !shown)}
+        onClick={() => {
+          const rect = buttonRef.current?.getBoundingClientRect();
+          if (rect) setHangLeft(rect.right < Math.min(PANEL_WIDTH_PX, window.innerWidth - 16));
+          setOpen((shown) => !shown);
+        }}
         aria-haspopup="true"
         aria-expanded={open}
         aria-controls={panelId}
@@ -93,7 +107,7 @@ export function CheckboxMenu<T extends string>({
           id={panelId}
           role="group"
           aria-label={ariaLabel ?? label}
-          className="surface-card absolute right-0 z-30 mt-1.5 w-72 rounded-card border border-line p-1.5 shadow-card"
+          className={`surface-card absolute ${hangLeft ? "left-0" : "right-0"} z-30 mt-1.5 max-h-[min(70vh,30rem)] w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-card border border-line p-1.5 shadow-card`}
         >
           {options.map((option) => {
             const disabled = Boolean(option.disabledReason);

@@ -6,6 +6,8 @@
  *
  * - **Generated today, current power, lifetime** — the headline slots, so each
  *   is the same claim, from the same Device, as the tiles elsewhere on the page.
+ * - **Generated yesterday** — yesterday's history of the same source as today's
+ *   row (`useYesterdayEnergy`): no Tag stores it, so it is read back.
  * - **Specific yield, PR, CO₂** — `GET /plants/{id}/kpis?period=today`, always
  *   today whatever the Period control says, because the card is about today.
  *   When the Period *is* today this is the same request the gauges made, so
@@ -24,6 +26,7 @@
  */
 
 import type { KpiFigure, PlantKpis, ResolvedSlot } from "@/api/schemas";
+import type { YesterdayEnergy } from "@/api/useYesterdayEnergy";
 import { sourceLabel, undefinedExplanation } from "@/components/dashboard/SlotValue";
 import { Panel } from "@/components/ui";
 import {
@@ -68,6 +71,47 @@ function slotRow(label: string, slot: ResolvedSlot | undefined): StatusRowData {
     ]
       .filter(Boolean)
       .join(" — "),
+  };
+}
+
+/** Yesterday's total, from the same source as today's row (`useYesterdayEnergy`). */
+function yesterdayRow(label: string, yesterday: YesterdayEnergy | undefined): StatusRowData {
+  if (!yesterday || yesterday.isLoading) {
+    return { label, value: UNDEFINED_DISPLAY, tone: "faint", pending: !!yesterday };
+  }
+  if (yesterday.value === null) {
+    return {
+      label,
+      value: UNDEFINED_DISPLAY,
+      tone: "faint",
+      title: yesterday.reason ?? "Not known for yesterday.",
+    };
+  }
+  const headline = formatHeadline(yesterday.value);
+  const notes = [
+    headline.compacted ? `${headline.exact}${yesterday.unit ? ` ${yesterday.unit}` : ""}` : null,
+    yesterday.provenance
+      ? `Yesterday on the Plant's clock, from the same source as today: ${yesterday.provenance}.`
+      : "Yesterday on the Plant's clock.",
+    yesterday.atLeast
+      ? "Readings stopped while it was still rising, so the day's total is at least this."
+      : null,
+    yesterday.missing > 0
+      ? `${yesterday.missing} of ${yesterday.deviceCount} sent nothing yesterday and are not in it.`
+      : null,
+  ];
+  return {
+    label,
+    value: (
+      <>
+        {yesterday.atLeast ? "≥ " : ""}
+        {headline.text}
+        {yesterday.unit ? <span className="ml-1 text-xs text-ink-muted">{yesterday.unit}</span> : null}
+      </>
+    ),
+    // Short of a whole day: amber, so the reader looks at the tooltip.
+    tone: yesterday.atLeast || yesterday.missing > 0 ? "warn" : "ink",
+    title: notes.filter(Boolean).join(" "),
   };
 }
 
@@ -128,6 +172,7 @@ function kpiRow(
 export function EnergySummaryCard({
   headline,
   today,
+  yesterday,
   onOpen,
   className = "",
 }: {
@@ -135,12 +180,15 @@ export function EnergySummaryCard({
   headline: ResolvedSlot[];
   /** `/kpis?period=today` — never the page's Period. */
   today: PlantKpis | undefined;
+  /** Yesterday's total energy, the same claim as today's row. */
+  yesterday?: YesterdayEnergy;
   onOpen: () => void;
   className?: string;
 }): JSX.Element {
   const bySlot = new Map(headline.map((slot) => [slot.slot_code, slot]));
   const rows: StatusRowData[] = [
     slotRow("Energy Generated Today", bySlot.get("kpi.energy_today")),
+    yesterdayRow("Energy Generated Yesterday", yesterday),
     slotRow("Current Plant Power", bySlot.get("kpi.current_power")),
     slotRow("Total Energy (Lifetime)", bySlot.get("kpi.energy_lifetime")),
     kpiRow("Specific Yield (Today)", today?.specific_yield, "quantity", "kWh/kWp", today, 3),

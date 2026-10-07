@@ -26,7 +26,36 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "./queryKeys";
 import * as readingsApi from "./endpoints/readings";
+import { useTags } from "./hooks";
 import type { ReadingPoint } from "./schemas";
+
+/** `QUALITY_OUT_OF_RANGE` in `domain/assumptions.py`. */
+const OUT_OF_RANGE = 1;
+
+/**
+ * The Tags whose value is a status code (unit `code`).
+ *
+ * A code is a label, not a measurement, so a valid range says nothing about
+ * it: the Inverters send `STS` 40960 against an assumed range of 0–1000, the
+ * value is stored flagged out of range, and hiding it left every card without
+ * its status. A code flagged *only* for its range is therefore still shown —
+ * as sent — while a stale or unreadable one is not (8 Oct 2026, the user's
+ * rule: show what the broker sends).
+ */
+function useCodeTagIds(): ReadonlySet<number> {
+  const tags = useTags().data;
+  return useMemo(
+    () => new Set((tags ?? []).filter((tag) => tag.unit === "code").map((tag) => tag.id)),
+    [tags],
+  );
+}
+
+/** Whether a stored point may be shown as the latest value. */
+export function presentable(point: ReadingPoint, codeTagIds: ReadonlySet<number>): boolean {
+  if (point.value === null) return false;
+  if (point.quality === null || point.quality === 0) return true;
+  return point.quality === OUT_OF_RANGE && codeTagIds.has(point.tag_id);
+}
 
 /**
  * How far back to look for a last value.
@@ -97,6 +126,7 @@ export function useLatestValues(
     placeholderData: (previous) => previous,
   });
 
+  const codeTagIds = useCodeTagIds();
   const byDevice = useMemo(() => {
     const out: Record<number, Record<string, number>> = {};
     const items = (readingsQuery.data?.items ?? []) as ReadingPoint[];
@@ -105,15 +135,15 @@ export function useLatestValues(
       // is not discarded from the system — `readings` still holds it, flagged,
       // and the time-series chart re-draws it in the quality's own colour. It
       // simply must not appear on a card as though it were a measurement.
-      if (point.quality !== null && point.quality !== 0) continue;
-      if (point.value === null) continue;
+      // A status code outside its assumed range is the exception — see above.
+      if (!presentable(point, codeTagIds)) continue;
       // The server returns buckets ascending, so the last write per key wins
       // and is therefore the most recent good value.
       const device = (out[point.device_id] ??= {});
-      device[String(point.tag_id)] = point.value;
+      device[String(point.tag_id)] = point.value as number;
     }
     return out;
-  }, [readingsQuery.data]);
+  }, [readingsQuery.data, codeTagIds]);
 
   return { byDevice, isLoading: readingsQuery.isLoading };
 }
@@ -149,16 +179,17 @@ export function useDeviceLatest(
     refetchInterval: 60_000,
     placeholderData: (previous) => previous,
   });
+  const codeTagIds = useCodeTagIds();
   const values = useMemo(() => {
     const out = new Map<number, number>();
     for (const point of (readings.data?.items ?? []) as ReadingPoint[]) {
-      // A flagged value is not presented as a reading (Guardrail 4). Buckets
-      // arrive ascending, so the last write per Tag is the latest good value.
-      if (point.quality !== null && point.quality !== 0) continue;
-      if (point.value === null) continue;
-      out.set(point.tag_id, point.value);
+      // A flagged value is not presented as a reading (Guardrail 4), but for a
+      // status code outside its assumed range. Buckets arrive ascending, so
+      // the last write per Tag is the latest good value.
+      if (!presentable(point, codeTagIds)) continue;
+      out.set(point.tag_id, point.value as number);
     }
     return out;
-  }, [readings.data]);
+  }, [readings.data, codeTagIds]);
   return { values, isLoading: deviceId !== null && readings.isLoading };
 }

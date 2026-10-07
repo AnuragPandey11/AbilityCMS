@@ -27,7 +27,7 @@ const numeric = () =>
     return parsed;
   });
 
-const nullableNumeric = () => numeric().nullable().catch(null);
+export const nullableNumeric = () => numeric().nullable().catch(null);
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -589,6 +589,13 @@ export const DeviceListItemSchema = z.object({
   string_count: z.number().nullable().optional().catch(null),
   completeness_24h: nullableNumeric().optional(),
   binding_count: z.number().nullable().optional().catch(null),
+  /**
+   * Topics beyond `source_address` whose messages are this Device's too — an
+   * Inverter's PV strings published on `…/INVERTER_1_STRING16` (migration
+   * 0030). Usually empty. Any screen pairing broker topics with Devices must
+   * read these as well as the primary, or the strings show as unregistered.
+   */
+  extra_topics: z.array(z.string()).optional().catch(undefined),
 });
 export type DeviceListItem = z.infer<typeof DeviceListItemSchema>;
 

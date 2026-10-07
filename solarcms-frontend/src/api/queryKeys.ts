@@ -43,6 +43,12 @@ export const qk = {
     ["blocks", id, "kpis", period] as const,
 
   plantCommissioning: (id: number) => ["plants", id, "commissioning"] as const,
+  // Under the Plant, so anything that invalidates a Plant refreshes its issues.
+  dataIssues: (id: number) => ["plants", id, "data-issues"] as const,
+  dataIssuesSummary: () => ["data-issues", "summary"] as const,
+  // Under the Plant: what its status codes mean, and its forecast.
+  statusCodes: (id: number) => ["plants", id, "status-codes"] as const,
+  forecast: (id: number) => ["plants", id, "forecast"] as const,
 
   device: (id: number) => ["devices", id] as const,
   deviceOperatingStatus: (id: number) => ["devices", id, "operating-status"] as const,
@@ -60,6 +66,9 @@ export const qk = {
   platformHealth: () => ["health", "processes"] as const,
 
   reportDefinitions: () => ["reports", "definitions"] as const,
+  customCatalog: (plantIds: number[]) => ["reports", "custom", "catalog", plantIds] as const,
+  savedReports: () => ["reports", "custom", "saved"] as const,
+  customTable: (definition: unknown) => ["reports", "custom", "table", definition] as const,
   reportRun: (id: number) => ["reports", "runs", id] as const,
   reportTable: (
     kind: string,

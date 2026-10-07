@@ -37,30 +37,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache import live
 from solarcms.domain.decoding import decode, normalise_payload
+from solarcms.services.device_topics import topics_of
 from solarcms.workers.resolver import ResolutionFailure, load_topic_patterns, resolve
 
 log = structlog.get_logger("backfill")
 
 
 async def estimate(session: AsyncSession, device_id: int) -> dict[str, Any]:
-    """What could be recovered for this Device. Read-only; safe in a request."""
+    """What could be recovered for this Device. Read-only; safe in a request.
+
+    Counts every topic the Device is registered on — an Inverter's PV-string
+    topics (migration 0030) were quarantined exactly as its own was.
+    """
     device = (await session.execute(text(
         "SELECT id, code, source_address FROM devices WHERE id = :id"
     ), {"id": device_id})).first()
-    if device is None or not device.source_address:
+    topics = await topics_of(session, device_id) if device is not None else []
+    if device is None or not topics:
         return {"device_id": device_id, "recoverable_messages": 0,
-                "earliest": None, "latest": None, "topic": None}
+                "earliest": None, "latest": None, "topic": None, "topics": []}
 
     row = (await session.execute(text("""
         SELECT count(*) AS messages, min(time) AS earliest, max(time) AS latest
           FROM mqtt_raw_v
-         WHERE topic = :topic AND quarantined
-    """), {"topic": device.source_address})).first()
+         WHERE topic = ANY(:topics) AND quarantined
+    """), {"topics": topics})).first()
 
     return {
         "device_id": device_id,
         "device_code": device.code,
         "topic": device.source_address,
+        "topics": topics,
         "recoverable_messages": row.messages if row else 0,
         "earliest": row.earliest if row else None,
         "latest": row.latest if row else None,
@@ -73,34 +80,47 @@ async def replay(
 ) -> dict[str, Any]:
     """Decode this Device's quarantined messages into Readings.
 
-    Runs under the ingest role. Returns what it did, or would do.
+    Runs under the ingest role. Returns what it did, or would do. Every topic
+    the Device is registered on is replayed, up to `batch_size` messages each.
     """
     stats: dict[str, Any] = {
         "device_id": device_id, "messages": 0, "readings": 0,
-        "unparseable": 0, "skipped": 0, "applied": apply,
+        "unparseable": 0, "skipped": 0, "applied": apply, "has_more": False,
     }
 
     device = (await session.execute(text(
         "SELECT id, code, source_address FROM devices WHERE id = :id"
     ), {"id": device_id})).first()
-    if device is None or not device.source_address:
+    topics = await topics_of(session, device_id) if device is not None else []
+    if device is None or not topics:
         stats["error"] = "device not found, or has no topic"
         return stats
 
-    topic = device.source_address
+    patterns = await load_topic_patterns(session)
+    for topic in topics:
+        error = await _replay_topic(session, topic, patterns, stats,
+                                    apply=apply, batch_size=batch_size)
+        if error:
+            stats["error"] = error
+            return stats
+    return stats
+
+
+async def _replay_topic(
+    session: AsyncSession, topic: str, patterns: Any, stats: dict[str, Any],
+    *, apply: bool, batch_size: int,
+) -> str | None:
+    """Replay one topic's quarantined messages into `stats`. Returns an error."""
     # The resolver caches a miss for 300 s, and the miss is exactly what was
     # cached while this Device was unregistered.
     await live.invalidate_resolution(topic)
-    patterns = await load_topic_patterns(session)
     resolution = await resolve(session, topic, patterns)
     if isinstance(resolution, ResolutionFailure):
-        stats["error"] = f"topic still does not resolve: {resolution.reason}"
-        return stats
+        return f"topic {topic!r} still does not resolve: {resolution.reason}"
     if not resolution.bindings:
         # Registering a Device with no bindings and replaying into it would
         # report success having written nothing.
-        stats["error"] = "Device has no Tag bindings; bind before backfilling"
-        return stats
+        return "Device has no Tag bindings; bind before backfilling"
 
     rows = (await session.execute(text("""
         SELECT time, seq, payload FROM mqtt_raw
@@ -109,6 +129,7 @@ async def replay(
          LIMIT :limit
     """), {"topic": topic, "limit": batch_size})).all()
 
+    readings_before = stats["readings"]
     for row in rows:
         stats["messages"] += 1
         payload = row.payload if isinstance(row.payload, dict) else {}
@@ -144,7 +165,7 @@ async def replay(
                 "source_time": reading.source_time,
             })
 
-    if apply and stats["readings"]:
+    if apply and stats["readings"] > readings_before:
         # Clearing the flag is what makes a re-run safe: these rows have now
         # produced Readings and must never be replayed a second time.
         await session.execute(text("""
@@ -153,8 +174,8 @@ async def replay(
              WHERE topic = :topic AND quarantined
                AND time <= :latest
         """), {"topic": topic, "latest": rows[-1].time})
-        log.info("backfilled from quarantine", device_id=device_id,
-                 topic=topic, **{k: v for k, v in stats.items() if k != "device_id"})
+        log.info("backfilled from quarantine", device_id=stats["device_id"],
+                 topic=topic, readings=stats["readings"] - readings_before)
 
-    stats["has_more"] = len(rows) == batch_size
-    return stats
+    stats["has_more"] = stats["has_more"] or len(rows) == batch_size
+    return None

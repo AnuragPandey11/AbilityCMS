@@ -293,6 +293,21 @@ export const IconMapping = (p: IconProps) => (
   </Svg>
 );
 
+/**
+ * Data Issues. Rows of incoming data with a warning beside them: what arrives
+ * from the broker, and that some of it is not being kept.
+ */
+export const IconDataIssues = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.2 6.4h7.6" />
+    <path d="M3.2 12h5.2" />
+    <path d="M3.2 17.6h7.6" />
+    <path d="M16.6 5.2 21.4 14h-9.6Z" />
+    <path d="M16.6 8.6v2.2" />
+    <path d="M16.6 12.4v.2" />
+  </Svg>
+);
+
 /** System. A server stack with a live lamp. */
 export const IconSystem = (p: IconProps) => (
   <Svg {...p}>

@@ -167,8 +167,10 @@ async def topic_migrations(
         SELECT m.topic, max(m.time) AS last_seen, count(*) AS messages,
                EXTRACT(EPOCH FROM (max(m.time) - min(m.time))) AS span_s
           FROM mqtt_raw_v m
-          LEFT JOIN devices d ON d.source_address = m.topic
-         WHERE d.id IS NULL AND m.time > now() - {MIGRATION_WINDOW}
+          -- Primary or extra (migration 0030): a string topic already belongs
+          -- to its Inverter and is never a candidate rename of anything.
+          LEFT JOIN registered_topics rt ON rt.topic = m.topic
+         WHERE rt.device_id IS NULL AND m.time > now() - {MIGRATION_WINDOW}
          GROUP BY m.topic
     """))).all()
     if not candidates:
@@ -184,12 +186,27 @@ async def topic_migrations(
         except ValueError:
             continue
 
+    # The candidate must name *this* Plant. Matching on the Device code alone
+    # proposed moving KULAR_GREEN's MFM onto any other Plant's `…/MFM` that
+    # happened to be unregistered — two instruments at two sites.
+    codes = (await session.execute(text("""
+        SELECT p.code AS plant_code, c.code AS client_code
+          FROM plants p JOIN clients c ON c.id = p.client_id WHERE p.id = :id
+    """), {"id": plant_id})).first()
+    if codes is None:
+        return []
+
     now = datetime.now(UTC)
     suggestions: list[dict[str, Any]] = []
     for device in devices:
         for candidate in candidates:
             captured = parse_topic(candidate.topic, patterns)
-            if captured is None or captured.get("device_code") != device.code:
+            if (
+                captured is None
+                or captured.get("device_code") != device.code
+                or captured.get("plant_code") != codes.plant_code
+                or captured.get("client_code") != codes.client_code
+            ):
                 continue
             interval = (
                 candidate.span_s / (candidate.messages - 1)

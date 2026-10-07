@@ -16,6 +16,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -87,3 +88,26 @@ class ReportRun(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created_at()
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CustomReport(Base):
+    """A custom report a Client saved (migration 0033): its definition, whole.
+
+    Modelled so `alembic revision --autogenerate` does not propose dropping it;
+    the router uses explicit SQL.
+    """
+
+    __tablename__ = "custom_reports"
+    __table_args__ = (
+        CheckConstraint("length(btrim(name)) > 0", name="custom_report_name"),
+        Index("ix_custom_reports_client", "client_id"),
+    )
+
+    id: Mapped[int] = pk()
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Before `created_at`, which would otherwise shadow the column helper here.
+    updated_at: Mapped[datetime] = created_at()
+    created_at: Mapped[datetime] = created_at()

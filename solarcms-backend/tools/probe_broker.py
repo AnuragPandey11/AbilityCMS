@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
 import statistics
 import sys
 import time
@@ -131,7 +132,10 @@ async def probe(
             port=port,
             username=username,
             password=password,
-            identifier=f"solarcms-probe-{int(time.time())}",
+            # Unique per process, not per second: two probes started in the same
+            # second (one per topic case) shared an identifier, and the broker
+            # dropped the first the moment the second connected.
+            identifier=f"solarcms-probe-{os.getpid()}-{int(time.time())}",
         ) as client:
             await client.subscribe(topic, qos=0)
             print(f"subscribed to {topic!r} on {host}:{port}", file=sys.stderr)

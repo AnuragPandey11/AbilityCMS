@@ -33,6 +33,8 @@ vi.mock("@/api/hooks", () => ({
   useAlarms: () => ({ data: [{ id: 1 }, { id: 2 }, { id: 3 }] }),
   // The header asks after the platform's health; nothing to report here.
   usePlatformHealth: () => ({ data: undefined, isError: false }),
+  // The Data Issues badge; two open, to show it rides on the rail like the Alarm count.
+  useDataIssuesSummary: () => ({ data: { open_urgent: 2 } }),
 }));
 
 vi.mock("@/live/LiveIndicator", () => ({ LiveIndicator: () => null }));

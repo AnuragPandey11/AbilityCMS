@@ -13,18 +13,28 @@ from sqlalchemy.exc import IntegrityError
 
 from solarcms.api.auth import hash_password
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.api.patching import patch_assignments
 from solarcms.cache import live
 from solarcms.cache.live import invalidate_resolution
 from solarcms.domain.assumptions import SOURCE_KEY_ALIASES
 from solarcms.domain.decoding import TopicPattern, collector_in_topic
 from solarcms.domain.sld import crosses_collector_boundary, would_create_cycle
 from solarcms.schemas.assets import (
+    BindingPatch,
     BindingsReplace,
+    BindingUpsert,
     DeviceBulkImport,
     DeviceCreate,
+    DeviceTopicCreate,
     DeviceUpdate,
 )
-from solarcms.services.onboarding import bind_from_model
+from solarcms.services.device_topics import (
+    TopicRefused,
+    attach_topic,
+    invalidate_device,
+    topics_of,
+)
+from solarcms.services.onboarding import bind_from_model, bind_tags
 from solarcms.services.operating import device_operating_status
 
 router = APIRouter(tags=["devices"])
@@ -123,6 +133,27 @@ def _clean_collector(value: str | None) -> str | None:
     return trimmed or None
 
 
+async def _refuse_topic_held_as_extra(session: Any, topic: str) -> None:
+    """Refuse a primary topic that is already some Device's extra topic.
+
+    `devices.source_address` and `device_topics.topic` are each UNIQUE, but no
+    constraint can span the two (migration 0030), so a topic could otherwise be
+    one Device's primary and another's extra — and the resolver, which tries
+    the primary first, would silently move the extra's messages to the new
+    Device.
+    """
+    holder = (await session.execute(text("""
+        SELECT d.code FROM device_topics t JOIN devices d ON d.id = t.device_id
+         WHERE t.topic = :topic
+    """), {"topic": topic})).first()
+    if holder is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{topic!r} is already one of {holder.code}'s extra topics. Remove it "
+            f"there first; a topic decides which Device a message belongs to, so "
+            f"two Devices cannot share one.")
+
+
 @router.get("/plants/{plant_id}/devices")
 async def list_devices(
     plant_id: int, session: SessionDep,
@@ -143,7 +174,11 @@ async def list_devices(
                h.comm_status, h.last_seen_at, h.frozen_tag_count,
                h.completeness_24h,
                (SELECT count(*) FROM device_tag_bindings b
-                 WHERE b.device_id = d.id AND b.enabled) AS binding_count
+                 WHERE b.device_id = d.id AND b.enabled) AS binding_count,
+               -- Topics beyond source_address that feed this Device, such as
+               -- an Inverter's PV strings (migration 0030). Usually empty.
+               ARRAY(SELECT t.topic FROM device_topics t
+                      WHERE t.device_id = d.id ORDER BY t.topic) AS extra_topics
           FROM devices d
           JOIN device_models dm ON dm.id = d.device_model_id
           JOIN device_types dt  ON dt.id = dm.device_type_id
@@ -162,7 +197,9 @@ async def get_device(
 ) -> dict[str, Any]:
     row = (await session.execute(text("""
         SELECT d.*, dt.code AS type_code, dt.in_power_path, dm.variant,
-               h.comm_status, h.last_seen_at, h.frozen_tag_count, h.completeness_24h
+               h.comm_status, h.last_seen_at, h.frozen_tag_count, h.completeness_24h,
+               ARRAY(SELECT t.topic FROM device_topics t
+                      WHERE t.device_id = d.id ORDER BY t.topic) AS extra_topics
           FROM devices d
           JOIN device_models dm ON dm.id = d.device_model_id
           JOIN device_types dt  ON dt.id = dm.device_type_id
@@ -311,6 +348,8 @@ async def _insert_devices(
             session, device_code=device.code, topic=device.source_address,
             collector=_clean_collector(device.collector_code),
         )
+        if device.source_address:
+            await _refuse_topic_held_as_extra(session, device.source_address)
         try:
             row = (await session.execute(text("""
                 INSERT INTO devices (client_id, plant_id, device_model_id, code, name,
@@ -355,6 +394,27 @@ async def _insert_devices(
             # commissioning screen is where it is corrected (MASTER §5.2).
             created["bindings"] = await bind_from_model(
                 session, plant.client_id, row.id)
+        if device.observed_keys:
+            # What the Device was seen sending, bound by the Type-aware alias
+            # table as commissioning binds it. Keys the Model already bound are
+            # skipped: one key cannot be read into two Tags.
+            type_code = (await session.execute(text("""
+                SELECT dt.code FROM device_models dm
+                  JOIN device_types dt ON dt.id = dm.device_type_id
+                 WHERE dm.id = :id
+            """), {"id": device.device_model_id})).scalar()
+            already = {
+                r.source_key for r in (await session.execute(text(
+                    "SELECT source_key FROM device_tag_bindings WHERE device_id = :id"
+                ), {"id": row.id})).all()
+            }
+            keys = sorted({k for k in device.observed_keys if k and k not in already})
+            observed = await bind_tags(session, plant.client_id, row.id, keys,
+                                       type_code, overwrite=False)
+            bindings = dict(created.get("bindings") or {"bound": 0})
+            bindings["bound"] = int(bindings.get("bound", 0)) + observed["bound"]
+            bindings["unmapped"] = observed["unmapped"]
+            created["bindings"] = bindings
         out.append(created)
         await _audit(session, user, plant.client_id, "device.create", row.id,
                      after={"code": device.code, "topic": device.source_address,
@@ -429,15 +489,18 @@ async def delete_device(
     await session.execute(
         text("UPDATE devices SET reports_via_device_id = NULL "
              "WHERE reports_via_device_id = :id"), {"id": device_id})
+    # Read before the delete: its extra topics cascade away with it.
+    topics = await topics_of(session, device_id)
     await session.execute(text("DELETE FROM devices WHERE id = :id"), {"id": device_id})
 
     # The resolver caches topic → Device for 300s; without this, ingest keeps
     # decoding into a Device that no longer exists for five minutes.
-    if row.source_address:
-        await invalidate_resolution(row.source_address)
+    for topic in topics:
+        await invalidate_resolution(topic)
 
     await _audit(session, user, row.client_id, "device.delete", device_id,
                  before={"code": row.code, "topic": row.source_address,
+                         "extra_topics": topics[1:] if row.source_address else topics,
                          "readings_deleted": readings if force else 0})
     return {"deleted": device_id, "code": row.code, "readings_deleted": readings if force else 0}
 
@@ -496,6 +559,9 @@ async def update_device(
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"cannot clear {sorted(unknown)}")
+
+    if body.source_address and body.source_address != before.source_address:
+        await _refuse_topic_held_as_extra(session, body.source_address)
 
     # ── Refuse a loop at the moment it is made ───────────────────────────────
     # The composite foreign key already forces a parent to share the Plant, and a
@@ -639,10 +705,9 @@ async def update_device(
     # The resolver caches topic → Device with its bindings and constants for
     # 300s. Editing any of them without invalidating means ingest keeps decoding
     # against the old mapping for five minutes — long enough to look like the
-    # edit silently failed.
-    for topic in {before.source_address, row.source_address}:
-        if topic:
-            await invalidate_resolution(topic)
+    # edit silently failed. Every topic of the Device, extras included: each is
+    # cached separately, with the same bindings and status.
+    await invalidate_device(session, device_id, before.source_address)
 
     await _audit(session, user, before.client_id, "device.update", device_id,
                  before=dict(before._mapping), after=dict(row._mapping))
@@ -673,11 +738,76 @@ async def rebind_from_model(
 
     result = await bind_from_model(session, device.client_id, device_id,
                                    replace=replace)
-    if device.source_address:
-        await invalidate_resolution(device.source_address)
+    await invalidate_device(session, device_id)
     await _audit(session, user, device.client_id, "device.bindings.from_model",
                  device_id, after={**result, "replace": replace})
     return result
+
+
+@router.get("/devices/{device_id}/topics")
+async def list_device_topics(
+    device_id: int, session: SessionDep,
+    _: CurrentUser = Depends(require_permission("dashboard.view")),
+) -> list[dict[str, Any]]:
+    """Every topic this Device is registered on, primary first (migration 0030)."""
+    rows = (await session.execute(text("""
+        SELECT rt.topic, rt.is_primary, t.note, t.created_at
+          FROM registered_topics rt
+          LEFT JOIN device_topics t ON t.topic = rt.topic AND NOT rt.is_primary
+         WHERE rt.device_id = :id
+         ORDER BY rt.is_primary DESC, rt.topic
+    """), {"id": device_id})).all()
+    return [dict(row._mapping) for row in rows]
+
+
+@router.post("/devices/{device_id}/topics", status_code=status.HTTP_201_CREATED)
+async def add_device_topic(
+    device_id: int, body: DeviceTopicCreate, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("plant.manage")),
+) -> dict[str, Any]:
+    """Let messages on another topic feed this Device too.
+
+    For an Inverter whose PV strings arrive on a topic of their own. The topic
+    must name this Device's Plant, Client and Collector — it decides origin,
+    and a topic that says somewhere else is refused rather than overruled.
+    """
+    try:
+        row_id, created = await attach_topic(session, device_id, body.topic, note=body.note)
+    except TopicRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    # A miss for this topic may be cached from while it was unregistered.
+    await invalidate_resolution(body.topic.strip())
+    client_id = (await session.execute(text(
+        "SELECT client_id FROM devices WHERE id = :id"), {"id": device_id})).scalar_one()
+    if created:
+        await _audit(session, user, client_id, "device.topic.add", device_id,
+                     after={"topic": body.topic.strip(), "note": body.note})
+    return {"device_id": device_id, "topic": body.topic.strip(), "id": row_id,
+            "created": created}
+
+
+@router.delete("/devices/{device_id}/topics")
+async def remove_device_topic(
+    device_id: int, session: SessionDep,
+    topic: str = Query(..., min_length=1),
+    user: CurrentUser = Depends(require_permission("plant.manage")),
+) -> dict[str, Any]:
+    """Stop an extra topic feeding this Device. Its Readings are kept.
+
+    Its next message is quarantined as unregistered, exactly as before it was
+    attached. The primary topic is not removable here: change `source_address`.
+    """
+    row = (await session.execute(text("""
+        DELETE FROM device_topics WHERE device_id = :id AND topic = :topic
+        RETURNING client_id
+    """), {"id": device_id, "topic": topic})).first()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"{topic!r} is not an extra topic of Device {device_id}")
+    await invalidate_resolution(topic)
+    await _audit(session, user, row.client_id, "device.topic.remove", device_id,
+                 before={"topic": topic})
+    return {"device_id": device_id, "removed": topic}
 
 
 def _explain_integrity_error(exc: IntegrityError) -> str:
@@ -762,10 +892,148 @@ async def replace_bindings(
                  after={"count": len(body.bindings)})
     # The ingest worker caches topic resolution for 300s; invalidate now so a
     # corrected scale takes effect on the next message rather than in five minutes.
-    if device.source_address:
-        await invalidate_resolution(device.source_address)
+    # Every topic: an Inverter's string topic decodes against these bindings too.
+    cleared = await invalidate_device(session, device_id)
     return {"device_id": device_id, "bindings": len(body.bindings),
-            "resolution_cache": "invalidated" if device.source_address else "n/a"}
+            "resolution_cache": "invalidated" if cleared else "n/a"}
+
+
+_BINDING_COLUMNS = """
+    b.id, b.source_key, b.tag_id, t.code AS tag_code, t.unit, b.scale,
+    b.value_offset, b.valid_min, b.valid_max, b.enabled
+"""
+
+
+@router.post("/devices/{device_id}/bindings", status_code=status.HTTP_201_CREATED)
+async def add_binding(
+    device_id: int, body: BindingUpsert, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("config.modify")),
+) -> dict[str, Any]:
+    """Map one more payload key to a Tag, leaving every other binding untouched.
+
+    The Data Issues screen's "map this key". Refused, with the binding that is
+    in the way named, when the key is already read into a Tag or the Tag is
+    already read from another key: one key feeds one Tag on one Device, and
+    which of two keys is right is a person's call, never this route's.
+    """
+    device = (await session.execute(
+        text("SELECT id, client_id FROM devices WHERE id = :id"), {"id": device_id})).first()
+    if device is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    tag = (await session.execute(
+        text("SELECT id, code, valid_min, valid_max FROM tags WHERE code = :code"),
+        {"code": body.tag_code})).first()
+    if tag is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"there is no Tag {body.tag_code}")
+    clash = (await session.execute(text("""
+        SELECT b.source_key, t.code AS tag_code
+          FROM device_tag_bindings b JOIN tags t ON t.id = b.tag_id
+         WHERE b.device_id = :device_id
+           AND (b.source_key = :source_key OR b.tag_id = :tag_id)
+         LIMIT 1
+    """), {"device_id": device_id, "source_key": body.source_key,
+           "tag_id": tag.id})).first()
+    if clash is not None:
+        detail = (
+            f"{body.source_key} is already mapped to {clash.tag_code}."
+            if clash.source_key == body.source_key else
+            f"{tag.code} is already read from {clash.source_key} on this Device. "
+            f"Rename that mapping to {body.source_key} instead, or map "
+            f"{body.source_key} to a different Tag."
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, detail)
+
+    # A range not supplied is the Tag's own, as commissioning seeds it — never
+    # none at all, or a value in the wrong unit would be stored as good.
+    sent = body.model_fields_set
+    valid_min = body.valid_min if "valid_min" in sent else tag.valid_min
+    valid_max = body.valid_max if "valid_max" in sent else tag.valid_max
+    row = (await session.execute(text(f"""
+        WITH inserted AS (
+            INSERT INTO device_tag_bindings (client_id, device_id, tag_id, source_key,
+                                             scale, value_offset, valid_min, valid_max,
+                                             enabled)
+            VALUES (:client_id, :device_id, :tag_id, :source_key, :scale, :offset,
+                    :valid_min, :valid_max, :enabled)
+            RETURNING *
+        )
+        SELECT {_BINDING_COLUMNS} FROM inserted b JOIN tags t ON t.id = b.tag_id
+    """), {
+        "client_id": device.client_id, "device_id": device_id, "tag_id": tag.id,
+        "source_key": body.source_key, "scale": body.scale,
+        "offset": body.value_offset, "valid_min": valid_min,
+        "valid_max": valid_max, "enabled": body.enabled,
+    })).first()
+    assert row is not None
+    await _audit(session, user, device.client_id, "device.binding.add", device_id,
+                 after={"source_key": body.source_key, "tag_code": tag.code,
+                        "scale": body.scale, "value_offset": body.value_offset,
+                        "valid_min": valid_min, "valid_max": valid_max,
+                        "enabled": body.enabled})
+    # Every topic of the Device decodes against these bindings, and each one's
+    # resolution is cached; the next message must use the new mapping.
+    await invalidate_device(session, device_id)
+    await live.remove_unmapped_keys(device_id, [body.source_key])
+    return dict(row._mapping)
+
+
+@router.patch("/devices/{device_id}/bindings/{binding_id}")
+async def update_binding(
+    device_id: int, binding_id: int, body: BindingPatch, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("config.modify")),
+) -> dict[str, Any]:
+    """Edit one binding: its key, scale, offset, range, or whether it is used.
+
+    ⚠ Not retrospective. Readings already stored keep the value they were
+    decoded with; `mqtt_raw` keeps the original payloads for 90 days.
+    """
+    before = (await session.execute(text(f"""
+        SELECT b.client_id, {_BINDING_COLUMNS}
+          FROM device_tag_bindings b JOIN tags t ON t.id = b.tag_id
+         WHERE b.id = :id AND b.device_id = :device_id
+    """), {"id": binding_id, "device_id": device_id})).first()
+    if before is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "binding not found")
+
+    sent = body.model_fields_set
+    for field in ("source_key", "scale", "value_offset", "enabled"):
+        # These columns are NOT NULL; `null` for them is a mistake, not a clear.
+        if field in sent and getattr(body, field) is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"{field} cannot be empty")
+    if body.source_key is not None and body.source_key != before.source_key:
+        taken = (await session.execute(text("""
+            SELECT t.code FROM device_tag_bindings b JOIN tags t ON t.id = b.tag_id
+             WHERE b.device_id = :device_id AND b.source_key = :key AND b.id <> :id
+        """), {"device_id": device_id, "key": body.source_key, "id": binding_id})).scalar()
+        if taken is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{body.source_key} is already mapped to {taken} on this Device.")
+
+    sets, params = patch_assignments(body, {
+        "source_key": "source_key", "scale": "scale", "value_offset": "value_offset",
+        "valid_min": "valid_min", "valid_max": "valid_max", "enabled": "enabled",
+    })
+    if not sets:
+        return {str(k): v for k, v in before._mapping.items() if k != "client_id"}
+    await session.execute(
+        text(f"UPDATE device_tag_bindings SET {', '.join(sets)} WHERE id = :binding_id"),
+        {**params, "binding_id": binding_id})
+    after = (await session.execute(text(f"""
+        SELECT {_BINDING_COLUMNS}
+          FROM device_tag_bindings b JOIN tags t ON t.id = b.tag_id
+         WHERE b.id = :id
+    """), {"id": binding_id})).first()
+    assert after is not None
+    await _audit(session, user, before.client_id, "device.binding.update", device_id,
+                 before={k: before._mapping[k] for k in sent if k in before._mapping},
+                 after={k: after._mapping[k] for k in sent if k in after._mapping}
+                 | {"tag_code": after.tag_code})
+    await invalidate_device(session, device_id)
+    await live.remove_unmapped_keys(device_id, [after.source_key])
+    return dict(after._mapping)
 
 
 @router.post("/devices/{device_id}/credential", status_code=status.HTTP_201_CREATED)

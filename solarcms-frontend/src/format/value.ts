@@ -32,15 +32,15 @@ function significantDigits(magnitude: number): number {
  * there is no such thing as 0.4 of an Alarm, and the two extra digits invite
  * the reader to look for a precision that does not exist.
  *
- * `ratio` goes the other way: it is always well under 1, so the magnitude rule
- * would give it three digits anyway, but stating it here keeps the two special
- * cases together instead of leaving one at each call site.
+ * `ratio` is power factor — every Tag in that unit is one — and is shown to two
+ * decimals everywhere (the client's choice, 8 Oct 2026): `0.99`, never
+ * `0.988`. The magnitude rule would give it three, which is why it is stated.
  *
  * Returns `undefined` for every other unit, meaning "use the magnitude rule".
  */
 export function digitsForUnit(unit: string | null | undefined): number | undefined {
   if (unit === "count") return 0;
-  if (unit === "ratio") return 3;
+  if (unit === "ratio") return 2;
   return undefined;
 }
 

@@ -61,6 +61,7 @@ import {
   IconWiring,
 } from "@/components/icons";
 import { UNDEFINED_DISPLAY, formatDigital, formatValue, isDigital } from "@/format/value";
+import { StatusCodeValue, useStatusLookup } from "./StatusMeanings";
 import { formatAge, formatDate, formatDateTime, ageSeconds } from "@/format/datetime";
 
 /** Category order: what an operator looks at first, first. */
@@ -152,6 +153,7 @@ export function DeviceInspector({
   const detailQuery = useDevice(device.id);
   const bindingsQuery = useBindings(device.id);
   const detail = detailQuery.data as DeviceDetail | undefined;
+  const { lookup: statusLookup } = useStatusLookup(detail?.plant_id);
   /**
    * Payload keys arriving that no binding maps.
    *
@@ -352,6 +354,18 @@ export function DeviceInspector({
               <span className="text-ink-faint">not registered against a topic</span>
             )}
           </Row>
+          {device.extra_topics?.length ? (
+            <Row
+              label="Also fed by"
+              hint="Extra topics whose messages are this Device's too — its PV strings, published on topics of their own."
+            >
+              {(device.extra_topics ?? []).map((topic) => (
+                <code key={topic} className="block break-all font-mono text-[10px] text-ink-muted">
+                  {topic}
+                </code>
+              ))}
+            </Row>
+          ) : null}
         </dl>
       </Section>
 
@@ -510,9 +524,19 @@ export function DeviceInspector({
                                 value === undefined ? "text-ink-faint" : "text-ink"
                               }`}
                             >
-                              {value === undefined
-                                ? UNDEFINED_DISPLAY
-                                : formatValue(value, binding.unit)}
+                              {value === undefined ? (
+                                UNDEFINED_DISPLAY
+                              ) : binding.unit === "code" ? (
+                                // A status code, with the meaning the client
+                                // recorded for this Plant — or as sent.
+                                <StatusCodeValue
+                                  value={value}
+                                  meaning={statusLookup(device.type_code, binding.tag_code, value)}
+                                  size="xs"
+                                />
+                              ) : (
+                                formatValue(value, binding.unit)
+                              )}
                             </span>
                           )}
                           {!digital ? (

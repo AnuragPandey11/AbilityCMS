@@ -91,6 +91,61 @@ export async function replaceBindings(
   })) as { device_id: number; bindings: number; resolution_cache: string };
 }
 
+/**
+ * Map one more payload key, leaving every other binding untouched.
+ *
+ * Refused (409, with the binding in the way named) when the key is already
+ * read into a Tag or the Tag is already read from another key. A range left out
+ * is the Tag's own, as commissioning seeds it.
+ */
+export async function addBinding(deviceId: number, body: BindingUpsert): Promise<Binding> {
+  return parse(
+    BindingSchema,
+    await request(`/devices/${deviceId}/bindings`, { method: "POST", body }),
+    `POST /devices/${deviceId}/bindings`,
+  );
+}
+
+/**
+ * Edit one binding. What is sent is written, what is omitted is left alone;
+ * `valid_min`/`valid_max` sent as `null` fall back to the Tag's range.
+ * `source_key` renames the key the Tag is read from, keeping scale and range.
+ *
+ * ⚠ Not retrospective: Readings already stored keep the value they were decoded with.
+ */
+export async function updateBinding(
+  deviceId: number,
+  bindingId: number,
+  body: Partial<Omit<BindingUpsert, "tag_code">>,
+): Promise<Binding> {
+  return parse(
+    BindingSchema,
+    await request(`/devices/${deviceId}/bindings/${bindingId}`, { method: "PATCH", body }),
+    `PATCH /devices/${deviceId}/bindings/${bindingId}`,
+  );
+}
+
+/**
+ * Let messages on another topic feed this Device too — an Inverter's PV strings
+ * on `…_STRING16`. The server refuses a topic naming another Plant, Client or
+ * Collector than the Device's own.
+ */
+export async function addDeviceTopic(
+  deviceId: number,
+  topic: string,
+  note?: string | null,
+): Promise<{ device_id: number; topic: string; created: boolean }> {
+  return (await request(`/devices/${deviceId}/topics`, {
+    method: "POST",
+    body: { topic, note: note ?? null },
+  })) as { device_id: number; topic: string; created: boolean };
+}
+
+/** Stop an extra topic feeding this Device. Its Readings are kept. */
+export async function removeDeviceTopic(deviceId: number, topic: string): Promise<void> {
+  await request(`/devices/${deviceId}/topics`, { method: "DELETE", params: { topic } });
+}
+
 export interface DeviceCreate {
   code: string;
   name: string;
@@ -126,17 +181,24 @@ export interface DeviceCreate {
    * that exists and decodes nothing looks exactly like a broken one.
    */
   bind_from_model?: boolean;
+  /**
+   * The payload keys this Device was seen sending, bound through the Type-aware
+   * alias table as commissioning binds them. A Device registered from the broker
+   * is usually on its Type's placeholder Model, whose schedule is empty — without
+   * these it would be registered decoding nothing.
+   */
+  observed_keys?: string[];
 }
 
 export async function createDevice(
   plantId: number,
   body: DeviceCreate,
-): Promise<{ id: number; code: string; bindings?: { bound: number } }> {
+): Promise<{ id: number; code: string; bindings?: { bound: number; unmapped?: number } }> {
   return (await request("/devices", {
     method: "POST",
     params: { plant_id: plantId },
     body,
-  })) as { id: number; code: string; bindings?: { bound: number } };
+  })) as { id: number; code: string; bindings?: { bound: number; unmapped?: number } };
 }
 
 /**

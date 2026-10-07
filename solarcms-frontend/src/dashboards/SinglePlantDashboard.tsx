@@ -54,10 +54,13 @@ import {
   usePlantBlocks,
   usePlantDashboard,
   usePlantDevices,
+  usePlantForecast,
   usePlantKpis,
   usePlantOperatingStatus,
 } from "@/api/hooks";
 import { useSlotTrend, TREND_RANGES, type TrendPoint, type TrendRange } from "@/api/useSlotTrend";
+import { useYesterdayEnergy } from "@/api/useYesterdayEnergy";
+import { ForecastPanel, ForecastPeek } from "./single-plant/ForecastPanel";
 import { useSlotSteps } from "@/api/useSlotSteps";
 import { useLatestValues } from "@/api/useLatestValues";
 import { useTypeColumns } from "@/api/useTypeColumns";
@@ -81,10 +84,11 @@ import {
 } from "./single-plant/PowerComparisonChart";
 import {
   COMPARE_DEFAULT,
-  COMPARE_SLOT,
+  compareSlot,
   usePowerComparison,
   type CompareKey,
 } from "./single-plant/usePowerComparison";
+import { useWmsIrradiance } from "./single-plant/useWmsIrradiance";
 import { ReadingsPanel } from "@/components/charts/ReadingsPanel";
 import { PlantSchematic } from "@/components/sld/PlantSchematic";
 import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
@@ -234,6 +238,7 @@ type OpenPanel =
   | { kind: "performance" }
   | { kind: "status" }
   | { kind: "energy" }
+  | { kind: "forecast" }
   | { kind: "health" }
   | { kind: "alarms" }
   | { kind: "blocks" }
@@ -517,6 +522,11 @@ export function SinglePlantDashboard(): JSX.Element {
   // comparison too, so when the Period is today this is the same cache entry as
   // the dials' — the two PRs are one figure, and one request.
   const kpisTodayQuery = usePlantKpis(plantId, "today", { compare: true });
+  // Yesterday's total, read back from the same source as today's energy row.
+  const yesterdayEnergy = useYesterdayEnergy(plantId);
+  // The forecast behind the Current Power card's peek: from the Plant's own
+  // history, cached a minute on both sides, and never what the card waits on.
+  const forecastQuery = usePlantForecast(plantId);
   const operatingQuery = usePlantOperatingStatus(plantId);
   const dashboardQuery = usePlantDashboard(plantId);
   const columnsQuery = useDeviceTableColumns();
@@ -565,12 +575,21 @@ export function SinglePlantDashboard(): JSX.Element {
   const radiationTrend = useSlotTrend(plantId, "env.direct_radiation", range);
   // The Inverters' own efficiency, for the AC reference's conversion loss.
   const efficiencyTrend = useSlotTrend(plantId, "sld.inv.efficiency", range);
+  // GTI, GHI and whatever else the weather stations send in W/m², found in
+  // the data — fetched only while the Power view is showing.
+  const wmsIrradiance = useWmsIrradiance(
+    plantId,
+    range,
+    plantQuery.data?.timezone,
+    chartView === "power",
+  );
   const [compareWith, setCompareWith] = useState<Set<CompareKey>>(() => new Set(COMPARE_DEFAULT));
   const comparison = usePowerComparison({
     power: powerTrend,
     radiation: radiationTrend,
     irradiance: irradianceTrend,
     efficiency: efficiencyTrend,
+    wms: wmsIrradiance,
     environment: dashboardQuery.data?.panels.environment,
     dcCapacityKwp: plantQuery.data?.dc_capacity_kwp,
     acCapacityKw: plantQuery.data?.ac_capacity_kw,
@@ -759,6 +778,8 @@ export function SinglePlantDashboard(): JSX.Element {
         return "Plant Status";
       case "energy":
         return "Energy Summary — today";
+      case "forecast":
+        return "Forecast";
       case "health":
         return "Device health";
       case "alarms":
@@ -979,6 +1000,14 @@ export function SinglePlantDashboard(): JSX.Element {
             icon={SLOT_ICONS[currentPower.slot_code] ?? IconGauge}
             plantId={plant.id}
             acCapacityKw={plant.ac_capacity_kw}
+            action={
+              <ForecastPeek
+                forecast={forecastQuery.data}
+                isLoading={forecastQuery.isLoading}
+                isError={forecastQuery.isError}
+                onOpen={() => setOpen({ kind: "forecast" })}
+              />
+            }
             dense
           />
         ) : null}
@@ -1044,6 +1073,7 @@ export function SinglePlantDashboard(): JSX.Element {
           <EnergySummaryCard
             headline={headline}
             today={kpisTodayQuery.data}
+            yesterday={yesterdayEnergy}
             onOpen={() => setOpen({ kind: "energy" })}
             className="xl:flex-1"
           />
@@ -1126,7 +1156,14 @@ export function SinglePlantDashboard(): JSX.Element {
                   onChange={setCompareWith}
                   options={comparison.options.map((option) => ({
                     ...option,
-                    swatch: <SeriesSwatch line={option.line} color={slotColor(COMPARE_SLOT[option.value])} />,
+                    swatch: (
+                      <SeriesSwatch
+                        line={option.line}
+                        color={slotColor(
+                          compareSlot(option.value, wmsIrradiance.catalogue.map((tag) => tag.code)),
+                        )}
+                      />
+                    ),
                   }))}
                 />
               ) : null}
@@ -1423,10 +1460,20 @@ export function SinglePlantDashboard(): JSX.Element {
             ? PANEL_TITLES[open.code]?.subtitle
             : open?.kind === "stage"
               ? "Every Device whose Type folds into this stage."
-              : undefined
+              : open?.kind === "forecast"
+                ? "From this Plant's own recent history — no weather forecast."
+                : undefined
         }
         footer={drawerFooter}
+        size={open?.kind === "forecast" ? "wide" : "narrow"}
       >
+        {open?.kind === "forecast" ? (
+          <ForecastPanel
+            forecast={forecastQuery.data}
+            isLoading={forecastQuery.isLoading}
+            isError={forecastQuery.isError}
+          />
+        ) : null}
         {open?.kind === "performance" ? (
           <PerformancePanel kpis={kpis} period={period} />
         ) : null}

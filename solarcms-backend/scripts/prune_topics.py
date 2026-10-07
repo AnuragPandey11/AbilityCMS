@@ -55,10 +55,12 @@ async def run(quiet_hours: int, apply: bool) -> int:
             SELECT m.topic,
                    count(*)    AS rows,
                    max(m.time) AS last_seen,
-                   (d.id IS NOT NULL) AS registered
+                   (rt.device_id IS NOT NULL) AS registered
               FROM mqtt_raw m
-              LEFT JOIN devices d ON d.source_address = m.topic
-             GROUP BY m.topic, d.id
+              -- A Device's primary topic or one of its extras (migration
+              -- 0030): either is the evidence for that Device's outages.
+              LEFT JOIN registered_topics rt ON rt.topic = m.topic
+             GROUP BY m.topic, rt.device_id
             HAVING max(m.time) < now() - make_interval(hours => :hours)
              ORDER BY max(m.time)
         """), {"hours": quiet_hours})).all()
@@ -97,8 +99,7 @@ async def run(quiet_hours: int, apply: bool) -> int:
         result = await session.execute(text("""
             DELETE FROM mqtt_raw
              WHERE topic = ANY(:topics)
-               AND topic NOT IN (SELECT source_address FROM devices
-                                  WHERE source_address IS NOT NULL)
+               AND topic NOT IN (SELECT topic FROM registered_topics)
         """), {"topics": [r.topic for r in removable]})
         print(f"\n  Removed {result.rowcount} row(s) "
               f"across {len(removable)} topic(s).\n")

@@ -94,6 +94,15 @@ async def clear_unmapped_keys(device_id: int) -> None:
     await get_redis().delete(keys.unmapped_keys(device_id))
 
 
+async def remove_unmapped_keys(device_id: int, source_keys: list[str]) -> None:
+    """Forget only the keys that have just been bound, keeping the rest listed."""
+    if source_keys:
+        await cast(
+            "Awaitable[int]",
+            get_redis().srem(keys.unmapped_keys(device_id), *source_keys),
+        )
+
+
 async def touch_device_seen(device_id: int, at: datetime) -> None:
     """Record that a Device spoke, whether or not anything was stored.
 
