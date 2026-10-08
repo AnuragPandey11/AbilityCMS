@@ -185,20 +185,20 @@ export function DataTable<T>({
           className="w-full border-collapse text-sm"
           style={{ minWidth: columns.length * minColumnWidth }}
         >
-          <thead className="sticky top-0 z-10 bg-surface-sunken">
+          <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-surface-sunken">
             <tr>
               {columns.map((column, index) => (
                 <th
                   key={column.key}
                   style={{ width: column.width }}
                   onClick={() => (column.sortValue ? toggleSort(column.key) : undefined)}
-                  className={`border-b border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted ${
+                  className={`border-b border-line px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-ink-muted ${
                     column.align === "right" ? "text-right" : "text-left"
-                  } ${column.sortValue ? "cursor-pointer select-none hover:text-ink" : ""} ${
+                  } ${column.sortValue ? "cursor-pointer select-none hover:text-slate-900 dark:hover:text-ink" : ""} ${
                     stickyFirstColumn && index === 0
                       ? // Above the other headers as well as the body: this cell
                         // is sticky on both axes at once.
-                        "sticky left-0 z-20 bg-surface-sunken"
+                        "sticky left-0 z-20 bg-slate-50 dark:bg-surface-sunken"
                       : ""
                   }`}
                 >
@@ -230,8 +230,8 @@ export function DataTable<T>({
                     key={rowKey(row)}
                     onClick={() => onRowClick?.(row)}
                     style={{ height: ROW_HEIGHT }}
-                    className={`border-b border-line/60 ${
-                      onRowClick ? "cursor-pointer hover:bg-surface-raised" : ""
+                    className={`border-b border-slate-100 dark:border-line/60 even:bg-slate-50/50 dark:even:bg-surface-sunken/30 transition-colors ${
+                      onRowClick ? "cursor-pointer hover:bg-slate-100/70 dark:hover:bg-surface-raised" : ""
                     }`}
                   >
                     {columns.map((column, index) => (
@@ -242,7 +242,7 @@ export function DataTable<T>({
                         } ${
                           stickyFirstColumn && index === 0
                             ? // Opaque, or the scrolling columns show through it.
-                              "sticky left-0 z-10 bg-surface-raised"
+                              "sticky left-0 z-10 bg-white dark:bg-surface-raised"
                             : ""
                         }`}
                       >

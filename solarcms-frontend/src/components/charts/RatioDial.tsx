@@ -325,7 +325,15 @@ export function RatioDial({
             Outside 0–100%. The inputs cover different spans; check coverage.
           </span>
         ) : verdict ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-surface-sunken px-2 py-0.5 text-[11px] font-semibold text-ink ring-1 ring-inset ring-line">
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold border ${
+              tone === "bad"
+                ? "border-rose-200 bg-rose-100 text-rose-800 dark:border-bad/40 dark:bg-bad/10 dark:text-bad"
+                : tone === "warn"
+                  ? "border-amber-300 bg-amber-100 text-amber-900 dark:border-warn/40 dark:bg-warn/10 dark:text-warn"
+                  : "border-slate-200 bg-slate-100 text-slate-700 dark:border-line dark:bg-surface-sunken dark:text-ink"
+            }`}
+          >
             <span className={PILL_ICON[tone]}>
               <IconWarning size={11} />
             </span>

@@ -153,7 +153,7 @@ export function TileFigure({
   digits?: number;
 }): JSX.Element {
   const figureClass = "figure text-[1.9rem] font-semibold leading-none tracking-tight";
-  const unitClass = "ml-1.5 text-sm font-medium text-ink-muted";
+  const unitClass = "ml-1.5 text-sm font-semibold text-ink-muted";
   if (loading) {
     return <FittedFigure value="…" className={`${figureClass} text-ink-faint`} unitClassName={unitClass} />;
   }

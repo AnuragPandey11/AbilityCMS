@@ -419,8 +419,8 @@ export function PlantFlow({
         worse than one that admits it.
       */}
       {unwired ? (
-        <p className="mb-2 rounded-control border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] leading-relaxed text-warn">
-          <span className="font-medium">Hierarchy not set.</span> No Device in
+        <p className="mb-2 rounded-control border border-amber-300 bg-amber-100 dark:border-warn/30 dark:bg-warn/10 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:text-warn">
+          <span className="font-semibold">Hierarchy not set.</span> No Device in
           the power path is wired to anything, so this order is a default by
           equipment type — not derived from this Plant. Set “feeds into” in
           Wiring &amp; Diagram and the chain below becomes the real one.

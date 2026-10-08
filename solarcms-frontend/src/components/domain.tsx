@@ -47,12 +47,30 @@ export function PlantStatusBadge({ status }: { status: string }): JSX.Element {
 }
 
 const STATUS_PILL: Record<BadgeTone, { frame: string; dot: string }> = {
-  ok: { frame: "border-ok/40 bg-ok/10 text-ok", dot: "bg-ok" },
-  warn: { frame: "border-warn/40 bg-warn/10 text-warn", dot: "bg-warn" },
-  bad: { frame: "border-bad/40 bg-bad/10 text-bad", dot: "bg-bad" },
-  info: { frame: "border-info/40 bg-info/10 text-info", dot: "bg-info" },
-  accent: { frame: "border-accent/40 bg-accent/10 text-accent", dot: "bg-accent" },
-  neutral: { frame: "border-line-strong bg-surface-sunken text-ink-muted", dot: "bg-ink-faint" },
+  ok: {
+    frame: "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-ok/40 dark:bg-ok/10 dark:text-ok",
+    dot: "bg-emerald-600 dark:bg-ok",
+  },
+  warn: {
+    frame: "border-amber-300 bg-amber-100 text-amber-900 dark:border-warn/40 dark:bg-warn/10 dark:text-warn",
+    dot: "bg-amber-600 dark:bg-warn",
+  },
+  bad: {
+    frame: "border-rose-200 bg-rose-100 text-rose-800 dark:border-bad/40 dark:bg-bad/10 dark:text-bad",
+    dot: "bg-rose-600 dark:bg-bad",
+  },
+  info: {
+    frame: "border-blue-200 bg-blue-100 text-blue-800 dark:border-info/40 dark:bg-info/10 dark:text-info",
+    dot: "bg-blue-600 dark:bg-info",
+  },
+  accent: {
+    frame: "border-cyan-200 bg-cyan-100 text-cyan-800 dark:border-accent/40 dark:bg-accent/10 dark:text-accent",
+    dot: "bg-cyan-600 dark:bg-accent",
+  },
+  neutral: {
+    frame: "border-slate-200 bg-slate-100 text-slate-700 dark:border-line-strong dark:bg-surface-sunken dark:text-ink-muted",
+    dot: "bg-slate-500 dark:bg-ink-faint",
+  },
 };
 
 /** The Plant's status as a rounded pill with a dot — for a card or a title band. */
@@ -308,8 +326,8 @@ export function PeriodPicker({
             onClick={() => onChange(period)}
             className={`rounded-control px-3.5 py-1.5 text-sm font-semibold capitalize transition ${
               value === period
-                ? "bg-surface-raised text-accent shadow-soft"
-                : "text-ink-muted hover:text-ink"
+                ? "bg-white dark:bg-surface-raised text-slate-900 dark:text-accent shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
+                : "text-slate-600 dark:text-ink-muted hover:text-slate-900 dark:hover:text-ink"
             }`}
           >
             {period}
@@ -333,8 +351,8 @@ export function PeriodPicker({
           onClick={() => onChange(period)}
           className={`rounded-control px-2.5 py-1 text-xs font-medium capitalize transition ${
             value === period
-              ? "bg-surface-raised text-accent shadow-soft"
-              : "text-ink-muted hover:text-ink"
+              ? "bg-white dark:bg-surface-raised text-slate-900 dark:text-accent shadow-[0_1px_2px_rgba(0,0,0,0.08)] font-semibold"
+              : "text-slate-600 dark:text-ink-muted hover:text-slate-900 dark:hover:text-ink"
           }`}
         >
           {period}

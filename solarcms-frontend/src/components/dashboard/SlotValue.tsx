@@ -232,7 +232,7 @@ export function SlotRailTile({
           className={`figure text-[1.9rem] font-semibold leading-none tracking-tight ${
             isUndefined ? "text-ink-faint" : "text-ink"
           }`}
-          unitClassName="ml-1.5 text-sm font-medium text-ink-muted"
+          unitClassName="ml-1.5 text-sm font-semibold text-ink-muted"
           title={
             isUndefined
               ? explanation
