@@ -83,6 +83,13 @@ STREAM_MAXLEN: Final = 100_000
 # length counts entries already evaluated and kept for replay, up to MAXLEN.
 STREAM_READINGS_GROUP: Final = "alarm-workers"
 
+# Bumped whenever an Alarm Rule is created, edited, enabled or disabled, or
+# re-seeded. The alarm worker caches each Device's rules and reloads them when
+# this changes — a rule edit used to need the worker restarted, and nothing
+# said so. No TTL: losing it (a Redis restart) reads as a change, which is the
+# safe direction; the worker also reloads every few minutes regardless.
+ALARM_RULES_VERSION: Final = "alarm_rules:version"
+
 
 def live_device(device_id: int) -> str:
     return LIVE_DEVICE.format(device_id=device_id)

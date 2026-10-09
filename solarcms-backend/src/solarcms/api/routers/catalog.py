@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import text
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
@@ -14,6 +14,13 @@ from solarcms.schemas.catalog import (
     ModelTagsReplace,
     TagCreate,
     TagUpdate,
+)
+from solarcms.services.tag_registry import (
+    NOT_NULL_FIELDS,
+    TRACKED_FIELDS,
+    clear_cached_resolutions,
+    default_tag_rows,
+    follow_on_bindings,
 )
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -263,7 +270,7 @@ async def tags(
     rows = (await session.execute(text("""
         SELECT id, code, name, unit, category, rollup_method, scale_default,
                valid_min, valid_max, min_interval_s, is_cumulative,
-               formula, derived_scope
+               formula, derived_scope, edited_fields
           FROM tags
          WHERE (CAST(:category AS text) IS NULL OR category = :category)
            AND (CAST(:derived AS boolean) IS NULL
@@ -278,7 +285,7 @@ async def tags(
 
 @router.patch("/tags/{tag_id}")
 async def update_tag(
-    tag_id: int, body: TagUpdate, session: SessionDep,
+    tag_id: int, body: TagUpdate, session: SessionDep, background: BackgroundTasks,
     user: CurrentUser = Depends(require_permission("system.admin")),
 ) -> dict[str, Any]:
     """Edit a metric: its unit, its bounds, its scale, or its formula.
@@ -288,54 +295,95 @@ async def update_tag(
     entirely so that replacing them is a single edit — and this is the same edit
     made by a Super Admin at runtime, against a live registry, one row at a time.
 
+    What you send is written, what you omit is left alone, and `null` clears a
+    nullable field (a range bound). Since 8 Oct 2026 (`services/tag_registry`):
+
+    * a changed range or scale reaches every Device still on the Tag's old
+      value; a Device set differently by hand keeps its own, and the response
+      says how many of each (`devices_followed`, `devices_kept`);
+    * each changed field joins `edited_fields`, which `cli seed` will not
+      overwrite; `reset_fields` returns fields to the code's value and hands
+      them back to the seed;
+    * ingest's cached resolutions are cleared after the commit, so the change
+      applies to the next message rather than within five minutes.
+
     ⚠ It does not retrospectively change stored Readings. A scale corrected today
     applies from today; history decoded under the old one is repaired by replaying
     `mqtt_raw`, which is the only path back to correct history (MASTER §5.3).
     """
-    before = (await session.execute(text("""
-        SELECT code, unit, scale_default, formula, derived_scope, category
-          FROM tags WHERE id = :id
+    columns = ", ".join(TRACKED_FIELDS)
+    before = (await session.execute(text(f"""
+        SELECT code, name, {columns}, edited_fields FROM tags WHERE id = :id
     """), {"id": tag_id})).first()
     if before is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "tag not found")
 
+    sent = body.model_fields_set
+    wanted: dict[str, Any] = {
+        f: getattr(body, f) for f in TRACKED_FIELDS if f in sent
+    }
+    if body.clear_formula:
+        wanted["formula"] = None
+        wanted["derived_scope"] = None
+    cleared = sorted(f for f, v in wanted.items() if v is None and f in NOT_NULL_FIELDS)
+    if cleared:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"{', '.join(cleared)} cannot be empty")
+
+    edited = set(before.edited_fields or [])
+    if body.reset_fields:
+        default = default_tag_rows().get(before.code)
+        if default is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{before.code} was added here, not in the code, so it has no default "
+                "to return to")
+        for f in body.reset_fields:
+            wanted[f] = default[f]
+            edited.discard(f)
+
     # Guardrail 11, also a CHECK constraint: a status Tag is a Digital Input,
     # alarmed on change of state, so throttling would discard a trip contact that
     # opened and re-closed inside the window.
-    category = body.category or before.category
-    min_interval = 0 if category == "status" else body.min_interval_s
+    if wanted.get("category", before.category) == "status":
+        wanted["min_interval_s"] = 0
 
-    row = (await session.execute(text("""
-        UPDATE tags
-           SET name = coalesce(:name, name),
-               unit = coalesce(:unit, unit),
-               category = coalesce(:category, category),
-               rollup_method = coalesce(:rollup, rollup_method),
-               scale_default = coalesce(:scale, scale_default),
-               valid_min = coalesce(:vmin, valid_min),
-               valid_max = coalesce(:vmax, valid_max),
-               min_interval_s = coalesce(:interval, min_interval_s),
-               is_cumulative = coalesce(:cumulative, is_cumulative),
-               formula = CASE WHEN :clear_formula THEN NULL
-                              ELSE coalesce(:formula, formula) END,
-               derived_scope = CASE WHEN :clear_formula THEN NULL
-                                    ELSE coalesce(:scope, derived_scope) END
+    changed = {f: v for f, v in wanted.items() if v != getattr(before, f)}
+    edited |= {f for f in changed if f not in body.reset_fields}
+
+    assignments = [f"{f} = :{f}" for f in changed]
+    if "name" in sent and body.name is not None:
+        assignments.append("name = :name")
+    assignments.append("edited_fields = CAST(:edited AS text[])")
+    row = (await session.execute(text(f"""
+        UPDATE tags SET {", ".join(assignments)}
          WHERE id = :id
         RETURNING id, code, name, unit, category, rollup_method, scale_default,
                   valid_min, valid_max, min_interval_s, is_cumulative,
-                  formula, derived_scope
-    """), {
-        "id": tag_id, "name": body.name, "unit": body.unit, "category": body.category,
-        "rollup": body.rollup_method, "scale": body.scale_default,
-        "vmin": body.valid_min, "vmax": body.valid_max, "interval": min_interval,
-        "cumulative": body.is_cumulative, "formula": body.formula,
-        "scope": body.derived_scope, "clear_formula": body.clear_formula,
-    })).first()
+                  formula, derived_scope, edited_fields
+    """), {"id": tag_id, **changed, "name": body.name, "edited": sorted(edited)})).first()
     assert row is not None
 
-    await _audit(session, user, "tag.update", "tags", tag_id,
-                 {"before": dict(before._mapping), "after": dict(row._mapping)})
-    return dict(row._mapping)
+    followed = await follow_on_bindings(
+        session, tag_id, {f: (getattr(before, f), v) for f, v in changed.items()})
+
+    await _audit(session, user, "tag.update", "tags", tag_id, {
+        "before": {f: getattr(before, f) for f in changed},
+        "after": changed,
+        "reset": list(body.reset_fields),
+        "bindings_followed": len(followed.followed),
+        "bindings_kept": len(followed.kept),
+    })
+    if changed:
+        # After the commit (FastAPI runs background tasks once the session's
+        # transaction has closed), or ingest could re-cache the old values.
+        background.add_task(clear_cached_resolutions)
+    return {
+        **dict(row._mapping),
+        "devices_followed": len(followed.device_ids),
+        "bindings_followed": len(followed.followed),
+        "bindings_kept": len(followed.kept),
+    }
 
 
 @router.post("/tags", status_code=status.HTTP_201_CREATED)

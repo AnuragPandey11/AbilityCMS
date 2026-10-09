@@ -316,8 +316,10 @@ export function RatioDial({
         )}
       </svg>
 
-      {/* Held open when empty, so every tile's footnote sits on one line. */}
-      <div className="flex min-h-5 flex-col items-center text-center text-[11.5px] leading-snug text-ink-faint">
+      {/* Held open when empty, so every tile's footnote sits on one line.
+          14px and bold, white in dark mode (`.tile-note`), like the tile's own
+          footnote; the amber warning below keeps its colour. */}
+      <div className="tile-note flex min-h-5 flex-col items-center text-center text-sm font-semibold leading-snug text-ink-faint">
         {value === null ? (
           <span>{sentence(figure?.undefined_reason) ?? "Not defined for this period."}</span>
         ) : implausible ? (
@@ -352,7 +354,7 @@ function ComparisonLine({ comparison, label }: { comparison: DialComparison; lab
           `${formatRatioAsPercent(value)}. The same formula over the same share of the period, so the two can be compared.` +
           (partial ? ` Only ${partial} over that span, so the comparison is only as good as that.` : "");
   return (
-    <div className="flex flex-col items-center text-[11.5px] leading-snug text-ink-muted" title={title}>
+    <div className="tile-note flex flex-col items-center text-sm font-semibold leading-snug text-ink-muted" title={title}>
       <span className="inline-flex flex-wrap items-center justify-center gap-x-1.5">
         <svg width="6" height="14" viewBox="0 0 6 14" aria-hidden="true">
           <line x1="3" y1="1.5" x2="3" y2="12.5" className="stroke-ink" strokeWidth={2.2} strokeLinecap="round" />

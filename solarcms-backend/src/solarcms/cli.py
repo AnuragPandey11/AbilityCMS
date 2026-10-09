@@ -25,7 +25,11 @@ from typing import Any
 from redis.exceptions import RedisError
 from sqlalchemy import text
 
-from solarcms.cache.live import close_redis, invalidate_resolution
+from solarcms.cache.live import (
+    bump_alarm_rules_version,
+    close_redis,
+    invalidate_resolution,
+)
 from solarcms.config import get_settings
 from solarcms.db.rls import INGEST_ROLE, SecurityContext
 from solarcms.db.session import dispose_engine, scoped_session
@@ -33,6 +37,7 @@ from solarcms.domain.decoding import parse_topic
 from solarcms.logging import configure_logging, get_logger
 from solarcms.services.onboarding import backfill_plant_kpi_devices
 from solarcms.services.seed import seed_catalog
+from solarcms.services.tag_registry import clear_cached_resolutions
 from solarcms.workers.resolver import load_topic_patterns
 
 log = get_logger("cli")
@@ -48,6 +53,15 @@ async def _seed() -> int:
         # sees rows because the platform context above is set. A migration doing
         # the same thing without it would match zero rows and report success.
         counts["plant_kpi_devices"] = await backfill_plant_kpi_devices(session)
+    # After the commit, so nothing re-caches the old values in between: Tag
+    # changes reach ingest now rather than in five minutes, and the alarm
+    # worker reloads the platform rules the seed has just rewritten.
+    await clear_cached_resolutions()
+    try:
+        await bump_alarm_rules_version()
+    except RedisError as exc:
+        log.warning("alarm rules re-seeded, but the alarm worker could not be told; "
+                    "it picks them up within five minutes", error=str(exc))
     total = sum(counts.values())
     log.info("seed complete", rows=total, **counts)
     return 0

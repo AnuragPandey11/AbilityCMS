@@ -147,6 +147,11 @@ export async function createTag(body: TagCreate): Promise<unknown> {
 export type TagUpdate = Partial<Omit<TagCreate, "code">> & {
   /** A formula is removed by asking — null is indistinguishable from "unchanged". */
   clear_formula?: boolean;
+  /**
+   * Fields to return to the code's default, handing them back to `cli seed`.
+   * An edited field is otherwise kept by the seed for good.
+   */
+  reset_fields?: string[];
 };
 
 /**
@@ -155,6 +160,10 @@ export type TagUpdate = Partial<Omit<TagCreate, "code">> & {
  * ⚠ Not retrospective. A scale corrected today applies from today; Readings
  * already decoded under the old one are repaired only by replaying `mqtt_raw`,
  * which the backend does and this screen cannot.
+ *
+ * A changed range or scale also reaches every Device still on the Tag's old
+ * value; Devices set differently by hand keep their own. The response's
+ * `devices_followed` / `bindings_kept` say how many of each — worth showing.
  */
 export async function updateTag(
   tagId: number,

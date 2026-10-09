@@ -27,8 +27,6 @@ from solarcms.domain.assumptions import (
     DERIVED_TAG_FORMULAS,
     FORMULA_CONSTANTS,
     MAX_PV_STRINGS,
-    MIN_INTERVAL_S_BY_CATEGORY,
-    MIN_INTERVAL_S_CUMULATIVE,
     SOURCE_KEY_ALIASES,
     TAG_SPECS,
 )
@@ -41,6 +39,13 @@ from solarcms.domain.dashboard_spec import (
 )
 from solarcms.domain.derived import DerivedTag
 from solarcms.domain.sld_stages import DEFAULT_STAGE_BY_DEVICE_TYPE
+from solarcms.services.tag_registry import (
+    BINDING_COPIES,
+    TRACKED_FIELDS,
+    FollowResult,
+    default_tag_rows,
+    follow_on_bindings,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -508,55 +513,45 @@ async def seed_catalog(session: AsyncSession) -> dict[str, int]:
     )
 
     # The Tag registry. Adding a metric is an INSERT here — never a column (I-2).
-    tag_rows: list[dict[str, Any]] = []
-    for code, spec in sorted(TAG_SPECS.items()):
-        # Cumulative counters are throttled harder than instantaneous values:
-        # they are monotonic, so sampling loses nothing. Status Tags are never
-        # throttled at all (Guardrail 11) — the category map carries the 0.
-        if spec.category == "status":
-            min_interval = 0
-        elif spec.cumulative:
-            min_interval = MIN_INTERVAL_S_CUMULATIVE
-        else:
-            min_interval = MIN_INTERVAL_S_BY_CATEGORY.get(spec.category, 60)
-        formula, scope = DERIVED_TAG_FORMULAS.get(code, (None, None))
-        tag_rows.append({
-            "code": code,
-            "name": code.replace("_", " ").title(),
-            "unit": spec.unit,
-            "category": spec.category,
-            "rollup_method": spec.rollup_method,
-            "scale_default": spec.scale,
-            "valid_min": spec.valid_min,
-            "valid_max": spec.valid_max,
-            "min_interval_s": min_interval,
-            "is_cumulative": spec.cumulative,
-            "formula": formula,
-            "derived_scope": scope,
-        })
+    # A field a person edited (`edited_fields`, 0036) is kept; every other field
+    # is rewritten from `domain/assumptions.py`, and a range or scale that
+    # changed is carried to the bindings still on the old value — the Devices
+    # nobody tuned by hand (`services/tag_registry.py`).
+    tag_rows = list(default_tag_rows().values())
+    before = {
+        r.code: r for r in (await session.execute(text("""
+            SELECT id, code, scale_default, valid_min, valid_max, edited_fields FROM tags
+        """))).all()
+    }
+    keep = ", ".join(
+        f"{f} = CASE WHEN '{f}' = ANY(tags.edited_fields) THEN tags.{f} ELSE EXCLUDED.{f} END"
+        for f in TRACKED_FIELDS
+    )
     counts["tags"] = await _upsert(
         session,
-        """
+        f"""
         INSERT INTO tags (code, name, unit, category, rollup_method, scale_default,
                           valid_min, valid_max, min_interval_s, is_cumulative,
                           formula, derived_scope)
         VALUES (:code, :name, :unit, :category, :rollup_method, :scale_default,
                 :valid_min, :valid_max, :min_interval_s, :is_cumulative,
                 :formula, :derived_scope)
-        ON CONFLICT (code) DO UPDATE
-            SET unit = EXCLUDED.unit,
-                category = EXCLUDED.category,
-                rollup_method = EXCLUDED.rollup_method,
-                scale_default = EXCLUDED.scale_default,
-                valid_min = EXCLUDED.valid_min,
-                valid_max = EXCLUDED.valid_max,
-                min_interval_s = EXCLUDED.min_interval_s,
-                is_cumulative = EXCLUDED.is_cumulative,
-                formula = EXCLUDED.formula,
-                derived_scope = EXCLUDED.derived_scope
+        ON CONFLICT (code) DO UPDATE SET {keep}
         """,
         tag_rows,
     )
+    followed = FollowResult()
+    for row in tag_rows:
+        old = before.get(row["code"])
+        if old is None:
+            continue
+        changes = {
+            f: (getattr(old, f), row[f]) for f in BINDING_COPIES
+            if f not in (old.edited_fields or []) and getattr(old, f) != row[f]
+        }
+        if changes:
+            followed.merge(await follow_on_bindings(session, old.id, changes))
+    counts["bindings_followed"] = len(followed.followed)
 
     # Reference Models, one per *variant* rather than per Type. The Tag set is
     # replaced, not merged, so a signal the client withdraws disappears on the

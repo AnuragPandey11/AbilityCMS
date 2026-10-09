@@ -1,9 +1,19 @@
-"""Cron-like work: escalation timers, report schedules, aggregate verification.
+"""Cron-like work: escalation timers, notification delivery, report schedules,
+aggregate verification, Plant KPIs.
 
     python -m solarcms.workers.scheduler
 
 Everything here is periodic and none of it is driven by arriving data — which is
 exactly why it cannot live in the ingest or alarm worker.
+
+**Three loops, independent of one another** (8 Oct 2026). They used to be one
+60-second tick run in sequence, so a slow report delayed every escalation and
+the Plant KPIs behind it, and one failing step skipped the rest of the tick:
+
+* the core tick — escalations, aggregate checks, Plant KPIs — each step on its
+  own, so one failing does not cost the others their turn;
+* notification delivery, every few seconds (`services/notifications.deliver_due`);
+* report rendering, off the event loop in a thread, since a large PDF is CPU.
 """
 
 from __future__ import annotations
@@ -24,7 +34,7 @@ from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
 from solarcms.db.session import dispose_engine, scoped_session
 from solarcms.domain.alarm_logic import should_escalate
 from solarcms.logging import configure_logging
-from solarcms.services.notifications import record_and_send
+from solarcms.services.notifications import deliver_due, queue_notification
 from solarcms.services.plant_kpi import compute as compute_plant_kpis
 from solarcms.services.reporting import (
     FinancialSourceUnavailable,
@@ -38,6 +48,10 @@ from solarcms.services.storage import artifact_key, get_store
 log = structlog.get_logger("scheduler")
 
 TICK_SECONDS = 60
+#: How often queued notifications are looked for. An Alarm's message waits at
+#: most this long after the Alarm is raised.
+NOTIFY_POLL_SECONDS = 2
+REPORT_POLL_SECONDS = 15
 
 
 async def fire_due_escalations() -> int:
@@ -86,8 +100,10 @@ async def fire_due_escalations() -> int:
             if not recipients:
                 recipients.append(None)
 
+            # Queued with the escalation in one transaction, and sent by the
+            # delivery loop: a slow mail server cannot hold up the next one.
             for recipient in recipients:
-                await record_and_send(
+                await queue_notification(
                     session, client_id=row.client_id, channel=row.channel,
                     message=f"Escalation level {row.level}: alarm {row.alarm_id} "
                             f"is still unacknowledged",
@@ -134,13 +150,15 @@ async def run_queued_reports(limit: int = 5) -> int:
                 store = get_store()
                 artifacts: dict[str, str] = {}
 
+                # Rendering is CPU work: in a thread, so the delivery loop and
+                # the escalation timer keep running while a large report renders.
                 xlsx_key = artifact_key(run.client_id, run.id, "xlsx")
-                await store.put(xlsx_key, render_xlsx(data),
+                await store.put(xlsx_key, await asyncio.to_thread(render_xlsx, data),
                                 "application/vnd.openxmlformats-officedocument."
                                 "spreadsheetml.sheet")
                 artifacts["xlsx"] = await store.signed_url(xlsx_key)
 
-                pdf = render_pdf(data)
+                pdf = await asyncio.to_thread(render_pdf, data)
                 if pdf is not None:
                     pdf_key = artifact_key(run.client_id, run.id, "pdf")
                     await store.put(pdf_key, pdf, "application/pdf")
@@ -227,6 +245,73 @@ async def run_plant_kpis() -> dict[str, int]:
                                         tick_seconds=TICK_SECONDS)
 
 
+async def _wait(stopping: asyncio.Event, seconds: float) -> None:
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stopping.wait(), timeout=seconds)
+
+
+async def _core_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
+    """Escalations, aggregate checks and Plant KPIs, each step on its own."""
+    while not stopping.is_set():
+        escalated = rendered_kpis = 0
+        failed = False
+        stalled: list[str] = []
+        try:
+            escalated = await fire_due_escalations()
+        except Exception as exc:
+            failed = True
+            log.error("escalations failed", error=str(exc))
+            heartbeat.failed(exc)
+        try:
+            stalled = await verify_aggregates()
+            # A stalled aggregate is the scheduler reporting a fault it found,
+            # not one it has — kept beside its heartbeat so the page can say.
+            heartbeat.extra["stalled_aggregates"] = list(stalled)
+        except Exception as exc:
+            failed = True
+            log.error("aggregate check failed", error=str(exc))
+            heartbeat.failed(exc)
+        try:
+            rendered_kpis = (await run_plant_kpis()).get("values", 0)
+        except Exception as exc:
+            failed = True
+            log.error("plant kpis failed", error=str(exc))
+            heartbeat.failed(exc)
+        if escalated or stalled:
+            log.info("tick", escalated=escalated, stalled=stalled, kpi_values=rendered_kpis)
+        if not failed:
+            heartbeat.cycle()
+        heartbeat.wrote(f"{rendered_kpis} Plant KPI value(s), {escalated} escalation(s)")
+        await _wait(stopping, TICK_SECONDS)
+
+
+async def _delivery_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
+    """Send queued notifications — Alarms, absence Alarms, escalations."""
+    while not stopping.is_set():
+        try:
+            counts = await deliver_due()
+            if counts:
+                heartbeat.extra["notifications"] = counts
+                if counts.get("sent"):
+                    heartbeat.wrote(f"{counts['sent']} notification(s) sent")
+        except Exception as exc:
+            log.error("notification delivery failed", error=str(exc))
+            heartbeat.failed(exc)
+        await _wait(stopping, NOTIFY_POLL_SECONDS)
+
+
+async def _report_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
+    while not stopping.is_set():
+        try:
+            rendered = await run_queued_reports()
+            if rendered:
+                heartbeat.wrote(f"{rendered} report(s) rendered")
+        except Exception as exc:
+            log.error("report loop failed", error=str(exc))
+            heartbeat.failed(exc)
+        await _wait(stopping, REPORT_POLL_SECONDS)
+
+
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
@@ -238,34 +323,27 @@ async def run() -> None:
     log.info("scheduler started", tick_seconds=TICK_SECONDS)
     heartbeat = Heartbeat("scheduler")
     beat = heartbeat.start(stopping)
+    loops = [
+        asyncio.create_task(_core_loop(stopping, heartbeat), name="core"),
+        asyncio.create_task(_delivery_loop(stopping, heartbeat), name="delivery"),
+        asyncio.create_task(_report_loop(stopping, heartbeat), name="reports"),
+    ]
     try:
-        while not stopping.is_set():
-            try:
-                escalated = await fire_due_escalations()
-                rendered = await run_queued_reports()
-                stalled = await verify_aggregates()
-                kpis = await run_plant_kpis()
-                if escalated or rendered or stalled:
-                    log.info("tick", escalated=escalated, rendered=rendered,
-                             stalled=stalled, kpi_values=kpis.get("values", 0))
-                heartbeat.cycle()
-                heartbeat.wrote(
-                    f"{kpis.get('values', 0)} Plant KPI value(s), {rendered} report(s), "
-                    f"{escalated} escalation(s)"
-                )
-                # A stalled aggregate is the scheduler reporting a fault it found,
-                # not one it has — kept beside its heartbeat so the page can say.
-                heartbeat.extra["stalled_aggregates"] = list(stalled)
-            except Exception as exc:
-                log.error("scheduler tick failed", error=str(exc))
-                heartbeat.failed(exc)
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(stopping.wait(), timeout=TICK_SECONDS)
+        # Each loop catches its own failures; one ending early is a bug, and the
+        # process exits so the supervisor restarts it rather than running on
+        # with a loop missing.
+        done, _ = await asyncio.wait(loops, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            if not stopping.is_set() and task.exception() is not None:
+                raise task.exception()  # type: ignore[misc]
     except Exception as exc:
         heartbeat.crashed(exc)
         raise
     finally:
         stopping.set()
+        for task in loops:
+            task.cancel()
+        await asyncio.gather(*loops, return_exceptions=True)
         await beat
 
     await close_redis()

@@ -258,6 +258,9 @@ class NotificationLog(Base):
             name="notification_delivery_status",
         ),
         Index("ix_notification_log_client_sent", "client_id", "sent_at"),
+        # The dispatcher's work queue (0035).
+        Index("ix_notification_log_due", "next_attempt_at",
+              postgresql_where="delivery_status = 'queued'"),
     )
 
     id: Mapped[int] = pk()
@@ -270,9 +273,15 @@ class NotificationLog(Base):
     channel: Mapped[str] = mapped_column(String(16), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     escalation_level: Mapped[int | None] = mapped_column(Integer)
-    sent_at: Mapped[datetime] = created_at()
+    # NULL until sent or abandoned (0035): rows are queued, then delivered by
+    # the scheduler's dispatcher.
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivery_status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     failure_reason: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    queued_at: Mapped[datetime] = created_at()
 
 
 class IncidentSnapshot(Base):

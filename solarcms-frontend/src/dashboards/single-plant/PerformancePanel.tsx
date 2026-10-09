@@ -158,7 +158,9 @@ function footnote(
   const words = variantWords(figure.variant, period, measuredLater);
   return (
     <span title={figure.variant ? variantNote(figure.variant) : undefined}>
-      <span className="font-medium text-ink-muted">{PERIOD_LABEL[period]}</span>
+      {/* The weight is the tile's (bold in the headline strip); the period
+          stands out by its shade alone, so it is never lighter than the rest. */}
+      <span className="text-ink-muted">{PERIOD_LABEL[period]}</span>
       {words ? ` · ${words}` : ""}
     </span>
   );

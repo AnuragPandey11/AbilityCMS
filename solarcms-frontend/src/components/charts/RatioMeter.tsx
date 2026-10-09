@@ -163,13 +163,13 @@ export function RatioMeter({
       </svg>
 
       {value === null ? (
-        <p className="text-[11.5px] leading-snug text-ink-faint">
+        <p className="tile-note text-sm font-semibold leading-snug text-ink-faint">
           {figure?.undefined_reason
             ? `${figure.undefined_reason.charAt(0).toUpperCase()}${figure.undefined_reason.slice(1)}.`
             : "Not defined for this period."}
         </p>
       ) : implausible ? (
-        <p className="text-[11.5px] leading-snug text-warn">
+        <p className="text-sm font-semibold leading-snug text-warn">
           Outside 0–100%. The inputs cover different spans; check coverage.
         </p>
       ) : null}

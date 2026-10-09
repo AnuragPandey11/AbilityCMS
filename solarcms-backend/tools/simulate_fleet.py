@@ -473,8 +473,9 @@ class PlantSim:
             "PAC": f"{power:.2f}",
             "PVI": f"{power / 0.98 / 720:.2f}" if running else "0.0",
             "PVV": f"{pvv:.1f}",
-            # 40960 is what the client's Inverters report at night (observed).
-            "STS": "1024" if running else "40960",
+            # What the client's Inverters report (observed): 512 while
+            # generating, 40960 at night.
+            "STS": "512" if running else "40960",
             "VBR": f"{v * random.uniform(0.998, 1.002):.1f}",
             "VRY": f"{v * random.uniform(0.998, 1.002):.1f}",
             "VYB": f"{v * random.uniform(0.998, 1.002):.1f}",

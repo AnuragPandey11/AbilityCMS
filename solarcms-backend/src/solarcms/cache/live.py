@@ -248,6 +248,15 @@ async def publish_to_alarm_stream(entries: list[dict[str, Any]]) -> None:
         await pipe.execute()
 
 
+async def bump_alarm_rules_version() -> None:
+    """Tell the alarm worker its cached rules are out of date."""
+    await get_redis().incr(keys.ALARM_RULES_VERSION)
+
+
+async def read_alarm_rules_version() -> str | None:
+    return cast(str | None, await get_redis().get(keys.ALARM_RULES_VERSION))
+
+
 async def publish_live(client_id: int, plant_id: int, payload: dict[str, Any]) -> None:
     """Fan out to WebSocket holders on other API processes.
 

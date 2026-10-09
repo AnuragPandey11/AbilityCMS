@@ -101,6 +101,9 @@ class Tag(Base):
     # INSERT rather than a release (migration 0020).
     formula: Mapped[str | None] = mapped_column(Text)
     derived_scope: Mapped[str | None] = mapped_column(String(16))
+    # Fields a person edited; `cli seed` keeps these and rewrites the rest (0036).
+    edited_fields: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}")
     created_at: Mapped[datetime] = created_at()
 
     @property

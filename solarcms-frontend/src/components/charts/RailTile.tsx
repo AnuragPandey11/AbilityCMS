@@ -61,7 +61,10 @@ export function RailTile({
   children?: ReactNode;
   /** A control at the foot of the tile — a way into the detail behind it. */
   action?: ReactNode;
-  /** Tighter padding and a smaller icon well, for a strip of five across. */
+  /**
+   * Tighter padding and a smaller icon well, for a strip of five across — and
+   * a larger, bold footnote, since in that strip it is the figure's meaning.
+   */
   dense?: boolean;
   /**
    * One short row: the icon beside the label, the figure under the label, and
@@ -121,8 +124,18 @@ export function RailTile({
         <div className={`${dense ? "mt-3" : "mt-4"} ${FIGURE[figureTone]}`}>{children}</div>
       ) : null}
       {visual ? <div className={`${gap} flex min-h-0 flex-1 flex-col justify-center`}>{visual}</div> : null}
+      {/* Only the headline strip's five tiles are `dense`, and there the
+          footnote is what says what the figure means — so it is 14px and
+          bold, and white in dark mode (`.tile-note`). Every other tile keeps
+          the small grey line. */}
       {footnote ? (
-        <p className={`${visual ? gap : "mt-2"} text-xs leading-snug text-ink-faint`}>{footnote}</p>
+        <p
+          className={`${visual ? gap : "mt-2"} leading-snug text-ink-faint ${
+            dense ? "tile-note text-sm font-semibold" : "text-xs"
+          }`}
+        >
+          {footnote}
+        </p>
       ) : null}
       {/* Pinned to the foot, so tiles in one row keep their buttons level
           whether or not a drawing fills the space above. */}

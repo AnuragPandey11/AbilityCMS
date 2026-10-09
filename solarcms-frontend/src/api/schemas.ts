@@ -96,6 +96,10 @@ export const TagSchema = z.object({
   // Null means a Device publishes this value.
   formula: z.string().nullable().catch(null),
   derived_scope: z.enum(["device", "plant"]).nullable().catch(null),
+  // Fields a person edited, which `cli seed` will not overwrite (migration
+  // 0036). Optional: an older API does not send it, and Tags built in code
+  // (fixtures, fallbacks) need not name it.
+  edited_fields: z.array(z.string()).optional().catch(undefined),
 });
 export type Tag = z.infer<typeof TagSchema>;
 

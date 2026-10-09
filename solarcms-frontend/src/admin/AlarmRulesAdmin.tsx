@@ -79,6 +79,10 @@ export function AlarmRulesAdmin(): JSX.Element {
   const [editing, setEditing] = useState<AlarmRule | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Said after a save, because whether a rule change was in force used to be
+  // unknowable from here: the alarm worker kept its old copy until restarted.
+  // It now reloads within seconds of the save (`alarm_rules:version`).
+  const [saved, setSaved] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     code: "",
@@ -102,6 +106,7 @@ export function AlarmRulesAdmin(): JSX.Element {
     setEditing(null);
     setCreating(false);
     setError(null);
+    setSaved(null);
   };
 
   const body = () => ({
@@ -137,7 +142,12 @@ export function AlarmRulesAdmin(): JSX.Element {
         ? alarmsApi.updateAlarmRule(editing.id, body())
         : alarmsApi.createAlarmRule(body()),
     onSuccess: () => {
+      const code = form.code;
+      const wasEditing = editing !== null;
       reset();
+      setSaved(
+        `${code} ${wasEditing ? "saved" : "created"}. New readings are checked against it within a few seconds.`,
+      );
       void queryClient.invalidateQueries({ queryKey: ["alarm-rules"] });
     },
     onError: (err) =>
@@ -206,6 +216,7 @@ export function AlarmRulesAdmin(): JSX.Element {
     setEditing(rule);
     setCreating(false);
     setError(null);
+    setSaved(null);
     setForm({
       code: rule.code,
       name: rule.name,
@@ -645,6 +656,23 @@ export function AlarmRulesAdmin(): JSX.Element {
                 : "Create rule"}
           </Button>
         </Panel>
+      ) : null}
+
+      {saved ? (
+        <p
+          role="status"
+          className="flex items-center justify-between gap-3 rounded border border-line bg-surface-sunken px-3 py-2 text-xs text-ink"
+        >
+          <span>{saved}</span>
+          <button
+            type="button"
+            className="text-ink-muted hover:text-ink"
+            onClick={() => setSaved(null)}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </p>
       ) : null}
 
       <Panel title={`${rules.length} rule(s)`}>

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 from solarcms.domain.derived import InvalidFormula, compile_formula
@@ -83,12 +85,22 @@ class TagUpdate(BaseModel):
     # A formula is removed by asking, not by sending null — which is
     # indistinguishable from "unchanged" in a PATCH body.
     clear_formula: bool = False
+    # Fields to return to the value in `domain/assumptions.py`, taking them off
+    # the Tag's edited list so `cli seed` manages them again.
+    reset_fields: list[Literal[
+        "unit", "category", "rollup_method", "scale_default", "valid_min", "valid_max",
+        "min_interval_s", "is_cumulative", "formula", "derived_scope",
+    ]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _coherent(self) -> TagUpdate:
         _check_formula(self.formula, self.derived_scope)
         if self.clear_formula and self.formula is not None:
             raise ValueError("cannot set and clear a formula in the same request")
+        both = set(self.reset_fields) & (self.model_fields_set - {"reset_fields"})
+        if both:
+            raise ValueError(
+                f"cannot set and reset the same field: {', '.join(sorted(both))}")
         return self
 
 

@@ -5,13 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import structlog
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.cache.live import bump_alarm_rules_version
 from solarcms.schemas.alarming import AlarmRuleWrite
 
+log = structlog.get_logger("alarm_rules")
 router = APIRouter(tags=["alarms"])
 
 
@@ -158,9 +161,24 @@ async def _check_scope_target(
             "would never apply. Choose a target of the rule's own Client.")
 
 
+async def _signal_rules_changed() -> None:
+    """Tell the alarm worker to reload its rules — after the commit.
+
+    Run as a background task, which FastAPI starts once the request's session
+    has committed: signalled inside the transaction, the worker could reload
+    before the change was visible and keep the old rule. A Redis failure only
+    delays the change to the worker's own reload interval (five minutes).
+    """
+    try:
+        await bump_alarm_rules_version()
+    except Exception as exc:
+        log.warning("alarm rule saved; the alarm worker will pick it up within "
+                    "five minutes", error=str(exc))
+
+
 @router.post("/alarm-rules", status_code=status.HTTP_201_CREATED)
 async def create_alarm_rule(
-    body: AlarmRuleWrite, session: SessionDep,
+    body: AlarmRuleWrite, session: SessionDep, background: BackgroundTasks,
     user: CurrentUser = Depends(require_permission("config.modify")),
 ) -> dict[str, Any]:
     """Create an Alarm Rule, owned by exactly the Client the caller means.
@@ -228,12 +246,13 @@ async def create_alarm_rule(
         VALUES (CAST(:client_id AS bigint), :user_id, 'alarm_rule.create',
                 'alarm_rules', :id)
     """), {"client_id": owner, "user_id": user.user_id, "id": row.id})
+    background.add_task(_signal_rules_changed)
     return dict(row._mapping)
 
 
 @router.patch("/alarm-rules/{rule_id}")
 async def update_alarm_rule(
-    rule_id: int, body: AlarmRuleWrite, session: SessionDep,
+    rule_id: int, body: AlarmRuleWrite, session: SessionDep, background: BackgroundTasks,
     user: CurrentUser = Depends(require_permission("config.modify")),
 ) -> dict[str, Any]:
     """Update a Client-owned rule.
@@ -272,4 +291,5 @@ async def update_alarm_rule(
         INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id)
         VALUES (app_client_id(), :user_id, 'alarm_rule.update', 'alarm_rules', :id)
     """), {"user_id": user.user_id, "id": rule_id})
+    background.add_task(_signal_rules_changed)
     return dict(row._mapping)

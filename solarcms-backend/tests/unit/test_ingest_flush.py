@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from solarcms.workers import ingest as ingest_module
+from solarcms.workers.delivery import RedeliveryFilter
 from solarcms.workers.ingest import Batch, IngestWorker
 
 
@@ -67,8 +68,12 @@ def worker(monkeypatch: pytest.MonkeyPatch) -> tuple[IngestWorker, FakePool]:
     w = IngestWorker.__new__(IngestWorker)
     w.batch = Batch()
     w._flush_lock = asyncio.Lock()
-    w.stats = {"stored": 0, "flushes": 0}
+    w.stats = {"stored": 0, "flushes": 0, "acknowledged": 0}
     w.heartbeat = FakeHeartbeat()  # type: ignore[assignment]
+    w._mqtt = None
+    w._generation = 0
+    w._redelivery = RedeliveryFilter()
+    w._stream_backlog = []
     pool = FakePool()
     w._pool = pool  # type: ignore[assignment]
     return w, pool

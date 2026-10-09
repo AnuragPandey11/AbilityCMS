@@ -58,6 +58,22 @@ class Settings(BaseSettings):
     # ── Ingestion tuning ────────────────────────────────────────────────────
     ingest_batch_max_rows: int = 5000
     ingest_batch_max_seconds: float = 2.0
+    # QoS 1 messages are acknowledged only after their batch commits, and a
+    # broker stops delivering once a client holds its in-flight limit
+    # unacknowledged (Mosquitto 20, EMQX 32 by default). A batch is flushed
+    # before it holds this many, so that limit never becomes a throughput
+    # ceiling of "limit ÷ batch seconds". Keep it below the broker's.
+    ingest_max_unacked: int = 16
+    # How long after a reconnect the broker's resends of still-buffered
+    # messages are recognised and not stored twice (`workers/delivery.py`).
+    ingest_redelivery_window_s: float = 120.0
+
+    # ── Notification delivery (the scheduler's dispatcher, migration 0035) ──
+    # Tries per notification before it is recorded failed, backing off
+    # 1, 2, 4, 8 minutes between them; and how many are sent at once, so one
+    # slow recipient cannot hold up the rest.
+    notify_max_attempts: int = 5
+    notify_concurrency: int = 4
 
     # ── Storage ─────────────────────────────────────────────────────────────
     s3_bucket: str | None = None

@@ -150,7 +150,12 @@ TAG_SPECS: Final[dict[str, TagSpec]] = {
     "TODAY_PEAK":          TagSpec("kWh",   0.1,      0.0,  5000.0, "max", "performance"),
     "PV_VOLTAGE":          TagSpec("kV",    0.01,     0.0,     2.0, "avg", "electrical"),
     "PV_CURRENT":          TagSpec("A",     0.01,     0.0,  1000.0, "avg", "electrical"),
-    "DEVICE_STATUS":       TagSpec("code",  1.0,      0.0,  1000.0, "last", "status"),
+    # A code, not a measurement, so its range says only what a register can
+    # hold: 0..65535, one 16-bit word. It was an assumed 0..1000, and the
+    # client's Inverters send 512, 1024 and 40960 (0xA000), so most of their
+    # status readings were stored flagged (8 Oct 2026; migration 0034 widens
+    # the per-Device copies already bound).
+    "DEVICE_STATUS":       TagSpec("code",  1.0,      0.0, 65535.0, "last", "status"),
 
     # ── Weather, extended — units SUPPLIED (TAG_CATALOGUE §2.2) ─────────────
     # The client distinguishes instantaneous irradiance (W/m2) from cumulative

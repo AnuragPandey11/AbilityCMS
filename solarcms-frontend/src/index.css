@@ -703,6 +703,33 @@
   }
 }
 
+/**
+ * The line under a headline-strip tile — "Today · plane-of-array irradiance…",
+ * the dials' "Yesterday, same time", "Not defined…".
+ *
+ * Outside `@layer components` on purpose: inside it, Tailwind copies the rule
+ * for every class that `@apply`s the greys it names.
+ *
+ * Light mode keeps each element's own grey. In dark mode the faint grey sat
+ * at 3.6:1 on a dark card, too weak for a line that says what the figure
+ * above it means, so there it is the ink (8 Oct 2026, at the user's request).
+ * Greys nested inside — the period name, the provenance — follow it; amber
+ * and red do not, because those are warnings and must stay readable as such.
+ * Both dark selectors, like the tokens: the system setting and the toggle.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tile-note:not(.text-warn):not(.text-bad),
+  :root:not([data-theme="light"]) .tile-note .text-ink-faint,
+  :root:not([data-theme="light"]) .tile-note .text-ink-muted {
+    color: rgb(var(--c-ink));
+  }
+}
+:root[data-theme="dark"] .tile-note:not(.text-warn):not(.text-bad),
+:root[data-theme="dark"] .tile-note .text-ink-faint,
+:root[data-theme="dark"] .tile-note .text-ink-muted {
+  color: rgb(var(--c-ink));
+}
+
 @keyframes chart-spin-in {
   from {
     opacity: 0;

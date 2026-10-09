@@ -22,6 +22,7 @@ from sqlalchemy import text
 
 from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
+from solarcms.services.notifications import deliver_due
 from solarcms.workers.scheduler import fire_due_escalations
 from tests.conftest import requires_db
 
@@ -166,10 +167,17 @@ class TestEscalationRecipients:
         await fire_due_escalations()
         records = await _notifications_for(alarm_id)
         assert len(records) == 1
-        level, status, reason = records[0]
+        level, status, _reason = records[0]
         assert level == 1
+        # Queued with the escalation, never sent inside it (0035): a slow mail
+        # server must not hold up the timer.
+        assert status == "queued"
+
+        await deliver_due()
+        [(_level, status, reason)] = await _notifications_for(alarm_id)
         # No SMTP is configured in the test environment, so the honest outcome is
-        # a recorded failure — not a row claiming the mail went out.
+        # a recorded failure — not a row claiming the mail went out — and at
+        # once, since retrying cannot configure one.
         assert status == "failed"
         assert reason is not None and "SMTP" in reason
 

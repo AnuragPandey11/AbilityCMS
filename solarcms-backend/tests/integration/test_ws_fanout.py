@@ -53,7 +53,7 @@ async def _listener_for(registry: ws_module.RoomRegistry) -> asyncio.Task[None]:
                 continue
             payload = json.loads(message["data"])
             room = ws_module.room_key(payload["client_id"], payload["plant_id"])
-            await registry.deliver(room, message["data"])
+            registry.deliver(room, message["data"])
 
     return asyncio.create_task(relay())
 
@@ -68,7 +68,7 @@ class TestCrossProcessFanout:
         registry_b = ws_module.RoomRegistry()
         socket_b = FakeSocket()
         client_id, plant_id = 4242, 77
-        await registry_b.join(socket_b, [ws_module.room_key(client_id, plant_id)])
+        registry_b.join(socket_b, [ws_module.room_key(client_id, plant_id)])
         listener = await _listener_for(registry_b)
 
         try:
@@ -92,8 +92,8 @@ class TestCrossProcessFanout:
         registry = ws_module.RoomRegistry()
         mine, theirs = FakeSocket(), FakeSocket()
         client_id = 5150
-        await registry.join(mine, [ws_module.room_key(client_id, 1)])
-        await registry.join(theirs, [ws_module.room_key(client_id, 2)])
+        registry.join(mine, [ws_module.room_key(client_id, 1)])
+        registry.join(theirs, [ws_module.room_key(client_id, 2)])
         listener = await _listener_for(registry)
 
         try:
@@ -114,7 +114,7 @@ class TestCrossProcessFanout:
         registry = ws_module.RoomRegistry()
         socket = FakeSocket()
         client_id, plant_id = 6060, 3
-        await registry.join(socket, [ws_module.room_key(client_id, plant_id)])
+        registry.join(socket, [ws_module.room_key(client_id, plant_id)])
         listener = await _listener_for(registry)
 
         try:
@@ -143,6 +143,6 @@ class TestRoomKeys:
         registry = ws_module.RoomRegistry()
         socket = FakeSocket()
         suffix = uuid.uuid4().int % 1000
-        await registry.join(socket, [ws_module.room_key(suffix, 1),
+        registry.join(socket, [ws_module.room_key(suffix, 1),
                                      ws_module.room_key(suffix, 2)])
         assert registry.socket_count == 1

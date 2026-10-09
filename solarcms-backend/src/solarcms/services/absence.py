@@ -30,7 +30,7 @@ from solarcms.domain.absence import (
     diff_conditions,
 )
 from solarcms.domain.alarm_logic import AlarmRuleSpec, RuleTarget, rules_for
-from solarcms.services.notifications import notify_alarm_subscribers
+from solarcms.services.notifications import queue_alarm_notifications
 
 log = structlog.get_logger("absence")
 
@@ -192,7 +192,7 @@ async def reconcile(
         """), {"rule_id": rule.rule_id, "device_id": condition.device_id,
                "subject": condition.subject})).first()
         if opened is not None:
-            stats["notified"] += await notify_alarm_subscribers(
+            stats["notified"] += await queue_alarm_notifications(
                 session, alarm_id=opened.id, client_id=condition.client_id,
                 plant_id=condition.plant_id, severity=rule.severity,
                 message=condition.message,
