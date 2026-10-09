@@ -53,6 +53,16 @@ PASSWORD = "fleet12345"
 #: clock, measure at different times of day instead — CAPACITY_AND_DEPLOYMENT.md §11.)
 TIMEZONE = "Asia/Kolkata"
 
+
+def not_in_india(plants: dict[str, str]) -> list[str]:
+    """The Plants, by code, whose timezone is not India's — which must be none.
+
+    Checked before a fleet is seeded and before anything is measured, so a
+    Plant on another clock stops the run instead of quietly making its
+    "today" figures incomparable with every other run's.
+    """
+    return sorted(code for code, zone in plants.items() if zone != TIMEZONE)
+
 #: The Plants that get generated history.
 HISTORY_PLANTS: tuple[str, ...] = ("LT01_P1", "LT01_P2", "LT01_P3")
 

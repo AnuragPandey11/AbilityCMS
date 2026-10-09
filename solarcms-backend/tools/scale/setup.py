@@ -86,9 +86,19 @@ def main() -> int:
              f"INSERT INTO topic_patterns (pattern, priority, enabled) "
              f"VALUES ('{pattern}', {priority}, true)", name)
     print(f"added {len(fleet.TOPIC_PATTERNS)} topic patterns")
+    # Every load-test Plant is in India (fleet.TIMEZONE): refuse a fleet that
+    # is not, before writing it, and confirm it in the database afterwards.
+    abroad = fleet.not_in_india({p.code: p.timezone for c in fleet.FLEET for p in c.plants})
+    if abroad:
+        sys.exit(f"refusing: these load-test Plants are not on {fleet.TIMEZONE}: "
+                 f"{', '.join(abroad)}")
     asyncio.run(seed_fleet())
     plants = sum(len(c.plants) for c in fleet.FLEET)
-    print(f"seeded {len(fleet.FLEET)} Clients and {plants} Plants")
+    stored = psql("SELECT string_agg(code || '=' || timezone, ',') FROM plants "
+                  f"WHERE timezone <> '{fleet.TIMEZONE}'", name)
+    if stored:
+        sys.exit(f"refusing: Plants stored on another clock: {stored}")
+    print(f"seeded {len(fleet.FLEET)} Clients and {plants} Plants, all on {fleet.TIMEZONE}")
     return 0
 
 

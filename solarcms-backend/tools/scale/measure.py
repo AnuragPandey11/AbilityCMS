@@ -91,6 +91,10 @@ async def main(args: argparse.Namespace) -> None:
     await conn.execute("SELECT set_config('app.is_platform_admin', 'true', false)")
     plants = {r["code"]: (r["id"], r["timezone"])
               for r in await conn.fetch("SELECT id, code, timezone FROM plants")}
+    abroad = fleet.not_in_india({code: zone for code, (_id, zone) in plants.items()})
+    if abroad:
+        sys.exit(f"refusing to measure: every load-test Plant must be on {fleet.TIMEZONE}, "
+                 f"and these are not: {', '.join(abroad)}")
     context = {
         "readings_approx": await conn.fetchval("SELECT approximate_row_count('readings')"),
         "mqtt_raw_approx": await conn.fetchval("SELECT approximate_row_count('mqtt_raw')"),
