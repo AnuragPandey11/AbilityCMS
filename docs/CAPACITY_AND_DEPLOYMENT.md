@@ -964,3 +964,43 @@ If one of your figures is far better than ours, check whether your changes touch
 | The first time of each request is much slower than the median | A cold cache. Compare medians. |
 | `docker compose up -d` fails on a port | A native service holds 5433, 6379 or 1883. Stop it, or stop it for the test. |
 | The supervisor says SolarCMS processes are already running | Something from your own stack is still up. `scripts/dev-down.sh` from the repo root, then `pgrep -fl solarcms`. |
+
+---
+
+## 12. Results after the fixes (Tushar branch, 9 Oct 2026)
+
+*Added by the Tushar branch; §1–§11 above are the original findings, kept as written.* Every code item of §6.4 (1–18) is built — see CLAUDE.md "Scale" and MASTER v4.1. Measured with this harness on the client-broker machine (Apple Silicon, Docker Desktop 10 CPUs / 7.75 GB) against the same 50-Plant fleet, **all Plants on Asia/Kolkata** (the harness now refuses any other clock), with the history Plants ~19 h into their day. "Before" is the code at `c569bf1`, "after" at `3104020`+. Both ran beside the live development stack.
+
+| What | Before | After, computed (scheduler stopped) | After, served (scheduler running) |
+|---|---|---|---|
+| Today's KPIs | 3.9–4.3 s | 0.5 s | **4 ms** |
+| Today's KPIs with comparison | 7.2 s | 0.6 s | **4 ms** |
+| Dashboard | 2.0–2.1 s | 33 ms | **5 ms** |
+| SLD stages | 2.0 s | 25 ms | **4 ms** |
+| Report, daily, last 7 days | 2.5 s | 0.47 s | 0.21 s |
+| Report, Inverter, yesterday | 3.2–3.3 s | 0.18 s | 0.05–0.08 s |
+| Data Issues summary (fleet) | 7.6 s, 607 statements | 1.4 s cold | **6 ms** (cached) |
+| System Health processes | 3 ms | 0.5 s (a SCAN; fixed) | 1 ms after the fix |
+| Health sweep, one pass | **74 s** against a 60 s interval | **1.6 s** | — |
+| Scheduler snapshot pass, 50 Plants | — | 3.1 s with all four KPI periods; 0.5–0.6 s dashboards only | (budget: 60 s / 15 s) |
+
+Ingest, `ingest_bench.py` and `latency.sh 1` (measured round trips ~2 ms on both):
+
+| | Before | After |
+|---|---|---|
+| Direct, throttled / unthrottled | 442 / 344 messages/s | **7,157 / 1,239** messages/s |
+| ~2 ms round trips, throttled / unthrottled | **32 / 30** messages/s | **932 / 322** messages/s |
+
+50 Plants publish 95 messages/s.
+
+Live run (`publish.py --daylight`, all five processes, 10 minutes):
+
+| | Before | After |
+|---|---|---|
+| Health sweep cycle | **~171 s** (falling behind) | **60 s** |
+| Scheduler cycle | ~61 s | 60 s |
+| Alarm backlog | 0–222 | 0 |
+| Postgres CPU | 3–78%, mostly 45–78% | 1–10% |
+| Ingest memory | 24–50 MB | 90–181 MB (per-Device state held in memory, §4.5) |
+
+What is **not** shown by this: AWS itself (§10.5 — Fargate CPU, the managed database, real cross-AZ latency), failure drills (§6.5), and anything past ~1,200 Devices (§7). Data Issues for one Plant (~0.3–0.9 s) and operating status (~0.1–0.7 s) were not rewritten beyond passing ids and remain the slowest per-Plant requests. ⚠ The original `finish_history.py` refreshes eight days per tier in one call; on a 7.75 GB Docker VM shared with a live stack the kernel killed Postgres backends twice — refresh in slices (6 h for `agg_1m`), which also took 4.5 minutes instead of ~40.
