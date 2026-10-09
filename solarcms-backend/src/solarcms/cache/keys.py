@@ -152,10 +152,12 @@ DATA_ISSUE_COUNTS: Final = "data_issues:counts:{plant_id}:{audience}"
 DATA_ISSUE_COUNTS_TTL_S: Final = 120
 
 HEARTBEAT: Final = "heartbeat:{process}"
-# One per running copy (host and pid), so two copies — a rolling deploy, or a
-# standby in another availability zone — no longer overwrite each other's
-# heartbeat and leave System Health showing one (docs/CAPACITY_AND_DEPLOYMENT.md
-# §4.7). `HEARTBEAT` without an instance is the form before 9 Oct 2026, still
-# read so that a process not yet restarted is not reported missing.
-HEARTBEAT_INSTANCE: Final = "heartbeat:{process}:{instance}"
+# Every running copy of a process (field: host:pid, value: its heartbeat), so
+# two copies — a rolling deploy, or a standby in another availability zone — no
+# longer overwrite each other and leave System Health showing one
+# (docs/CAPACITY_AND_DEPLOYMENT.md §4.7). A hash, read with one HGETALL: one key
+# per copy had to be found with SCAN, which walks the whole keyspace and took
+# 0.5 s for a header asked every few seconds once 1,200 Devices' keys were in
+# Redis. `HEARTBEAT` is the single-key form from before 9 Oct 2026, still read.
+HEARTBEAT_INSTANCES: Final = "heartbeats:{process}"
 HEARTBEAT_TTL_S: Final = 7 * 86_400

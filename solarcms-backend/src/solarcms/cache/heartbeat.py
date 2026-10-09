@@ -28,8 +28,9 @@ import json
 import os
 import socket
 from collections import deque
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -143,11 +144,11 @@ class Heartbeat:
     async def publish(self) -> None:
         """Write the heartbeat now. Never raises: a monitor must not be a fault."""
         try:
-            await get_redis().set(
-                keys.HEARTBEAT_INSTANCE.format(process=self.process, instance=self.instance),
-                json.dumps(self.snapshot()),
-                ex=keys.HEARTBEAT_TTL_S,
-            )
+            key = keys.HEARTBEAT_INSTANCES.format(process=self.process)
+            async with get_redis().pipeline(transaction=False) as pipe:
+                pipe.hset(key, self.instance, json.dumps(self.snapshot()))
+                pipe.expire(key, keys.HEARTBEAT_TTL_S)
+                await pipe.execute()
         except Exception as exc:
             log.warning("heartbeat not written", process=self.process, error=str(exc))
 
@@ -162,7 +163,23 @@ class Heartbeat:
         await self.publish()
 
     def start(self, stopping: asyncio.Event) -> asyncio.Task[None]:
-        return asyncio.create_task(self.run(stopping), name=f"heartbeat:{self.process}")
+        return asyncio.create_task(self._start(stopping), name=f"heartbeat:{self.process}")
+
+    async def _start(self, stopping: asyncio.Event) -> None:
+        await self._forget_old_copies()
+        await self.run(stopping)
+
+    async def _forget_old_copies(self) -> None:
+        """Drop copies last heard over a day ago, so restarts do not pile up."""
+        try:
+            key = keys.HEARTBEAT_INSTANCES.format(process=self.process)
+            copies = await cast("Awaitable[dict[str, str]]", get_redis().hgetall(key))
+            old = [field for field, value in copies.items()
+                   if (datetime.now(UTC) - _beat_time(_loads(value))).total_seconds() > 86_400]
+            if old:
+                await cast("Awaitable[int]", get_redis().hdel(key, *old))
+        except Exception as exc:
+            log.warning("old heartbeat copies not pruned", process=self.process, error=str(exc))
 
 
 #: Copies older than this are history, not worth listing beside the live ones.
@@ -200,13 +217,21 @@ def choose_active(beats: list[dict[str, Any]]) -> dict[str, Any] | None:
     return max(working or beats, key=_beat_time)
 
 
+def _loads(value: Any) -> dict[str, Any]:
+    try:
+        loaded = json.loads(value)
+        return loaded if isinstance(loaded, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
 async def read_heartbeat_instances(name: str) -> list[dict[str, Any]]:
-    """Every copy's last heartbeat for one process, the pre-instance key included."""
-    client = get_redis()
-    found = [key async for key in client.scan_iter(
-        match=keys.HEARTBEAT_INSTANCE.format(process=name, instance="*"), count=200)]
-    legacy = keys.HEARTBEAT.format(process=name)
-    raw = await client.mget([*found, legacy]) if found else [await client.get(legacy)]
+    """Every copy's last heartbeat for one process, the single-key form included."""
+    async with get_redis().pipeline(transaction=False) as pipe:
+        pipe.hgetall(keys.HEARTBEAT_INSTANCES.format(process=name))
+        pipe.get(keys.HEARTBEAT.format(process=name))
+        copies, legacy = await pipe.execute()
+    raw = [*(copies or {}).values(), legacy]
     beats = []
     for value in raw:
         try:
