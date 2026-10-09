@@ -189,4 +189,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from solarcms.environment import refuse_in_production
+
+    refuse_in_production("simulate.py")
     raise SystemExit(main())

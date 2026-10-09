@@ -53,6 +53,10 @@ class FakePool:
 
 
 class FakeHeartbeat:
+    def __init__(self) -> None:
+        # Flushes record their timing here for the metrics export.
+        self.extra: dict[str, Any] = {}
+
     def wrote(self, _what: str) -> None: ...
 
     def failed(self, _exc: Exception) -> None: ...

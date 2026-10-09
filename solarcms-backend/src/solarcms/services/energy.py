@@ -28,6 +28,7 @@ from solarcms.domain.counters import (
     samples_from_buckets,
 )
 from solarcms.domain.tiering import TIERS, Tier
+from solarcms.services import scope
 
 
 async def read_counter_series(
@@ -50,19 +51,29 @@ async def read_counter_series(
     """
     if plant_ids is None and block_id is None:
         raise ValueError("read_counter_series needs plant_ids or block_id")
-    scope = []
+    # The ids first, so the view is read for exactly these Devices and Tags
+    # rather than for the whole fleet (`services/scope.py`, §4.9).
+    devices = await scope.device_ids(
+        session, plant_ids=plant_ids, block_id=block_id, client_id=client_id,
+        type_codes=[type_code for type_code, _tag in pairs])
+    tags = await scope.tag_ids(session, [tag_code for _type, tag_code in pairs])
+    if not devices or not tags:
+        return {}
+    scope_sql = ["a.device_id = ANY(:device_ids)", "a.tag_id = ANY(:tag_ids)"]
     params: dict[str, Any] = {
-        "start": start, "end": end,
+        "start": start, "end": end, "device_ids": devices, "tag_ids": tags,
         "pairs": [f"{type_code}:{tag_code}" for type_code, tag_code in pairs],
     }
+    # Kept beside the ids, though the ids already imply them: `client_id` is
+    # the scheduler's only isolation, and stating it twice costs nothing.
     if plant_ids is not None:
-        scope.append("d.plant_id = ANY(:plant_ids)")
+        scope_sql.append("d.plant_id = ANY(:plant_ids)")
         params["plant_ids"] = list(plant_ids)
     if block_id is not None:
-        scope.append("d.block_id = :block_id")
+        scope_sql.append("d.block_id = :block_id")
         params["block_id"] = block_id
     if client_id is not None:
-        scope.append("d.client_id = :client_id")
+        scope_sql.append("d.client_id = :client_id")
         params["client_id"] = client_id
 
     rows = (await session.execute(text(f"""
@@ -74,7 +85,7 @@ async def read_counter_series(
           JOIN device_models dm ON dm.id = d.device_model_id
           JOIN device_types dt  ON dt.id = dm.device_type_id
           JOIN tags t           ON t.id = a.tag_id
-         WHERE {" AND ".join(scope)}
+         WHERE {" AND ".join(scope_sql)}
            AND a.bucket >= :start
            AND (CAST(:end AS timestamptz) IS NULL OR a.bucket < CAST(:end AS timestamptz))
            AND (dt.code || ':' || t.code) = ANY(:pairs)

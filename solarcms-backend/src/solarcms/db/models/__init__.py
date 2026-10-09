@@ -23,7 +23,7 @@ from solarcms.db.models.assets import (
 )
 from solarcms.db.models.audit import AuditLog
 from solarcms.db.models.catalog import DeviceModel, DeviceModelTag, DeviceType, Tag
-from solarcms.db.models.health import DeviceHealth, DeviceHealthEvent
+from solarcms.db.models.health import DeviceHealth, DeviceHealthEvent, PlantSnapshot
 from solarcms.db.models.identity import (
     Client,
     Dashboard,
@@ -40,7 +40,7 @@ from solarcms.db.models.telemetry import MqttRaw, Reading
 
 __all__ = [
     "Alarm", "AlarmRule", "AuditLog", "Base", "Block", "BrokerCredential", "Client",
-    "Dashboard", "Device", "DeviceHealth", "DeviceHealthEvent", "DeviceModel",
+    "Dashboard", "Device", "DeviceHealth", "DeviceHealthEvent", "DeviceModel", "PlantSnapshot",
     "DeviceModelTag", "DeviceTagBinding", "DeviceType", "DiscoveryIgnoredTopic",
     "EscalationPolicy",
     "EscalationStep", "IncidentSnapshot", "MaintenanceWindow", "Membership", "MqttRaw",

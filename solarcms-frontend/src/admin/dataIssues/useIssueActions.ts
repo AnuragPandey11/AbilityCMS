@@ -33,7 +33,6 @@ export function useIssueActions(plantId: number | null): IssueActions {
 
   const refresh = useCallback(async () => {
     const tasks = [
-      queryClient.invalidateQueries({ queryKey: qk.dataIssuesSummary() }),
       queryClient.invalidateQueries({ queryKey: ["devices"] }),
       queryClient.invalidateQueries({ queryKey: ["discovery"] }),
       queryClient.invalidateQueries({ queryKey: qk.tags() }),
@@ -43,6 +42,10 @@ export function useIssueActions(plantId: number | null): IssueActions {
       tasks.push(queryClient.invalidateQueries({ queryKey: qk.plant(plantId) }));
     }
     await Promise.all(tasks);
+    // The badge last: the server caches each Plant's counts, and re-reading
+    // the Plant's issues above is what refreshes that cache — read before it,
+    // the badge would show the count from before the fix.
+    await queryClient.invalidateQueries({ queryKey: qk.dataIssuesSummary() });
   }, [queryClient, plantId]);
 
   const run = useCallback<IssueActions["run"]>(

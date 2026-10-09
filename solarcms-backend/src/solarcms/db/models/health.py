@@ -8,6 +8,7 @@ mechanism that detects a silent Device (MASTER §6.3).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from solarcms.db.base import Base, pk
@@ -76,3 +78,27 @@ class DeviceHealthEvent(Base):
     # 'communication' vs 'equipment' — tender §18 lists them as separate loss
     # categories, and conflating them corrupts availability figures.
     cause: Mapped[str | None] = mapped_column(Text)
+
+
+class PlantSnapshot(Base):
+    """A Plant's KPIs or dashboard as the scheduler last worked them out (0039).
+
+    Screens read these instead of recomputing on every refresh
+    (docs/CAPACITY_AND_DEPLOYMENT.md §4.4); `payload` is the API's own response.
+    """
+
+    __tablename__ = "plant_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('kpis:today','kpis:month','kpis:year','kpis:lifetime','dashboard')",
+            name="plant_snapshot_kind",
+        ),
+    )
+
+    plant_id: Mapped[int] = mapped_column(
+        ForeignKey("plants.id", ondelete="CASCADE"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), primary_key=True)
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

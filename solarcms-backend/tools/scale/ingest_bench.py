@@ -40,11 +40,19 @@ PLANTS = ("LT06_P1", "LT07_P1", "LT08_P1", "LT09_P1", "LT10_P1")
 ROUNDS = 6
 
 
-async def run(worker: IngestWorker, messages: list[tuple[str, bytes]]) -> tuple[float, int]:
+async def run(worker: IngestWorker, messages: list[tuple[str, bytes]],
+              *, unthrottled: bool = False) -> tuple[float, int]:
     stored_before = worker.stats["stored"] + len(worker.batch.readings)
     began = time.perf_counter()
     for _ in range(ROUNDS):
         for topic, body in messages:
+            if unthrottled:
+                # Since 9 Oct 2026 ingest keeps throttle state in memory (§4.5)
+                # and reads Redis only on a Device's first message, so the
+                # patch below no longer reaches it: forget the memory too.
+                # (`_devices` is absent on code from before that.)
+                for memory in getattr(worker, "_devices", {}).values():
+                    memory.throttle.clear()
             await worker.handle(topic, body)
             if worker.batch.should_flush(worker.settings, datetime.now(UTC)):
                 await worker.flush()
@@ -80,7 +88,7 @@ async def main() -> None:
         return {}
 
     live.read_throttle_state = nothing_throttled
-    per_msg, stored = await run(worker, messages)
+    per_msg, stored = await run(worker, messages, unthrottled=True)
     live.read_throttle_state = original
     n = ROUNDS * len(messages)
     print(f"unthrottled : {per_msg * 1000:6.2f} ms/message -> {1 / per_msg:7,.0f} messages/s "

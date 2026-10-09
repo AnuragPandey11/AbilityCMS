@@ -42,6 +42,7 @@ from solarcms.domain.strings import (
     classify_strings,
     count_states,
 )
+from solarcms.services import scope
 from solarcms.services.operating import device_states
 
 # The Device Type whose PV inputs are listed. A catalogue row, not a Client,
@@ -134,7 +135,12 @@ async def plant_strings(
 
     latest: dict[tuple[int, int], dict[str, Any]] = {}
     flagged: dict[tuple[int, int], int] = {}
-    if ids:
+    # The PV Tags' ids, matched once on the small `tags` table, so the scans
+    # below filter on ids the view can use (`services/scope.py`, §4.9).
+    pv_tags = await scope.tag_ids_matching(session, _PV_TAG_SQL) if ids else []
+    current_tags = (await scope.tag_ids_matching(session, "^PV[0-9]+_CURRENT$")
+                    if ids else [])
+    if ids and pv_tags:
         start = moment - LOOKBACK
         for row in (await session.execute(text("""
             SELECT DISTINCT ON (a.device_id, a.tag_id)
@@ -145,7 +151,7 @@ async def plant_strings(
                         ELSE             a.avg_value
                    END AS value
               FROM agg_1m_v a JOIN tags t ON t.id = a.tag_id
-             WHERE a.device_id = ANY(:ids) AND t.code ~ :pattern
+             WHERE a.device_id = ANY(:ids) AND a.tag_id = ANY(:tag_ids)
                AND a.bucket >= :start AND a.bucket <= :now
                AND coalesce(a.worst_quality, 0) = 0
                AND CASE t.rollup_method
@@ -154,7 +160,7 @@ async def plant_strings(
                         ELSE             a.avg_value
                    END IS NOT NULL
              ORDER BY a.device_id, a.tag_id, a.bucket DESC
-        """), {"ids": ids, "pattern": _PV_TAG_SQL, "start": start, "now": moment})).all():
+        """), {"ids": ids, "tag_ids": pv_tags, "start": start, "now": moment})).all():
             parsed = _pv(row.code)
             if parsed is None:
                 continue
@@ -166,11 +172,11 @@ async def plant_strings(
         for row in (await session.execute(text("""
             SELECT a.device_id, t.code, count(*) AS flagged
               FROM agg_1m_v a JOIN tags t ON t.id = a.tag_id
-             WHERE a.device_id = ANY(:ids) AND t.code ~ '^PV[0-9]+_CURRENT$'
+             WHERE a.device_id = ANY(:ids) AND a.tag_id = ANY(:tag_ids)
                AND a.bucket >= :start AND a.bucket <= :now
                AND coalesce(a.worst_quality, 0) <> 0
              GROUP BY a.device_id, t.code
-        """), {"ids": ids, "start": start, "now": moment})).all():
+        """), {"ids": ids, "tag_ids": current_tags, "start": start, "now": moment})).all():
             parsed = _pv(row.code)
             if parsed is not None:
                 flagged[(row.device_id, parsed[0])] = int(row.flagged)

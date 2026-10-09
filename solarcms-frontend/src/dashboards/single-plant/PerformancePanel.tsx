@@ -391,6 +391,15 @@ export function PerformancePanel({
         <CoverageBar coverage={kpis?.coverage} />
       </div>
 
+      {kpis?.computed_at ? (
+        <p
+          className="text-[10px] leading-snug text-ink-faint"
+          title="The server works these figures out once a minute and every screen reads that copy, so they cost the same however many people are watching."
+        >
+          Worked out at {formatDateTime(kpis.computed_at)}; refreshed once a minute.
+        </p>
+      ) : null}
+
       {kpis?.source_tier ? (
         <p
           className="text-[10px] leading-snug text-ink-faint"

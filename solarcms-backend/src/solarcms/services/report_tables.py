@@ -82,6 +82,7 @@ from solarcms.domain.formulas import (
 from solarcms.domain.health_logic import uptime_seconds_from_events
 from solarcms.domain.periods import ReportWindow, local_midnight
 from solarcms.domain.tiering import TIERS, Tier, bucket_start, select_tier
+from solarcms.services import scope
 from solarcms.services.energy import read_counter_series
 from solarcms.services.reporting import BOLD, HEADER_FILL, MUTED
 
@@ -313,6 +314,13 @@ async def fetch_day_stats(
     bucket*: summing each Inverter's own peak would add maxima that happened
     at different times. The relation is the `Tier` enum's, never a caller's.
     """
+    # The Plant's ids first, so the view is read for this Plant's Devices and
+    # these Tags only — not the fleet's (`services/scope.py`, §4.9).
+    devices = await scope.device_ids(
+        session, plant_ids=[plant.id], type_codes=[type_code for type_code, _ in pairs])
+    tag_ids = await scope.tag_ids(session, [tag_code for _, tag_code in pairs])
+    if not devices or not tag_ids:
+        return {}
     rows = (await session.execute(text(f"""
         WITH per_bucket AS (
             SELECT dt.code AS type_code, t.code AS tag_code, a.bucket,
@@ -327,7 +335,8 @@ async def fetch_day_stats(
               JOIN device_models dm ON dm.id = d.device_model_id
               JOIN device_types dt  ON dt.id = dm.device_type_id
               JOIN tags t           ON t.id = a.tag_id
-             WHERE d.plant_id = :plant_id
+             WHERE a.device_id = ANY(:device_ids) AND a.tag_id = ANY(:tag_ids)
+               AND d.plant_id = :plant_id
                AND a.bucket >= :start AND a.bucket < :end
                AND (dt.code || ':' || t.code) = ANY(:pairs)
              GROUP BY dt.code, t.code, a.bucket
@@ -344,7 +353,7 @@ async def fetch_day_stats(
           FROM per_bucket
          GROUP BY 1, 2, 3
     """), {"plant_id": plant.id, "start": window.start, "end": window.end,
-           "tz": plant.timezone,
+           "tz": plant.timezone, "device_ids": devices, "tag_ids": tag_ids,
            "pairs": [f"{type_code}:{tag_code}" for type_code, tag_code in pairs]})).all()
 
     result: dict[tuple[str, str], dict[date, Stat]] = {}
@@ -363,6 +372,9 @@ async def fetch_device_stats(
     """Per (Device, Tag) over the whole window: highest and mean."""
     if not device_ids:
         return {}
+    tag_ids = await scope.tag_ids(session, tags)
+    if not tag_ids:
+        return {}
     rows = (await session.execute(text(f"""
         SELECT a.device_id, t.code AS tag_code,
                sum(a.avg_value * a.sample_count) FILTER (WHERE {_GOOD})
@@ -375,10 +387,10 @@ async def fetch_device_stats(
           JOIN devices d ON d.id = a.device_id
           JOIN tags t    ON t.id = a.tag_id
          WHERE d.plant_id = :plant_id AND a.device_id = ANY(:device_ids)
-           AND t.code = ANY(:tags)
+           AND a.tag_id = ANY(:tag_ids)
            AND a.bucket >= :start AND a.bucket < :end
          GROUP BY a.device_id, t.code
-    """), {"plant_id": plant.id, "device_ids": list(device_ids), "tags": list(tags),
+    """), {"plant_id": plant.id, "device_ids": list(device_ids), "tag_ids": tag_ids,
            "start": window.start, "end": window.end})).all()
     return {
         (row.device_id, row.tag_code): Stat(

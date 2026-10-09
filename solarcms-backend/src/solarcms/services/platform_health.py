@@ -49,6 +49,12 @@ def _row(name: str, verdict: Verdict, beat: dict[str, Any] | None,
         # What the supervisor knows of it: restarts and the last exit. None when
         # it is not supervised, which the page says rather than leaving blank.
         "supervised": supervised,
+        # Every copy heard from recently — the working one and any standbys
+        # (workers/leadership.py, §4.6/§4.7). The verdict above is the working
+        # copy's.
+        "instances": (beat or {}).get("instances") or [],
+        "role": ((beat or {}).get("extra") or {}).get("role"),
+        "passes": ((beat or {}).get("extra") or {}).get("passes") or {},
     }
 
 

@@ -305,6 +305,12 @@ export type KpiComparison = z.infer<typeof KpiComparisonSchema>;
 export const PlantKpisSchema = z.object({
   plant_id: z.number(),
   period: z.string(),
+  /**
+   * When the server worked these figures out. The scheduler stores them once a
+   * minute and screens read the stored copy (migration 0039), so this can be up
+   * to about a minute old. Optional: an older server does not send it.
+   */
+  computed_at: z.string().nullable().optional(),
   energy_kwh: numeric(),
   performance_ratio: KpiFigureSchema,
   cuf: KpiFigureSchema,
@@ -990,6 +996,19 @@ export const ProcessHealthSchema = z.object({
   errors: z.number().nullable().optional().catch(null),
   recent_errors: z.number().nullable().optional().catch(null),
   supervised: SupervisedSchema.nullable().optional().catch(null),
+  /** "active" for the copy doing the work, "standby" for a spare waiting on
+   * the leader lock (workers/leadership.py). Absent from an older server. */
+  role: z.string().nullable().optional().catch(null),
+  /** Every copy heard from recently, the working one first. */
+  instances: z
+    .array(z.object({ instance: z.string(), role: z.string() }).passthrough())
+    .optional()
+    .catch([]),
+  /** Each periodic job's latest pass, against the interval it should fit. */
+  passes: z
+    .record(z.object({ took_s: z.number(), every_s: z.number() }))
+    .optional()
+    .catch({}),
 });
 export type ProcessHealth = z.infer<typeof ProcessHealthSchema>;
 
@@ -1337,3 +1356,20 @@ export const DeviceTableColumnsSchema = z.record(
   z.array(DeviceTableColumnSchema),
 );
 export type DeviceTableColumns = z.infer<typeof DeviceTableColumnsSchema>;
+
+/**
+ * Every visible Plant's KPIs and dashboard in one response, for the Portfolio
+ * (`GET /plants/snapshots`). Each body is exactly what the per-Plant route
+ * returns; either may be null where the Plant cannot be computed.
+ */
+export const PlantSnapshotsSchema = z.object({
+  period: z.string(),
+  plants: z.array(
+    z.object({
+      plant_id: z.number(),
+      kpis: PlantKpisSchema.nullable(),
+      dashboard: PlantDashboardSchema.nullable(),
+    }),
+  ),
+});
+export type PlantSnapshots = z.infer<typeof PlantSnapshotsSchema>;

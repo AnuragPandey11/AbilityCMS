@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from redis.exceptions import RedisError
@@ -321,7 +322,50 @@ async def _backfill_device(device_id: int, apply: bool) -> int:
     log.info("backfill complete" if apply else "backfill plan", **stats)
     if not apply:
         print("\n  Dry run. Nothing written. Re-run with --apply.\n")
+        return 0
+    # Rows inserted into minutes the aggregate tiers had already materialised
+    # are never aggregated by the policies, which only revisit recent windows:
+    # reports and KPIs would go on missing them (found 9 Oct 2026 — 1-4% of
+    # several days). So the replayed span is rebuilt, after the commit above.
+    if stats.get("readings") and stats.get("first_at"):
+        return await _refresh_span(stats["first_at"], stats["last_at"])
     return 0
+
+
+async def _refresh_span(first: datetime, last: datetime) -> int:
+    from solarcms.services.backfill import refresh_aggregates, refresh_window
+
+    try:
+        start, end = refresh_window(first, last, datetime.now(UTC))
+    except ValueError as exc:
+        log.warning("aggregates not refreshed", reason=str(exc))
+        return 0
+    if (first, last) != (start, end) and first < start:
+        log.warning("aggregates refreshed only within raw retention",
+                    requested_from=first.isoformat(), refreshed_from=start.isoformat())
+    log.info("refreshing aggregates", start=start.isoformat(), end=end.isoformat())
+    tiers = await refresh_aggregates(start, end)
+    log.info("aggregates refreshed", tiers=tiers)
+    return 0
+
+
+async def _refresh_aggregates(since: str, until: str | None, apply: bool) -> int:
+    """Rebuild the aggregate tiers over a window, from the raw readings."""
+    from solarcms.services.backfill import refresh_window
+
+    first = datetime.fromisoformat(since).replace(tzinfo=UTC)
+    last = datetime.fromisoformat(until).replace(tzinfo=UTC) if until else datetime.now(UTC)
+    try:
+        start, end = refresh_window(first, last, datetime.now(UTC))
+    except ValueError as exc:
+        log.error("refused", reason=str(exc))
+        return 1
+    print(f"  Would rebuild agg_1m, agg_15m, agg_1h and agg_1d from "
+          f"{start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M} UTC from the raw readings.")
+    if not apply:
+        print("\n  Dry run. Nothing written. Re-run with --apply.\n")
+        return 0
+    return await _refresh_span(start, end - timedelta(seconds=1))
 
 
 async def _create_client_user(
@@ -567,6 +611,15 @@ def main(argv: list[str] | None = None) -> int:
     corrections.add_argument("--apply", action="store_true",
                              help="write the changes. Without it, nothing is written.")
 
+    refresh = sub.add_parser(
+        "refresh-aggregates",
+        help="rebuild the aggregate tiers over a window from raw readings (dry run by default)",
+    )
+    refresh.add_argument("--since", required=True, help="UTC date or time, e.g. 2026-09-18")
+    refresh.add_argument("--until", default=None, help="UTC date or time; default now")
+    refresh.add_argument("--apply", action="store_true",
+                         help="rebuild; without it, only say what would be rebuilt")
+
     backfill = sub.add_parser(
         "backfill-device",
         help="replay a Device's quarantined messages into Readings")
@@ -624,6 +677,8 @@ def main(argv: list[str] | None = None) -> int:
                 return await _collectors_from_topics(args.apply, args.retire_devices)
             if args.command == "backfill-device":
                 return await _backfill_device(args.device_id, args.apply)
+            if args.command == "refresh-aggregates":
+                return await _refresh_aggregates(args.since, args.until, args.apply)
             if args.command == "onboard-test-plant":
                 from solarcms.services.onboarding import onboard_test_plant
 

@@ -26,7 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache.keys import RESOLVE_TOPIC
-from solarcms.cache.live import get_redis
+from solarcms.cache.live import announce_all_resolutions_invalid, get_redis
 from solarcms.domain.assumptions import (
     DERIVED_TAG_FORMULAS,
     MIN_INTERVAL_S_BY_CATEGORY,
@@ -147,6 +147,8 @@ async def clear_cached_resolutions() -> int:
                 batch = []
         if batch:
             cleared += await client.delete(*batch)
+        # Ingest keeps resolutions in memory too (§4.5): tell it to drop them.
+        await announce_all_resolutions_invalid()
     except Exception as exc:
         log.warning("cached resolutions not cleared; they expire on their own",
                     error=str(exc))

@@ -54,6 +54,7 @@ from solarcms.domain.data_issues import (
     UnregisteredTopic,
 )
 from solarcms.domain.decoding import TopicPattern, normalise_payload, parse_topic
+from solarcms.services import scope
 
 # The same look-back discovery uses, so a topic offered there is offered here.
 UNREGISTERED_WINDOW = "interval '7 days'"
@@ -181,18 +182,19 @@ async def gather(
             ))
 
         string_ids = [r.id for r in device_rows if r.type_code in ("INVERTER", "SMB")]
-        if string_ids:
+        current_tags = (await scope.tag_ids_matching(session, "^PV[0-9]+_CURRENT$")
+                        if string_ids else [])
+        if string_ids and current_tags:
             for row in (await session.execute(text("""
                 SELECT a.device_id, t.code AS tag_code, max(a.max_value) AS peak
                   FROM agg_15m_v a JOIN tags t ON t.id = a.tag_id
-                 WHERE a.device_id = ANY(:ids)
-                   AND t.code ~ '^PV[0-9]+_CURRENT$'
+                 WHERE a.device_id = ANY(:ids) AND a.tag_id = ANY(:tag_ids)
                    AND a.bucket > now() - make_interval(
                            secs => CAST(:window AS double precision))
                    AND COALESCE(a.worst_quality, 0) = :good
                  GROUP BY a.device_id, t.code
-            """), {"ids": string_ids, "window": DATA_ISSUE_STRING_WINDOW_S,
-                   "good": QUALITY_GOOD})).all():
+            """), {"ids": string_ids, "tag_ids": current_tags,
+                   "window": DATA_ISSUE_STRING_WINDOW_S, "good": QUALITY_GOOD})).all():
                 if row.peak is not None:
                     index = int(row.tag_code[2:].split("_", 1)[0])
                     string_max[row.device_id][index] = float(row.peak)

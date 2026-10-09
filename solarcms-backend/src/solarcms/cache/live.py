@@ -222,8 +222,72 @@ async def read_resolution(topic: str) -> dict[str, Any] | None:
 
 
 async def invalidate_resolution(topic: str) -> None:
-    """Called when a Device or binding changes. The TTL is only a backstop."""
-    await get_redis().delete(keys.resolve_topic(topic))
+    """Called when a Device or binding changes. The TTL is only a backstop.
+
+    Also announced, because ingest keeps resolutions in its own memory too
+    (docs/CAPACITY_AND_DEPLOYMENT.md §4.5) and must drop its copy now, not when
+    the memory entry ages out.
+    """
+    redis = get_redis()
+    await redis.delete(keys.resolve_topic(topic))
+    await redis.publish(keys.RESOLVE_INVALIDATE, topic)
+
+
+async def announce_all_resolutions_invalid() -> None:
+    """Tell ingest to drop every resolution it holds in memory."""
+    await get_redis().publish(keys.RESOLVE_INVALIDATE, keys.RESOLVE_INVALIDATE_ALL)
+
+
+async def write_message_state(
+    *,
+    device_id: int,
+    client_id: int,
+    plant_id: int,
+    at: datetime,
+    current: dict[int, float],
+    counters: dict[int, float],
+    throttled_now: list[int],
+    unmapped: list[str],
+) -> None:
+    """Everything one accepted message writes to Redis, in a single round trip.
+
+    It used to be five or six separate calls per message — current values,
+    counters, throttle stamps, unmapped keys, the live frame — each a network
+    round trip, which is what capped ingest at ~31 messages/s across
+    availability zones (docs/CAPACITY_AND_DEPLOYMENT.md §4.5, §10.3). The
+    keys and values are exactly what the separate calls wrote. Raises on a
+    connection failure, so the caller retries the whole message.
+    """
+    async with get_redis().pipeline(transaction=False) as pipe:
+        if current:
+            mapping: dict[str, str] = {str(k): repr(v) for k, v in current.items()}
+            mapping["_ts"] = at.isoformat()
+            pipe.hset(keys.live_device(device_id), mapping=mapping)
+            pipe.expire(keys.live_device(device_id), keys.LIVE_DEVICE_TTL_S)
+        for tag_id, value in counters.items():
+            pipe.set(keys.counter(device_id, tag_id), repr(value), ex=keys.COUNTER_TTL_S)
+        stamp = at.isoformat()
+        for tag_id in throttled_now:
+            pipe.set(keys.throttle(device_id, tag_id), stamp, ex=keys.THROTTLE_TTL_S)
+        if unmapped:
+            pipe.sadd(keys.unmapped_keys(device_id), *unmapped)
+            pipe.expire(keys.unmapped_keys(device_id), keys.UNMAPPED_KEYS_TTL_S)
+        if current:
+            pipe.publish(keys.WS_FANOUT, json.dumps({
+                "client_id": client_id, "plant_id": plant_id, "device_id": device_id,
+                "values": {str(k): v for k, v in current.items()}, "at": stamp,
+            }))
+        await pipe.execute()
+
+
+async def touch_devices_seen(seen: dict[int, datetime]) -> None:
+    """`touch_device_seen` for many Devices in one round trip."""
+    if not seen:
+        return
+    async with get_redis().pipeline(transaction=False) as pipe:
+        for device_id, at in seen.items():
+            pipe.set(keys.seen_device(device_id), at.isoformat(), ex=keys.SEEN_DEVICE_TTL_S)
+        await pipe.execute()
 
 
 async def publish_to_alarm_stream(entries: list[dict[str, Any]]) -> None:

@@ -51,7 +51,7 @@ from solarcms.domain.operating import (
     peak,
 )
 from solarcms.domain.slots import KIND_DEVICE_TAG, resolve_all
-from solarcms.services import dashboard
+from solarcms.services import dashboard, scope
 
 # The slot whose history the peak is the maximum of. A slot code, not a Tag:
 # which Device answers it is the resolver's decision on each Plant.
@@ -126,14 +126,19 @@ async def _bucket_rows(
     """Each Device's good one-minute `max_value`s, ascending, and the flagged count."""
     if not devices:
         return [], 0
+    # Tag id, not a join on its code: the filter then reaches the view's scan
+    # (`services/scope.py`, §4.9).
+    tags = await scope.tag_ids(session, [tag_code])
+    if not tags:
+        return [], 0
     rows = (await session.execute(text("""
         SELECT a.bucket, a.device_id, a.max_value,
                coalesce(a.worst_quality, 0) <> 0 AS flagged
-          FROM agg_1m_v a JOIN tags t ON t.id = a.tag_id
-         WHERE a.device_id = ANY(:device_ids) AND t.code = :tag_code
+          FROM agg_1m_v a
+         WHERE a.device_id = ANY(:device_ids) AND a.tag_id = ANY(:tag_ids)
            AND a.bucket >= :start AND a.bucket < :end
          ORDER BY a.bucket, a.device_id
-    """), {"device_ids": [device.id for device in devices], "tag_code": tag_code,
+    """), {"device_ids": [device.id for device in devices], "tag_ids": tags,
           "start": start, "end": end})).all()
     good = [
         (row.bucket, row.device_id, float(row.max_value))
@@ -189,14 +194,17 @@ async def _exact(
     if minute is None or not devices:
         return minute
     hold = _hold(devices)
+    tags = await scope.tag_ids(session, [tag_code])
+    if not tags:
+        return minute
     rows = (await session.execute(text("""
         SELECT r.time, r.device_id, r.value
-          FROM readings_v r JOIN tags t ON t.id = r.tag_id
-         WHERE r.device_id = ANY(:device_ids) AND t.code = :tag_code
+          FROM readings_v r
+         WHERE r.device_id = ANY(:device_ids) AND r.tag_id = ANY(:tag_ids)
            AND coalesce(r.quality, 0) = 0 AND r.value IS NOT NULL
            AND r.time >= :start AND r.time < :end
          ORDER BY r.time, r.device_id
-    """), {"device_ids": [device.id for device in devices], "tag_code": tag_code,
+    """), {"device_ids": [device.id for device in devices], "tag_ids": tags,
           "start": minute - max(hold.values()), "end": minute + BUCKET})).all()
     series = held_series(
         [(row.time, row.device_id, float(row.value)) for row in rows], hold, "sum")

@@ -26,12 +26,36 @@ def get_engine() -> AsyncEngine:
         _engine = create_async_engine(
             str(settings.database_url),
             pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,
+            connect_args=engine_connect_args(),
             # The ORM is used for CRUD only. Readings are written with asyncpg's
             # copy_records_to_table, two orders of magnitude faster than INSERT.
             echo=False,
         )
     return _engine
+
+
+def engine_connect_args() -> dict[str, object]:
+    """Driver options from settings, for the SQLAlchemy engine (§5.6, §5.7)."""
+    settings = get_settings()
+    args: dict[str, object] = {}
+    if settings.db_statement_cache_size is not None:
+        args["prepared_statement_cache_size"] = settings.db_statement_cache_size
+    if settings.database_ssl:
+        args["ssl"] = settings.database_ssl
+    return args
+
+
+def asyncpg_connect_args() -> dict[str, object]:
+    """The same options for a raw asyncpg connection or pool (ingest, the leader lock)."""
+    settings = get_settings()
+    args: dict[str, object] = {}
+    if settings.db_statement_cache_size is not None:
+        args["statement_cache_size"] = settings.db_statement_cache_size
+    if settings.database_ssl:
+        args["ssl"] = settings.database_ssl
+    return args
 
 
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:

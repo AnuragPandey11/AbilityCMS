@@ -50,6 +50,7 @@ from solarcms.domain.health_logic import (
 )
 from solarcms.logging import configure_logging
 from solarcms.services.absence import reconcile
+from solarcms.workers.leadership import Leadership, LeadershipLost
 from solarcms.workers.resolver import load_topic_patterns
 
 log = structlog.get_logger("health")
@@ -231,13 +232,34 @@ async def sweep_once() -> dict[str, int]:
         # publishing every 3 s on 300 s-throttled Tags would look silent for 57 of
         # every 60 s. The primary signal is the last-heard key ingest touches in
         # Redis on every accepted message, throttled or not.
+        #
+        # ⚠ Both subqueries are bounded (docs/CAPACITY_AND_DEPLOYMENT.md §4.2).
+        # `max(time)` over the barrier view cannot become an ordered LIMIT 1, so
+        # unbounded it decompressed every row each Device had in retention,
+        # every minute: ~0.45 s per Device, past ~130 Devices one pass
+        # outlasted its 60 s interval. It now looks back two hours only — a
+        # constant window, because a per-Device bound cannot exclude chunks
+        # (measured: no faster than unbounded) — and the previous
+        # `last_seen_at` is itself a candidate below, so a Device silent for
+        # longer keeps its true "last seen" instead of losing it. The only
+        # cost: if this sweep was itself down for over two hours, while Redis
+        # also lost the last-heard key, "last seen" can be early by that
+        # outage. Measured on the client-broker machine: 276 → 58 ms for this
+        # part, and it no longer grows with history. The day's count is summed from the
+        # 15-minute tier's `sample_count` rather than counted row by row; the
+        # window then starts on a quarter-hour, which moves completeness by
+        # well under one per cent.
         devices = (await session.execute(text("""
             SELECT d.id, d.code, d.client_id, d.plant_id, d.expected_interval_s,
                    d.reports_via_device_id, d.collector_code, d.source_address,
                    h.comm_status AS previous_status,
-                   (SELECT max(time) FROM readings_v r WHERE r.device_id = d.id) AS last_stored,
-                   (SELECT count(*) FROM readings_v r
-                     WHERE r.device_id = d.id AND r.time > now() - interval '24 hours'
+                   h.last_seen_at AS previous_seen,
+                   (SELECT max(r.time) FROM readings_v r
+                     WHERE r.device_id = d.id
+                       AND r.time > now() - interval '2 hours'
+                   ) AS last_stored,
+                   (SELECT CAST(coalesce(sum(a.sample_count), 0) AS bigint) FROM agg_15m_v a
+                     WHERE a.device_id = d.id AND a.bucket > now() - interval '24 hours'
                    ) AS readings_24h
               FROM devices d
               LEFT JOIN device_health h ON h.device_id = d.id
@@ -258,7 +280,10 @@ async def sweep_once() -> dict[str, int]:
             # Whichever is later. After a Redis flush the key is absent and the
             # stored time carries one sweep; a Device whose every Tag is
             # throttled has a heard time well ahead of its stored one.
-            candidates = [t for t in (heard.get(device.id), device.last_stored) if t]
+            # The previous `last_seen_at` too: the stored time is only looked
+            # for since then, so it is the answer when nothing newer arrived.
+            candidates = [t for t in (heard.get(device.id), device.last_stored,
+                                      device.previous_seen) if t]
             last_seen = max(candidates) if candidates else None
             assessment = assess(
                 DeviceHealthInput(
@@ -383,8 +408,15 @@ async def run() -> None:
     # heartbeat is what makes a failing sweep read as failing.
     heartbeat = Heartbeat("health_sweeper")
     beat = heartbeat.start(stopping)
+    # One active sweep: two would write every transition twice (§4.6).
+    leadership = Leadership("health_sweeper", heartbeat)
+    watcher: asyncio.Task[None] | None = None
     try:
+        if not await leadership.acquire(stopping):
+            return
+        watcher = asyncio.create_task(leadership.watch(stopping))
         while not stopping.is_set():
+            began = loop.time()
             try:
                 stats = await sweep_once()
                 log.debug("sweep complete", **stats)
@@ -397,13 +429,24 @@ async def run() -> None:
             except Exception as exc:
                 log.error("sweep failed", error=str(exc))
                 heartbeat.failed(exc)
+            # One pass per interval, counted from the start of the pass: it
+            # used to sleep the whole interval *after* each pass, so a slow
+            # sweep stretched its own cadence and nothing showed it (§4.10).
+            took = loop.time() - began
+            heartbeat.timed("sweep", took, HEALTH_SWEEP_INTERVAL_S)
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(stopping.wait(), timeout=HEALTH_SWEEP_INTERVAL_S)
+                await asyncio.wait_for(stopping.wait(),
+                                       timeout=max(0.0, HEALTH_SWEEP_INTERVAL_S - took))
     except Exception as exc:
         heartbeat.crashed(exc)
         raise
     finally:
         stopping.set()
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError, LeadershipLost):
+                await watcher
+        await leadership.release()
         await beat
 
     await close_redis()

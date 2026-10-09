@@ -123,6 +123,22 @@ def assess_process(name: str, beat: Mapping[str, Any] | None, now: datetime) -> 
                        f"Running, but nothing has completed for {ago(cycle_age)} — its work "
                        f"is hung or its loop has stopped going round.")
 
+    # A periodic job slower than its own interval falls further behind every
+    # pass while looking healthy — the load test's 107 s sweep against a 60 s
+    # interval read `working` throughout (docs/CAPACITY_AND_DEPLOYMENT.md §4.10).
+    passes = (beat.get("extra") or {}).get("passes") or {}
+    overrunning = sorted(
+        (job, float(p.get("took_s") or 0), float(p.get("every_s") or 0))
+        for job, p in passes.items()
+        if p.get("every_s") and float(p.get("took_s") or 0) > float(p["every_s"])
+    )
+    if overrunning:
+        job, took, every = overrunning[0]
+        return Verdict("degraded", "warn",
+                       f"Working, but falling behind: its {job} pass took {took:.0f} s "
+                       f"against a {every:.0f} s interval, so each one starts later than "
+                       f"it should.")
+
     recent = int(beat.get("recent_errors") or 0)
     if recent > 0:
         window = ago(PROCESS_RECENT_ERROR_WINDOW_S)

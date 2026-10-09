@@ -37,6 +37,8 @@ export const qk = {
     ["plants", id, "devices", blockId ?? null] as const,
   plantSld: (id: number) => ["plants", id, "sld"] as const,
   plantDashboard: (id: number) => ["plants", id, "dashboard"] as const,
+  /** Every visible Plant's KPIs and dashboard, one request (the Portfolio). */
+  plantSnapshots: (period: KpiPeriod) => ["plants", "snapshots", period] as const,
   plantOperatingStatus: (id: number) => ["plants", id, "operating-status"] as const,
   plantStrings: (id: number) => ["plants", id, "strings"] as const,
   blockKpis: (id: number, period: KpiPeriod) =>

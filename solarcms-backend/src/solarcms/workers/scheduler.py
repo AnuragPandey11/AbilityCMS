@@ -13,7 +13,9 @@ the Plant KPIs behind it, and one failing step skipped the rest of the tick:
 * the core tick — escalations, aggregate checks, Plant KPIs — each step on its
   own, so one failing does not cost the others their turn;
 * notification delivery, every few seconds (`services/notifications.deliver_due`);
-* report rendering, off the event loop in a thread, since a large PDF is CPU.
+* report rendering, off the event loop in a thread, since a large PDF is CPU;
+* Plant snapshots — every Plant's dashboard every 15 s and its KPIs once a
+  minute, stored for the screens to read (`services/snapshots.py`, §4.4).
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
 from solarcms.db.session import dispose_engine, scoped_session
 from solarcms.domain.alarm_logic import should_escalate
 from solarcms.logging import configure_logging
+from solarcms.services import snapshots
 from solarcms.services.notifications import deliver_due, queue_notification
 from solarcms.services.plant_kpi import compute as compute_plant_kpis
 from solarcms.services.reporting import (
@@ -44,6 +47,7 @@ from solarcms.services.reporting import (
 )
 from solarcms.services.seed import DERIVED_TAGS
 from solarcms.services.storage import artifact_key, get_store
+from solarcms.workers.leadership import Leadership
 
 log = structlog.get_logger("scheduler")
 
@@ -252,7 +256,9 @@ async def _wait(stopping: asyncio.Event, seconds: float) -> None:
 
 async def _core_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
     """Escalations, aggregate checks and Plant KPIs, each step on its own."""
+    loop = asyncio.get_running_loop()
     while not stopping.is_set():
+        began = loop.time()
         escalated = rendered_kpis = 0
         failed = False
         stalled: list[str] = []
@@ -282,7 +288,9 @@ async def _core_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
         if not failed:
             heartbeat.cycle()
         heartbeat.wrote(f"{rendered_kpis} Plant KPI value(s), {escalated} escalation(s)")
-        await _wait(stopping, TICK_SECONDS)
+        took = loop.time() - began
+        heartbeat.timed("core", took, TICK_SECONDS)
+        await _wait(stopping, max(0.0, TICK_SECONDS - took))
 
 
 async def _delivery_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
@@ -312,6 +320,37 @@ async def _report_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
         await _wait(stopping, REPORT_POLL_SECONDS)
 
 
+async def _snapshot_loop(stopping: asyncio.Event, heartbeat: Heartbeat) -> None:
+    """Keep every Plant's stored dashboard and KPIs fresh (`services/snapshots`).
+
+    A pass that overruns its interval starts the next at once rather than
+    drifting further behind, and the pass time is on the heartbeat so System
+    Health can say when the fleet has outgrown the interval (§4.10).
+    """
+    last_kpis = 0.0
+    loop = asyncio.get_running_loop()
+    while not stopping.is_set():
+        began = loop.time()
+        kpis_due = began - last_kpis >= snapshots.KPI_INTERVAL_S
+        try:
+            stats = await snapshots.refresh_all(
+                kpis=kpis_due,
+                on_error=lambda plant_id, exc: heartbeat.failed(
+                    f"snapshot of Plant {plant_id}: {type(exc).__name__}: {exc}"),
+            )
+            if kpis_due:
+                last_kpis = began
+            heartbeat.extra["snapshots"] = stats
+            if stats["stored"]:
+                heartbeat.wrote(f"{stats['stored']} Plant snapshot(s)")
+        except Exception as exc:
+            log.error("snapshot pass failed", error=str(exc))
+            heartbeat.failed(exc)
+        took = loop.time() - began
+        heartbeat.timed("snapshots", took, snapshots.DASHBOARD_INTERVAL_S)
+        await _wait(stopping, max(0.0, snapshots.DASHBOARD_INTERVAL_S - took))
+
+
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
@@ -323,10 +362,22 @@ async def run() -> None:
     log.info("scheduler started", tick_seconds=TICK_SECONDS)
     heartbeat = Heartbeat("scheduler")
     beat = heartbeat.start(stopping)
+    # One active scheduler: two would send every report and escalation twice
+    # (§4.6). A second copy waits here as a standby.
+    leadership = Leadership("scheduler", heartbeat)
+    if not await leadership.acquire(stopping):
+        stopping.set()
+        await beat
+        await leadership.release()
+        await close_redis()
+        await dispose_engine()
+        return
     loops = [
+        asyncio.create_task(leadership.watch(stopping), name="leadership"),
         asyncio.create_task(_core_loop(stopping, heartbeat), name="core"),
         asyncio.create_task(_delivery_loop(stopping, heartbeat), name="delivery"),
         asyncio.create_task(_report_loop(stopping, heartbeat), name="reports"),
+        asyncio.create_task(_snapshot_loop(stopping, heartbeat), name="snapshots"),
     ]
     try:
         # Each loop catches its own failures; one ending early is a bug, and the
@@ -344,6 +395,7 @@ async def run() -> None:
         for task in loops:
             task.cancel()
         await asyncio.gather(*loops, return_exceptions=True)
+        await leadership.release()
         await beat
 
     await close_redis()

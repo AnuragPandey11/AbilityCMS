@@ -45,11 +45,38 @@ def _database_available() -> bool:
         return False
 
 
-DATABASE_AVAILABLE = _database_available()
+def _fixture_database_allowed() -> tuple[bool, str]:
+    """Whether integration fixtures may be written to the configured database.
+
+    ⚠ The suite leaves its fixtures behind — every run adds Clients, Plants and
+    Users (`ESC-*`, `REP-*`, `iso-*` …) and nothing tears them down. On a
+    machine whose development database holds a client's real data, that is
+    data pollution (docs/CAPACITY_AND_DEPLOYMENT.md §4.8). So the suite runs
+    only against a database named `*_test` — `scripts/test-db.sh` makes one —
+    or where someone has said, deliberately, that fixtures are fine there.
+    """
+    from solarcms.config import get_settings
+
+    url = str(get_settings().database_url)
+    name = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    if name.endswith("_test"):
+        return True, ""
+    if os.environ.get("SOLARCMS_ALLOW_TEST_FIXTURES") == "1":
+        return True, ""
+    return False, (
+        f"integration tests write fixtures they never delete, and DATABASE_URL names "
+        f"{name!r}; run scripts/test-db.sh and point DATABASE_URL at the *_test "
+        f"database it creates, or set SOLARCMS_ALLOW_TEST_FIXTURES=1 to use this one"
+    )
+
+
+FIXTURES_ALLOWED, FIXTURES_REFUSED_REASON = _fixture_database_allowed()
+DATABASE_AVAILABLE = FIXTURES_ALLOWED and _database_available()
 
 requires_db = pytest.mark.skipif(
     not DATABASE_AVAILABLE,
-    reason="no database reachable; run `alembic upgrade head` and `solarcms seed` first",
+    reason=FIXTURES_REFUSED_REASON
+    or "no database reachable; run `alembic upgrade head` and `solarcms seed` first",
 )
 
 

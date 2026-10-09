@@ -6,6 +6,7 @@ import {
   CommissioningReportSchema,
   OperatingStatusSchema,
   PlantDashboardSchema,
+  PlantSnapshotsSchema,
   PlantDetailSchema,
   PlantKpisSchema,
   PlantPageSchema,
@@ -18,6 +19,7 @@ import {
   type KpiPeriod,
   type OperatingStatus,
   type PlantDashboard,
+  type PlantSnapshots,
   type PlantDetail,
   type PlantKpis,
   type PlantPage,
@@ -307,6 +309,16 @@ export async function changePlantStatus(
  * answered each slot, which travels with the value rather than being inferred
  * here — the frontend never decides where a number came from.
  */
+/**
+ * Every visible Plant's KPIs and dashboard, in one request (§4.4 of
+ * docs/CAPACITY_AND_DEPLOYMENT.md). The Portfolio used to ask for each Plant's
+ * `/kpis` and `/dashboard` separately, every ten seconds.
+ */
+export async function plantSnapshots(period: KpiPeriod = "today"): Promise<PlantSnapshots> {
+  const body = await request("/plants/snapshots", { params: { period } });
+  return parse(PlantSnapshotsSchema, body, "GET /plants/snapshots");
+}
+
 export async function plantDashboard(plantId: number): Promise<PlantDashboard> {
   const body = await request(`/plants/${plantId}/dashboard`);
   return parse(PlantDashboardSchema, body, `GET /plants/${plantId}/dashboard`);

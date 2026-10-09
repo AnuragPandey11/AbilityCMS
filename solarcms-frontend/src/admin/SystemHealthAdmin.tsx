@@ -118,6 +118,29 @@ function ProcessCard({ process, now }: { process: ProcessHealth; now: number }):
             <span className="text-ink-muted">not supervised</span>
           )}
         </Row>
+        {process.passes && Object.keys(process.passes).length > 0 ? (
+          <Row label="Pass time">
+            {Object.entries(process.passes).map(([job, pass], index) => (
+              <span
+                key={job}
+                className={pass.took_s > pass.every_s ? "text-warn" : undefined}
+                title="How long the latest pass took, against the interval it must fit within. Longer means it is falling behind."
+              >
+                {index > 0 ? " · " : ""}
+                {job} {pass.took_s < 10 ? pass.took_s.toFixed(1) : Math.round(pass.took_s)} s of{" "}
+                {Math.round(pass.every_s)} s
+              </span>
+            ))}
+          </Row>
+        ) : null}
+        {process.instances && process.instances.length > 1 ? (
+          <Row label="Copies">
+            <span title={process.instances.map((copy) => `${copy.instance} (${copy.role})`).join("\n")}>
+              {process.instances.filter((copy) => copy.role === "active").length} working ·{" "}
+              {process.instances.filter((copy) => copy.role === "standby").length} on standby
+            </span>
+          </Row>
+        ) : null}
         <Row label="Running since">
           {process.started_at ? formatDateTime(process.started_at) : isApi && supervised?.started_at ? formatDateTime(supervised.started_at) : "—"}
           {process.pid ? <span className="text-ink-muted"> · pid {process.pid}</span> : null}

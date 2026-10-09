@@ -75,6 +75,37 @@ class Settings(BaseSettings):
     notify_max_attempts: int = 5
     notify_concurrency: int = 4
 
+    # ── One active copy of each worker (workers/leadership.py, §4.6) ────────
+    # Each worker takes a Postgres advisory lock before working; a second copy
+    # waits as a hot standby. Off only for a test that runs two on purpose.
+    leader_lock_enabled: bool = True
+    # The lock needs a real session: behind a pooler in transaction mode, set
+    # this to a direct connection to the database. Defaults to the ingest DSN.
+    leader_lock_dsn: str | None = None
+
+    # A read-only token for `GET /health/metrics`, so a monitoring agent can
+    # scrape it without a user login (§6.6). Unset: platform administrators only.
+    metrics_token: SecretStr | None = None
+
+    # ── Deployment (docs/CAPACITY_AND_DEPLOYMENT.md §5) ──────────────────────
+    # Every default below is the laptop's behaviour; AWS sets them.
+    #
+    # "production" refuses the fabricated-fleet scripts (§6.4 item 18).
+    environment: str = "development"
+    # Browser origins allowed to call the API. "*" suits development, where the
+    # Vite proxy serves both from one origin anyway; production names the
+    # app's own domain (§5.2).
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    # Behind a pooler in transaction mode asyncpg's prepared-statement caches
+    # break (a statement prepared on one server connection is run on another):
+    # set 0 there (§5.6). None keeps the driver's default.
+    db_statement_cache_size: int | None = None
+    db_max_overflow: int = 10
+    # TLS to Postgres for both connection paths — SQLAlchemy and raw asyncpg —
+    # from one setting (§5.7): disable | prefer | require | verify-ca |
+    # verify-full. None leaves it to the DSN. Redis takes `rediss://` instead.
+    database_ssl: str | None = None
+
     # ── Storage ─────────────────────────────────────────────────────────────
     s3_bucket: str | None = None
     s3_region: str = "ap-south-1"

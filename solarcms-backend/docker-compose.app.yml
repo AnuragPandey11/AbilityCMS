@@ -1,0 +1,82 @@
+# The application itself in containers — the shape it takes on AWS (one image,
+# one command per process, a migration step first), runnable on one machine
+# beside docker-compose.yml's Postgres, Redis and EMQX:
+#
+#   docker exec solarcms-postgres createdb -U solarcms solarcms_app
+#   docker exec -i solarcms-postgres psql -U solarcms -d postgres < scripts/bootstrap_roles.sql
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up --build
+#
+# Then the app is on http://localhost:8080 and the API on http://localhost:8001.
+#
+# ⚠ Deliberately apart from the development stack, so both can run at once:
+# its own database (solarcms_app), its own Redis database (4), the local EMQX
+# rather than whatever broker .env names, its own broker client id, and other
+# ports. Point it at real data only on purpose. Two `ingest` replicas show the
+# standby: one works, the other waits on the leader lock (§4.6).
+x-app: &app
+  build: .
+  image: solarcms-backend
+  env_file: [.env]
+  environment: &app-env
+    DATABASE_URL: postgresql+asyncpg://solarcms:solarcms@postgres:5432/${SOLARCMS_APP_DB:-solarcms_app}
+    REDIS_URL: redis://redis:6379/4
+    MQTT_HOST: emqx
+    MQTT_PORT: "1883"
+    MQTT_TLS: "false"
+    MQTT_CLIENT_ID: solarcms-ingest-container
+    MQTT_SUBSCRIBE_TOPICS: '["scms/v1/#","SCMS/V1/#"]'
+    ENVIRONMENT: ${ENVIRONMENT:-development}
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_healthy}
+  restart: unless-stopped
+
+services:
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    restart: "no"
+
+  api:
+    <<: *app
+    command: ["api"]
+    environment:
+      <<: *app-env
+      API_WORKERS: "2"
+    ports: ["8001:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  ingest:
+    <<: *app
+    command: ["ingest"]
+    deploy: {replicas: 2}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      emqx: {condition: service_healthy}
+
+  alarm:
+    <<: *app
+    command: ["alarm"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  health_sweeper:
+    <<: *app
+    command: ["health_sweeper"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  scheduler:
+    <<: *app
+    command: ["scheduler"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  frontend:
+    build: ../solarcms-frontend
+    image: solarcms-frontend
+    environment:
+      API_UPSTREAM: http://api:8000
+    ports: ["8080:80"]
+    depends_on: [api]

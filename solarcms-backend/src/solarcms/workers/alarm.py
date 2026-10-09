@@ -60,6 +60,7 @@ from solarcms.domain.alarm_logic import (
 )
 from solarcms.logging import configure_logging
 from solarcms.services.notifications import queue_alarm_notifications
+from solarcms.workers.leadership import Leadership, LeadershipLost
 from solarcms.workers.transient import is_transient, next_delay
 
 log = structlog.get_logger("alarm")
@@ -317,13 +318,26 @@ class AlarmWorker:
 
     async def run(self) -> None:
         beat = self.heartbeat.start(self._stopping)
+        # One active alarm worker (§4.6). The consumer name stays fixed on
+        # purpose: whichever copy takes over reads the same consumer's pending
+        # entries, so nothing the previous one had in hand is lost.
+        leadership = Leadership("alarm", self.heartbeat)
+        watcher: asyncio.Task[None] | None = None
         try:
+            if not await leadership.acquire(self._stopping):
+                return
+            watcher = asyncio.create_task(leadership.watch(self._stopping))
             await self._consume()
         except Exception as exc:
             self.heartbeat.crashed(exc)
             raise
         finally:
             self._stopping.set()
+            if watcher is not None:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError, LeadershipLost):
+                    await watcher
+            await leadership.release()
             # The heartbeat's last word, while Redis is still open to take it.
             await beat
             log.info("alarm worker stopped", **self.stats)
@@ -449,20 +463,33 @@ class AlarmWorker:
             # read included, since a quiet Plant is not a stalled worker. It
             # counts as completed only if no entry in it was skipped.
             skipped_before = self.stats["skipped"]
+            handled: list[str] = []
+            stopped = False
             for entry_id, fields in entries:
-                if fields and not await self._handle_with_retry(entry_id, fields):
-                    return  # stopping: left pending, handled first next start
                 # No fields: trimmed from the stream while still pending.
-                try:
-                    await get_redis().xack(keys.STREAM_READINGS, CONSUMER_GROUP, entry_id)
-                except Exception as exc:
-                    # Handled but not acknowledged: re-read on the next start,
-                    # where re-raising is prevented by the open-Alarm check.
-                    log.warning("acknowledgement failed", entry_id=entry_id, error=str(exc))
+                if fields and not await self._handle_with_retry(entry_id, fields):
+                    stopped = True  # left pending, handled first next start
+                    break
+                handled.append(entry_id)
                 if cursor != ">":
                     cursor = entry_id
+            # One XACK per read, not one per entry (docs/CAPACITY_AND_DEPLOYMENT.md
+            # §4.8): a round trip each was 200 per read at the stream's batch size.
+            await self._acknowledge(handled)
+            if stopped:
+                return
             if self.stats["skipped"] == skipped_before:
                 self.heartbeat.cycle()
+
+    async def _acknowledge(self, entry_ids: list[str]) -> None:
+        if not entry_ids:
+            return
+        try:
+            await get_redis().xack(keys.STREAM_READINGS, CONSUMER_GROUP, *entry_ids)
+        except Exception as exc:
+            # Handled but not acknowledged: re-read on the next start, where
+            # re-raising is prevented by the open-Alarm check.
+            log.warning("acknowledgement failed", entries=len(entry_ids), error=str(exc))
 
 
 async def main() -> None:

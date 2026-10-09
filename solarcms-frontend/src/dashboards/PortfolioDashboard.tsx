@@ -136,7 +136,8 @@ export function PortfolioDashboard(): JSX.Element {
   const { kpis, isLoading: kpisLoading } = usePlantKpiFanout(counted, period);
   // Live generation is each Plant's own resolved Current Power, summed — so
   // every contribution keeps the provenance its Plant screen shows.
-  const { dashboards } = usePlantDashboardFanout(counted);
+  // Same period as the KPIs above, so the two share one request.
+  const { dashboards } = usePlantDashboardFanout(counted, period);
   // The Plant under the pointer in any of the headline donuts, so the same
   // Plant lights up in all of them.
   const [highlight, setHighlight] = useState<MarkKey | null>(null);

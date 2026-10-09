@@ -29,13 +29,16 @@ serve from a request and the replay is not: `estimate()` reads the barrier view,
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache import live
+from solarcms.config import get_settings
 from solarcms.domain.decoding import decode, normalise_payload
 from solarcms.services.device_topics import topics_of
 from solarcms.workers.resolver import ResolutionFailure, load_topic_patterns, resolve
@@ -132,6 +135,11 @@ async def _replay_topic(
     readings_before = stats["readings"]
     for row in rows:
         stats["messages"] += 1
+        # The span replayed, so the aggregate tiers can be refreshed over it
+        # afterwards (`refresh_aggregates`): rows inserted into minutes already
+        # materialised are otherwise never aggregated.
+        stats["first_at"] = min(stats.get("first_at") or row.time, row.time)
+        stats["last_at"] = max(stats.get("last_at") or row.time, row.time)
         payload = row.payload if isinstance(row.payload, dict) else {}
         _flat, payload_timestamp = normalise_payload(payload)
         # ⚠ `now` is the message's own receipt time, never the clock. Replaying
@@ -179,3 +187,73 @@ async def _replay_topic(
 
     stats["has_more"] = stats["has_more"] or len(rows) == batch_size
     return None
+
+
+#: Raw readings are kept 30 days (`readings` retention). A refresh rebuilds a
+#: window *for every Device* from raw rows, so over a window whose raw rows are
+#: gone it would delete every other Device's aggregates there. One day of
+#: margin below the retention, so a chunk about to be dropped is never relied on.
+REFRESHABLE_DAYS = 29
+
+TIERS_IN_ORDER = ("agg_1m", "agg_15m", "agg_1h", "agg_1d")
+#: Each tier's bucket. TimescaleDB refuses a refresh window that covers no
+#: whole bucket of the tier, so each is widened to its own boundaries (the
+#: buckets are cut in UTC: an hour starts at :30 in Kolkata, a day at 05:30).
+TIER_BUCKET = {"agg_1m": timedelta(minutes=1), "agg_15m": timedelta(minutes=15),
+               "agg_1h": timedelta(hours=1), "agg_1d": timedelta(days=1)}
+_EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
+
+
+def _floor(moment: datetime, size: timedelta) -> datetime:
+    return moment - (moment - _EPOCH) % size
+
+
+def _ceil(moment: datetime, size: timedelta) -> datetime:
+    floored = _floor(moment, size)
+    return floored if floored == moment else floored + size
+
+
+def refresh_window(first: datetime, last: datetime, now: datetime) -> tuple[datetime, datetime]:
+    """Whole UTC days covering [first, last], clipped to what can be rebuilt.
+
+    Raises ValueError when nothing of the span lies within raw retention.
+    """
+    earliest = now - timedelta(days=REFRESHABLE_DAYS)
+    start = max(first, earliest).replace(hour=0, minute=0, second=0, microsecond=0)
+    if start < earliest:
+        start += timedelta(days=1)
+    end = (last + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = min(end, now)
+    if start >= end:
+        raise ValueError(
+            f"the span {first:%Y-%m-%d} to {last:%Y-%m-%d} is older than raw retention "
+            f"({REFRESHABLE_DAYS} days): its aggregates cannot be rebuilt without "
+            f"losing every other Device's for the same days")
+    return start, end
+
+
+async def refresh_aggregates(start: datetime, end: datetime) -> list[str]:
+    """Rebuild every aggregate tier over [start, end), finest first.
+
+    Each tier reads the one below it, so the order matters. Run as the
+    migration owner on a connection of its own: `CALL refresh_continuous_aggregate`
+    cannot run inside a transaction, and only the owner may refresh.
+    """
+    settings = get_settings()
+    done: list[str] = []
+    connection = await asyncpg.connect(settings.asyncpg_dsn)
+    try:
+        for tier in TIERS_IN_ORDER:
+            size = TIER_BUCKET[tier]
+            tier_start, tier_end = _floor(start, size), _ceil(end, size)
+            # Literals, not parameters: CALL takes no bound arguments here, and
+            # the values are datetimes this module produced, never input.
+            await connection.execute(
+                f"CALL refresh_continuous_aggregate('{tier}', "
+                f"'{tier_start.isoformat()}'::timestamptz, "
+                f"'{tier_end.isoformat()}'::timestamptz)",
+                timeout=3600)
+            done.append(tier)
+    finally:
+        await connection.close()
+    return done

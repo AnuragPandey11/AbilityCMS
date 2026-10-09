@@ -40,18 +40,50 @@ from typing import Any
 import aiomqtt
 import asyncpg
 
-from solarcms.cache import live
+from solarcms.cache import keys, live
 from solarcms.cache.heartbeat import Heartbeat
 from solarcms.config import Settings, get_settings
 from solarcms.db.rls import INGEST_ROLE, SecurityContext
-from solarcms.db.session import dispose_engine, scoped_session
-from solarcms.domain.decoding import DecodedReading, TopicPattern, decode
+from solarcms.db.session import asyncpg_connect_args, dispose_engine, scoped_session
+from solarcms.domain.decoding import DecodedReading, DeviceResolution, TopicPattern, decode
 from solarcms.logging import configure_logging, get_logger
 from solarcms.workers.delivery import PendingAck, RedeliveryFilter, fingerprint
-from solarcms.workers.resolver import ResolutionFailure, load_topic_patterns, resolve
+from solarcms.workers.leadership import Leadership, LeadershipLost
+from solarcms.workers.resolver import (
+    ResolutionFailure,
+    load_topic_patterns,
+    resolve_cached,
+    resolve_from_database,
+)
 from solarcms.workers.transient import is_transient, next_delay
 
 log = get_logger("ingest")
+
+#: How long a topic's resolution is trusted from memory without asking Redis.
+#: Changes are announced on `keys.RESOLVE_INVALIDATE` and dropped at once; this
+#: is only the backstop for an announcement missed while Redis was away.
+TOPIC_MEMORY_TTL_S = 60.0
+#: Past this many remembered topics, expired ones are swept out each tick, so a
+#: publisher inventing topics cannot grow the memory without bound.
+TOPIC_MEMORY_PRUNE_AT = 10_000
+
+
+@dataclass
+class DeviceMemory:
+    """What ingest knows about one Device between messages.
+
+    Held in memory because ingest is its only writer and, with the standby
+    lock, there is one active ingest (docs/CAPACITY_AND_DEPLOYMENT.md §4.5,
+    §4.6). It was read back from Redis on every message — three or four round
+    trips to learn what this process wrote itself a few seconds before. Still
+    *written* to Redis with every message, and loaded from it the first time a
+    Device is seen, so a restart continues where the last process stopped.
+    """
+
+    throttle: dict[int, datetime] = field(default_factory=dict)  # last write per Tag
+    counters: dict[int, float] = field(default_factory=dict)  # last value per register
+    current: dict[int, float] = field(default_factory=dict)  # last value per Tag
+
 
 #: Alarm-stream entries held while Redis is unreachable — about 80 minutes of
 #: the client's fleet at ~20 Readings a second.
@@ -156,6 +188,13 @@ class IngestWorker:
         # ahead of the next batch's. Bounded: past it, the oldest go — a backlog
         # that deep is no longer worth alarming on (the stream's own cap says so).
         self._stream_backlog: list[dict[str, Any]] = []
+        # Resolutions and per-Device state, in memory (§4.5). Resolutions age
+        # out after TOPIC_MEMORY_TTL_S and are dropped at once when announced.
+        self._topics: dict[str, tuple[float, DeviceResolution | ResolutionFailure]] = {}
+        self._devices: dict[int, DeviceMemory] = {}
+        # Last-heard times not yet written: one pipeline per tick, not one SET
+        # per message. The health sweep reads them once a minute.
+        self._seen: dict[int, datetime] = {}
         # What the System Health page reads: alive, flushing, and whether the
         # broker is connected and delivering. The broker is the one thing only
         # this process can see — a subscription that matches nothing looks, from
@@ -180,6 +219,7 @@ class IngestWorker:
             # Every connection acts as the ingest role, which is exempted from the
             # policies on the tables it writes but holds no privilege elsewhere.
             server_settings={"role": INGEST_ROLE},
+            **asyncpg_connect_args(),
         )
         async with scoped_session(SecurityContext.platform(0), role=None) as session:
             self.patterns = await load_topic_patterns(session)
@@ -189,6 +229,7 @@ class IngestWorker:
 
     async def stop(self) -> None:
         self._stopping.set()
+        await self._write_seen()
         await self.flush()
         if self._pool is not None:
             await self._pool.close()
@@ -217,8 +258,7 @@ class IngestWorker:
             await self._quarantine(topic, {}, now, "payload is not a JSON object")
             return
 
-        async with scoped_session(SecurityContext.platform(0), role=None) as session:
-            resolution = await resolve(session, topic, self.patterns)
+        resolution = await self._resolve(topic)
 
         if isinstance(resolution, ResolutionFailure):
             # Never attributed to a Client by inference (Guardrail 5). An Alarm is
@@ -229,19 +269,17 @@ class IngestWorker:
 
         # Derived Tags observe their own throttle, so their last-write times are
         # read alongside the bound ones.
-        tag_ids = [b.tag_id for b in resolution.bindings.values()]
-        tag_ids += [d.tag_id for d in resolution.derived]
-        cumulative_ids = [b.tag_id for b in resolution.bindings.values() if b.cumulative]
-        last_written = await live.read_throttle_state(resolution.device_id, tag_ids)
-        last_counters = await live.read_counter_values(resolution.device_id, cumulative_ids)
+        # From memory: ingest wrote all of this itself (§4.5). Loaded from
+        # Redis the first time this process sees the Device.
+        memory = await self._device_memory(resolution)
+        last_written = memory.throttle
+        last_counters = memory.counters
         # Only fetched when this Device computes something. The client's broker
         # splits one instrument's signals across topics, so a formula's inputs
         # routinely arrive in different messages and the standing values are what
         # let it resolve at all — but most Devices derive nothing, and a Redis
         # round-trip per message for them would be pure cost.
-        standing = (
-            await self._standing_values(resolution) if resolution.derived else None
-        )
+        standing = self._standing_values(resolution, memory) if resolution.derived else None
 
         result = decode(
             topic, payload, resolution, now,
@@ -265,8 +303,10 @@ class IngestWorker:
             # Surfaced, not just logged. This is what the commissioning screen
             # reads to say "this Device is sending three signals nobody has
             # mapped" — a fact that exists nowhere else, because an unmapped key
-            # never becomes a Reading.
-            await live.record_unmapped_keys(resolution.device_id, result.unmapped_keys)
+            # never becomes a Reading. Written with the message's other state
+            # in `_accept`, or here when nothing else is written.
+            if result.quarantined:
+                await live.record_unmapped_keys(resolution.device_id, result.unmapped_keys)
 
         if result.quarantined:
             await self._quarantine(topic, payload, now, result.rejection or "rejected",
@@ -274,53 +314,123 @@ class IngestWorker:
                                    device_id=resolution.device_id)
             return
 
-        await self._accept(topic, payload, now, result.readings, resolution.client_id,
-                           resolution.device_id)
+        await self._accept(topic, payload, now, result.readings, resolution, memory,
+                           unmapped=list(result.unmapped_keys))
 
-    async def _standing_values(self, resolution: Any) -> dict[str, float]:
-        """This Device's last known value per Tag code, for formula inputs.
+    async def _resolve(self, topic: str) -> DeviceResolution | ResolutionFailure:
+        """Memory, then Redis, then Postgres — opening a session only for the last.
 
-        Read from the live hash rather than from `readings`: it is already there,
-        it is keyed by Device, and querying a compressed hypertable per message
-        to learn what a Device said thirty seconds ago would be indefensible.
+        A session costs ~5 round trips before any query runs; it used to be
+        opened for every message, cached or not (§4.5).
         """
-        by_id = {b.tag_id: b.tag_code for b in resolution.bindings.values()}
-        current = await live.read_current_values(resolution.device_id)
-        standing: dict[str, float] = {}
-        for key, raw in current.items():
+        now = time.monotonic()
+        remembered = self._topics.get(topic)
+        if remembered is not None and remembered[0] > now:
+            return remembered[1]
+        resolution = await resolve_cached(topic)
+        if resolution is None:
+            async with scoped_session(SecurityContext.platform(0), role=None) as session:
+                resolution = await resolve_from_database(session, topic, self.patterns)
+        self._topics[topic] = (now + TOPIC_MEMORY_TTL_S, resolution)
+        return resolution
+
+    def forget_resolution(self, topic: str) -> None:
+        """Drop one topic's remembered resolution, or all of them for "*"."""
+        if topic == keys.RESOLVE_INVALIDATE_ALL:
+            self._topics.clear()
+        else:
+            self._topics.pop(topic, None)
+
+    def _prune_topics(self) -> None:
+        if len(self._topics) <= TOPIC_MEMORY_PRUNE_AT:
+            return
+        now = time.monotonic()
+        for topic in [t for t, (expires, _r) in self._topics.items() if expires <= now]:
+            del self._topics[topic]
+
+    async def _device_memory(self, resolution: DeviceResolution) -> DeviceMemory:
+        """This Device's state, loaded from Redis the first time it is seen."""
+        memory = self._devices.get(resolution.device_id)
+        if memory is not None:
+            return memory
+        tag_ids = [b.tag_id for b in resolution.bindings.values()]
+        tag_ids += [d.tag_id for d in resolution.derived]
+        cumulative = [b.tag_id for b in resolution.bindings.values() if b.cumulative]
+        current: dict[int, float] = {}
+        for key, raw in (await live.read_current_values(resolution.device_id)).items():
             if key.startswith("_"):
                 continue
             try:
-                code = by_id.get(int(key))
-                if code is not None:
-                    standing[code] = float(raw)
+                current[int(key)] = float(raw)
             except ValueError:
                 continue
-        return standing
+        memory = DeviceMemory(
+            throttle=await live.read_throttle_state(resolution.device_id, tag_ids),
+            counters=await live.read_counter_values(resolution.device_id, cumulative),
+            current=current,
+        )
+        self._devices[resolution.device_id] = memory
+        return memory
+
+    @staticmethod
+    def _standing_values(resolution: DeviceResolution, memory: DeviceMemory) -> dict[str, float]:
+        """This Device's last known value per Tag code, for formula inputs.
+
+        From memory, which mirrors the live hash ingest writes: the client's
+        broker splits one instrument's signals across topics, so a formula's
+        inputs routinely arrive in different messages and these standing values
+        are what let it resolve at all.
+        """
+        by_id = {b.tag_id: b.tag_code for b in resolution.bindings.values()}
+        return {by_id[tag_id]: value for tag_id, value in memory.current.items()
+                if tag_id in by_id}
+
+    async def _write_seen(self) -> None:
+        """Write the pending last-heard times. Kept for the next tick on failure."""
+        if not self._seen:
+            return
+        pending, self._seen = self._seen, {}
+        try:
+            await live.touch_devices_seen(pending)
+        except Exception as exc:
+            for device_id, at in pending.items():
+                if self._seen.get(device_id, at) <= at:
+                    self._seen[device_id] = at
+            log.warning("last-heard times not written; retrying next tick", error=str(exc))
 
     async def _accept(
         self, topic: str, payload: dict[str, Any], now: datetime,
-        readings: list[DecodedReading], client_id: int, device_id: int,
+        readings: list[DecodedReading], resolution: DeviceResolution,
+        memory: DeviceMemory, *, unmapped: list[str],
     ) -> None:
-        # Heard is not stored. This must precede the early return below: when
-        # every Tag in the message is inside its throttle window there is nothing
-        # to write, but the Device still spoke, and the health sweep's only
-        # question is whether it did.
-        await live.touch_device_seen(device_id, now)
+        device_id = resolution.device_id
+        # Heard is not stored. Recorded before the early return below: when
+        # every Tag in the message is inside its throttle window there is
+        # nothing to write, but the Device still spoke, and the health sweep's
+        # only question is whether it did. Written with the next tick (§4.5).
+        self._seen[device_id] = now
         if not readings:
+            if unmapped:
+                await live.record_unmapped_keys(device_id, unmapped)
             return
 
-        # Redis first, the buffer last, with nothing that can fail in between:
-        # a message whose Redis writes fail is retried whole
-        # (`_handle_with_retry`), and must not already be in the buffer. The
-        # throttle state goes last of the writes, because once it is written a
-        # retry would throttle these very readings away.
+        # Redis first — one pipeline for everything this message changes —
+        # then memory, then the buffer, with nothing that can fail in between:
+        # a message whose Redis write fails is retried whole
+        # (`_handle_with_retry`), decides the same again from the unchanged
+        # memory, and must not already be in the buffer.
         written = {r.tag_id: r.value for r in readings}
-        await live.write_current_values(device_id, written, now)
-        await live.write_counter_values(
-            device_id, {r.tag_id: r.value for r in readings}
+        cumulative = {b.tag_id for b in resolution.bindings.values() if b.cumulative}
+        counters = {tag_id: value for tag_id, value in written.items() if tag_id in cumulative}
+        await live.write_message_state(
+            device_id=device_id, client_id=resolution.client_id,
+            plant_id=readings[0].plant_id, at=now, current=written, counters=counters,
+            throttled_now=list(written), unmapped=unmapped,
         )
-        await live.write_throttle_state(device_id, list(written), now)
+        memory.current.update(written)
+        memory.counters.update(counters)
+        for tag_id in written:
+            memory.throttle[tag_id] = now
 
         for reading in readings:
             self.batch.readings.append((
@@ -328,19 +438,9 @@ class IngestWorker:
                 reading.value, reading.quality, reading.source_time,
             ))
         self.batch.raw.append((
-            now, topic, self._seq, json.dumps(payload), client_id, device_id, False, None,
+            now, topic, self._seq, json.dumps(payload), resolution.client_id, device_id,
+            False, None,
         ))
-
-        # A nudge to open screens, which poll anyway: never worth failing a
-        # message over.
-        try:
-            await live.publish_live(client_id, readings[0].plant_id, {
-                "device_id": device_id,
-                "values": {str(k): v for k, v in written.items()},
-                "at": now.isoformat(),
-            })
-        except Exception as exc:
-            log.debug("live update not published", device_id=device_id, error=str(exc))
 
         self.batch.stream_entries.extend({
             "device_id": r.device_id, "client_id": r.client_id, "plant_id": r.plant_id,
@@ -374,6 +474,7 @@ class IngestWorker:
             # the next flush, and nothing taken here can be written twice.
             taken = self.batch.take()
             readings, raw = taken.readings, taken.raw
+            began = time.monotonic()
 
             if readings or raw:
                 try:
@@ -405,6 +506,10 @@ class IngestWorker:
 
             self.stats["stored"] += len(readings)
             self.stats["flushes"] += 1
+            # Exported (GET /health/metrics, §6.6): a flush slowing down is the
+            # first sign of a database falling behind.
+            self.heartbeat.extra["last_flush_s"] = round(time.monotonic() - began, 4)
+            self.heartbeat.extra["last_flush_rows"] = len(readings)
             log.debug("flushed", readings=len(readings), raw=len(raw), acks=len(taken.acks))
 
     def _acknowledge(self, acks: list[PendingAck]) -> None:
@@ -469,6 +574,8 @@ class IngestWorker:
                 await asyncio.wait_for(
                     self._stopping.wait(), timeout=self.settings.ingest_batch_max_seconds
                 )
+            await self._write_seen()
+            self._prune_topics()
             try:
                 if self.batch.should_flush(self.settings, datetime.now(UTC)):
                     await self.flush()
@@ -477,6 +584,34 @@ class IngestWorker:
                 continue
             self.heartbeat.cycle()
 
+    async def _invalidation_listener(self) -> None:
+        """Drop remembered resolutions the moment the API or CLI announces a change.
+
+        Reconnects after a Redis restart. Anything announced while it was away
+        is caught by the memory's own TTL (TOPIC_MEMORY_TTL_S), and the whole
+        memory is dropped on reconnect for the same reason.
+        """
+        delay = 1.0
+        while not self._stopping.is_set():
+            pubsub = live.get_redis().pubsub()
+            try:
+                await pubsub.subscribe(keys.RESOLVE_INVALIDATE)
+                self.forget_resolution(keys.RESOLVE_INVALIDATE_ALL)
+                delay = 1.0
+                async for message in pubsub.listen():
+                    if message.get("type") == "message":
+                        self.forget_resolution(str(message["data"]))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("resolution announcements lost; resubscribing",
+                            error=str(exc), retry_in_s=delay)
+                await asyncio.sleep(delay)
+                delay = next_delay(delay)
+            finally:
+                with contextlib.suppress(Exception):
+                    await pubsub.aclose()  # type: ignore[no-untyped-call]
+
     # ── main loop ───────────────────────────────────────────────────────────
 
     async def run(self) -> None:
@@ -484,9 +619,18 @@ class IngestWorker:
         # database is on the page as crashed rather than absent.
         self._beat = self.heartbeat.start(self._stopping)
         flusher: asyncio.Task[None] | None = None
+        listener: asyncio.Task[None] | None = None
+        watcher: asyncio.Task[None] | None = None
+        # One active ingest: a second copy would fight this one for the broker
+        # session (workers/leadership.py, §4.6). It waits here as a standby.
+        leadership = Leadership("ingest", self.heartbeat)
         try:
+            if not await leadership.acquire(self._stopping):
+                return
             await self.start()
+            watcher = asyncio.create_task(leadership.watch(self._stopping))
             flusher = asyncio.create_task(self._flush_loop())
+            listener = asyncio.create_task(self._invalidation_listener())
             while not self._stopping.is_set():
                 try:
                     await self._consume()
@@ -506,11 +650,13 @@ class IngestWorker:
             raise
         finally:
             self.heartbeat.extra["broker_connected"] = False
-            if flusher is not None:
-                flusher.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await flusher
+            for task in (flusher, listener, watcher):
+                if task is not None:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, LeadershipLost):
+                        await task
             await self.stop()
+            await leadership.release()
 
     def _connection_lost(self) -> None:
         """Settle what a dropped connection leaves behind.
@@ -656,6 +802,13 @@ class IngestWorker:
                     await self._handle_with_retry(topic, payload)
                 if self.batch.should_flush(settings, datetime.now(UTC)):
                     await self._flush_with_retry()
+                # What is waiting, for the metrics export (§6.6): messages
+                # received but not yet handled, rows not yet saved, and
+                # messages the broker still holds for us.
+                extra = self.heartbeat.extra
+                extra["incoming_queue"] = client._queue.qsize()
+                extra["buffered_rows"] = len(self.batch.readings)
+                extra["unacknowledged"] = len(self.batch.acks)
                 if self._stopping.is_set():
                     break
             # Stopping: write and acknowledge while the connection is still up,

@@ -41,10 +41,22 @@ import { useLiveSocket } from "@/live/LiveSocket";
  */
 const COALESCE_MS = 1_000;
 
+/**
+ * And never more often than this (docs/CAPACITY_AND_DEPLOYMENT.md §4.4). A
+ * twenty-Device Plant sends a frame every second or two, so refetching after
+ * each round meant the dashboard, KPIs and operating status every couple of
+ * seconds for every open screen. The server now stores the dashboard every
+ * 15 s and the KPIs once a minute, so asking sooner returns the same body.
+ * The first refetch after a quiet spell still follows the data within a
+ * second; only a steady stream is held to this spacing.
+ */
+const MIN_SPACING_MS = 15_000;
+
 export function useLiveRefresh(plantId: number | null): void {
   const { devices } = useLiveSocket();
   const queryClient = useQueryClient();
   const pending = useRef<number | null>(null);
+  const lastRefetch = useRef(0);
 
   /**
    * The newest frame seen for this Plant, as a number.
@@ -71,8 +83,10 @@ export function useLiveRefresh(plantId: number | null): void {
     // in one round would queue twenty refetches.
     if (pending.current !== null) return;
 
+    const wait = Math.max(COALESCE_MS, lastRefetch.current + MIN_SPACING_MS - Date.now());
     pending.current = window.setTimeout(() => {
       pending.current = null;
+      lastRefetch.current = Date.now();
       // `invalidateQueries`, not `refetchQueries`: a screen that is not
       // currently mounted should be marked stale and refetched when it opens,
       // not fetched in the background for nobody.
@@ -85,7 +99,7 @@ export function useLiveRefresh(plantId: number | null): void {
       void queryClient.invalidateQueries({
         queryKey: ["plants", plantId, "operating-status"],
       });
-    }, COALESCE_MS);
+    }, wait);
   }, [latestFrameAt, plantId, queryClient]);
 
   // Clearing on unmount only, not on every frame: the timer is the coalescing

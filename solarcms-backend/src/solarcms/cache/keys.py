@@ -43,6 +43,10 @@ LIVE_ROLLUP_TTL_S: Final = 30
 # changes, so the TTL is a backstop rather than the mechanism.
 RESOLVE_TOPIC: Final = "resolve:topic:{topic}"
 RESOLVE_TOPIC_TTL_S: Final = 300
+# Published when a topic's resolution changes, so ingest drops its in-memory
+# copy at once: a topic, or "*" for every topic (a Tag edit, a re-seed).
+RESOLVE_INVALIDATE: Final = "resolve:invalidate"
+RESOLVE_INVALIDATE_ALL: Final = "*"
 
 # Memoised range-query responses, keyed by a hash of the query.
 ANALYTICS: Final = "cache:analytics:{digest}"
@@ -139,5 +143,19 @@ def unmapped_keys(device_id: int) -> str:
 # error (`cache/heartbeat.py`). Kept a week rather than expiring with the beat,
 # so a process that died says *when* it last spoke instead of vanishing from
 # the page. Losing Redis loses only this, and the next beat restores it.
+# One Plant's open Data Issue counts, as the navigation badge needs them.
+# Per Plant and per audience — a platform administrator also sees unregistered
+# topics — and never per User: what a Plant's issues are does not depend on who
+# asks, and the Plants listed are still the caller's own, read through RLS
+# before any key is (docs/CAPACITY_AND_DEPLOYMENT.md §4.11).
+DATA_ISSUE_COUNTS: Final = "data_issues:counts:{plant_id}:{audience}"
+DATA_ISSUE_COUNTS_TTL_S: Final = 120
+
 HEARTBEAT: Final = "heartbeat:{process}"
+# One per running copy (host and pid), so two copies — a rolling deploy, or a
+# standby in another availability zone — no longer overwrite each other's
+# heartbeat and leave System Health showing one (docs/CAPACITY_AND_DEPLOYMENT.md
+# §4.7). `HEARTBEAT` without an instance is the form before 9 Oct 2026, still
+# read so that a process not yet restarted is not reported missing.
+HEARTBEAT_INSTANCE: Final = "heartbeat:{process}:{instance}"
 HEARTBEAT_TTL_S: Final = 7 * 86_400

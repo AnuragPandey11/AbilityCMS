@@ -214,9 +214,19 @@ the fleet's counter readings:
 
 ```bash
 .venv/bin/pytest tests/unit                  # domain/ only — no services required
-.venv/bin/pytest tests/integration           # testcontainers: real Postgres + Redis
 .venv/bin/pytest tests/unit/test_formulas.py::test_performance_ratio   # one test
 .venv/bin/ruff check . && .venv/bin/mypy src/solarcms
+```
+
+The integration suite writes fixtures it never deletes, so it runs only against a
+database named `*_test` (or with `SOLARCMS_ALLOW_TEST_FIXTURES=1`), and skips with that
+reason otherwise. Make one, then point the suite at it — one command per line:
+
+```
+scripts/test-db.sh
+export DATABASE_URL=postgresql+asyncpg://solarcms:solarcms@localhost:5433/solarcms_test
+export REDIS_URL=redis://localhost:6379/2
+.venv/bin/pytest tests/integration
 ```
 
 `tests/unit` covers `domain/` and must stay dependency-free: plain values in, plain values
@@ -226,6 +236,40 @@ infrastructure.
 
 The non-negotiable test (BACKEND_SPEC §11): authenticate as Client A, query every endpoint,
 assert no Client B row is ever returned.
+
+---
+
+## Running in containers
+
+One image for every backend process (`Dockerfile`, `docker/entrypoint.sh`): `api`,
+`ingest`, `alarm`, `health_sweeper`, `scheduler`, or `migrate` (`alembic upgrade head`
+then `cli seed`, once per deploy before the new tasks start). The frontend image
+(`../solarcms-frontend/Dockerfile`) serves the built app and forwards `/api` and `/ws`
+as the Vite dev server does. `docker-compose.app.yml` runs the lot beside this
+directory's Postgres, Redis and EMQX, on its own database, Redis database and broker
+session, so it can run while the development stack does:
+
+```
+docker exec solarcms-postgres createdb -U solarcms solarcms_app
+docker compose -f docker-compose.yml -f docker-compose.app.yml up --build
+```
+
+The app is then on http://localhost:8080 and the API on http://localhost:8001. Two
+`ingest` replicas run: one works and one stands by on the leader lock.
+
+Settings that matter once there is more than one machine — every default is the
+laptop's (`src/solarcms/config.py`, `docs/CAPACITY_AND_DEPLOYMENT.md` §5):
+
+| Setting | For |
+|---|---|
+| `S3_BUCKET`, `S3_REGION` | report files in S3 (install the `aws` extra) |
+| `CORS_ORIGINS` | the app's own domain, e.g. `["https://app.example.com"]` |
+| `DB_STATEMENT_CACHE_SIZE=0` | behind a connection pooler in transaction mode |
+| `DATABASE_SSL=verify-full` | TLS to Postgres on both connection paths; Redis takes `rediss://` |
+| `LEADER_LOCK_DSN` | a direct database connection for the workers' leader locks, when a pooler is in front |
+| `API_WORKERS`, `FORWARDED_ALLOW_IPS` | uvicorn workers per task; the load balancer's subnets |
+| `METRICS_TOKEN` | a bearer token for `GET /health/metrics` (Prometheus text) |
+| `ENVIRONMENT=production` | refuses the fabricated-fleet scripts |
 
 ---
 

@@ -54,6 +54,7 @@ class Heartbeat:
         self.process = process
         self.pid = os.getpid()
         self.host = socket.gethostname()
+        self.instance = f"{self.host}:{self.pid}"
         self.started_at = datetime.now(UTC)
         self.stopped_at: datetime | None = None
         # Set when the process is exiting because of an error, so its last word
@@ -94,6 +95,18 @@ class Heartbeat:
         self.errors += 1
         self._error_times.append(now)
 
+    def timed(self, name: str, took_s: float, every_s: float) -> None:
+        """Record how long one pass of a periodic job took, against its interval.
+
+        A periodic job that takes longer than its interval falls further behind
+        with every pass while every other sign says it is working — the load
+        test's health sweep ran 107 s per 60 s pass and was reported `working`
+        throughout (docs/CAPACITY_AND_DEPLOYMENT.md §4.10). The verdict reads
+        these (`domain/system_health.assess_process`).
+        """
+        passes = self.extra.setdefault("passes", {})
+        passes[name] = {"took_s": round(took_s, 3), "every_s": every_s}
+
     def crashed(self, error: BaseException | str) -> None:
         """The process is exiting because of `error`."""
         self.failed(error)
@@ -106,6 +119,7 @@ class Heartbeat:
         window = moment - timedelta(seconds=PROCESS_RECENT_ERROR_WINDOW_S)
         return {
             "process": self.process,
+            "instance": self.instance,
             "pid": self.pid,
             "host": self.host,
             "started_at": _iso(self.started_at),
@@ -130,7 +144,7 @@ class Heartbeat:
         """Write the heartbeat now. Never raises: a monitor must not be a fault."""
         try:
             await get_redis().set(
-                keys.HEARTBEAT.format(process=self.process),
+                keys.HEARTBEAT_INSTANCE.format(process=self.process, instance=self.instance),
                 json.dumps(self.snapshot()),
                 ex=keys.HEARTBEAT_TTL_S,
             )
@@ -151,13 +165,69 @@ class Heartbeat:
         return asyncio.create_task(self.run(stopping), name=f"heartbeat:{self.process}")
 
 
-async def read_heartbeats(names: tuple[str, ...]) -> dict[str, dict[str, Any] | None]:
-    """Each named process's last heartbeat, or None where there is none."""
-    raw = await get_redis().mget([keys.HEARTBEAT.format(process=name) for name in names])
-    out: dict[str, dict[str, Any] | None] = {}
-    for name, value in zip(names, raw, strict=True):
+#: Copies older than this are history, not worth listing beside the live ones.
+INSTANCE_LISTED_FOR_S = 600
+
+
+def _beat_time(beat: dict[str, Any]) -> datetime:
+    try:
+        return datetime.fromisoformat(str(beat.get("beat_at")))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=UTC)
+
+
+def choose_active(beats: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The copy whose heartbeat speaks for the process.
+
+    The newest copy that is not a standby — the one doing the work. Only when
+    every copy is a standby (the active one just died and none has taken over
+    yet) is a standby's heartbeat the process's, which then reads as such.
+    """
+    if not beats:
+        return None
+    working = [b for b in beats if (b.get("extra") or {}).get("role") != "standby"]
+    return max(working or beats, key=_beat_time)
+
+
+async def read_heartbeat_instances(name: str) -> list[dict[str, Any]]:
+    """Every copy's last heartbeat for one process, the pre-instance key included."""
+    client = get_redis()
+    found = [key async for key in client.scan_iter(
+        match=keys.HEARTBEAT_INSTANCE.format(process=name, instance="*"), count=200)]
+    legacy = keys.HEARTBEAT.format(process=name)
+    raw = await client.mget([*found, legacy]) if found else [await client.get(legacy)]
+    beats = []
+    for value in raw:
         try:
-            out[name] = json.loads(value) if value else None
+            if value:
+                beats.append(json.loads(value))
         except (TypeError, json.JSONDecodeError):
+            continue
+    return beats
+
+
+async def read_heartbeats(names: tuple[str, ...]) -> dict[str, dict[str, Any] | None]:
+    """Each named process's active heartbeat, or None where there is none.
+
+    Each carries `instances`: every copy heard from in the last ten minutes,
+    with its role, so the page can say "one working, one standing by".
+    """
+    out: dict[str, dict[str, Any] | None] = {}
+    now = datetime.now(UTC)
+    for name in names:
+        beats = await read_heartbeat_instances(name)
+        chosen = choose_active(beats)
+        if chosen is None:
             out[name] = None
+            continue
+        recent = [b for b in beats
+                  if (now - _beat_time(b)).total_seconds() <= INSTANCE_LISTED_FOR_S
+                  or b is chosen]
+        out[name] = {**chosen, "instances": [
+            {"instance": b.get("instance") or f"{b.get('host')}:{b.get('pid')}",
+             "role": (b.get("extra") or {}).get("role") or "active",
+             "beat_at": b.get("beat_at"), "stopped_at": b.get("stopped_at"),
+             "crashed_at": b.get("crashed_at")}
+            for b in sorted(recent, key=_beat_time, reverse=True)
+        ]}
     return out

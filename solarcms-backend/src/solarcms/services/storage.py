@@ -1,10 +1,11 @@
 """Artifact storage for rendered Reports and incident snapshots.
 
-S3 is the production target (BACKEND_SPEC §4 carries `s3_bucket`/`s3_region`), but
-`boto3` is not among the specification's pinned dependencies, and adding an
-unpinned one to satisfy a Phase 9 deliverable would be the wrong trade. So the
-interface is defined here with a local-filesystem implementation that works now,
-and an S3 implementation is a class with the same three methods.
+Two backends with the same three methods: the local filesystem, for one
+machine, and S3, for any deployment with more than one task — a Report the
+scheduler writes to its own disk cannot be downloaded through an API task, and
+every file is lost when a task is replaced (docs/CAPACITY_AND_DEPLOYMENT.md
+§5.1). Setting `S3_BUCKET` selects S3; `boto3` is the optional `aws` extra,
+pinned there, so a laptop needs none of it.
 
 The distinction that matters is the **signed URL**: a Report may contain a
 Client's generation and financial data, so it must never be served from a
@@ -14,12 +15,14 @@ S3 would issue a presigned one. Both expire.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import secrets
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -96,20 +99,60 @@ class LocalArtifactStore(ArtifactStore):
 _store: ArtifactStore | None = None
 
 
+class S3ArtifactStore(ArtifactStore):
+    """S3-backed, for any deployment of more than one task (§5.1).
+
+    boto3 is synchronous, so each call runs in a thread. Downloads are S3
+    presigned URLs, which expire like the local ones; the bucket itself stays
+    private. Objects are encrypted at rest by S3 (SSE-S3, `AES256`).
+
+    ⚠ Credentials come from boto3's own chain — on ECS the task role — never
+    from this app's settings.
+    """
+
+    def __init__(self, bucket: str, region: str, client: Any = None) -> None:
+        self.bucket = bucket
+        if client is None:
+            import boto3  # the optional `aws` extra
+
+            client = boto3.client("s3", region_name=region)
+        self._client = client
+
+    async def put(self, key: str, content: bytes, content_type: str) -> str:
+        await asyncio.to_thread(
+            self._client.put_object, Bucket=self.bucket, Key=key, Body=content,
+            ContentType=content_type, ServerSideEncryption="AES256")
+        log.info("artifact stored", key=key, bytes=len(content), type=content_type,
+                 bucket=self.bucket)
+        return f"s3://{self.bucket}/{key}"
+
+    async def get(self, key: str) -> bytes | None:
+        def fetch() -> bytes | None:
+            try:
+                body = self._client.get_object(Bucket=self.bucket, Key=key)["Body"]
+                return bytes(body.read())
+            except self._client.exceptions.NoSuchKey:
+                return None
+
+        return await asyncio.to_thread(fetch)
+
+    async def signed_url(self, key: str, ttl: timedelta = DEFAULT_URL_TTL) -> str:
+        url = await asyncio.to_thread(
+            self._client.generate_presigned_url, "get_object",
+            Params={"Bucket": self.bucket, "Key": key},
+            ExpiresIn=int(ttl.total_seconds()))
+        return str(url)
+
+
 def get_store() -> ArtifactStore:
     global _store
     if _store is None:
         settings = get_settings()
-        if settings.s3_bucket:
-            # An S3ArtifactStore implementing the same three methods belongs here.
-            # Deliberately not stubbed with a silent fallback: a deployment that
-            # configured a bucket and got local files instead would only discover
-            # it when a Report was needed.
-            raise NotImplementedError(
-                "S3_BUCKET is set but the S3 artifact store is not implemented; "
-                "unset it to use local storage, or add the S3 backend."
-            )
-        _store = LocalArtifactStore()
+        # Never a silent fallback to local files when a bucket is configured: a
+        # deployment that asked for S3 and got its own disk would only find out
+        # when a Report was needed, from another task, after a deploy.
+        _store = (S3ArtifactStore(settings.s3_bucket, settings.s3_region)
+                  if settings.s3_bucket else LocalArtifactStore())
     return _store
 
 

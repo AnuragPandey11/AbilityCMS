@@ -211,6 +211,20 @@ async def resolve(
     session: AsyncSession, topic: str, patterns: list[TopicPattern]
 ) -> DeviceResolution | ResolutionFailure:
     """Resolve a topic, using the Redis cache before touching Postgres."""
+    cached = await resolve_cached(topic)
+    if cached is not None:
+        return cached
+    return await resolve_from_database(session, topic, patterns)
+
+
+async def resolve_cached(topic: str) -> DeviceResolution | ResolutionFailure | None:
+    """The cached resolution, or None when Postgres must be asked.
+
+    Separate so that ingest can ask Redis *before* opening a database session:
+    opening one costs ~5 round trips (pool, BEGIN, the RLS settings, COMMIT,
+    reset) even when nothing is queried — 1.2 ms of every message here and much
+    more across availability zones (docs/CAPACITY_AND_DEPLOYMENT.md §4.5).
+    """
     cached = await live.read_resolution(topic)
     if cached is not None:
         if cached.get("miss"):
@@ -226,7 +240,13 @@ async def resolve(
             derived=tuple(DerivedBinding(**d) for d in cached.get("derived", [])),
             constants=cached.get("constants", {}),
         )
+    return None
 
+
+async def resolve_from_database(
+    session: AsyncSession, topic: str, patterns: list[TopicPattern]
+) -> DeviceResolution | ResolutionFailure:
+    """Resolve from Postgres and cache the answer — a miss included."""
     row = await _device_row(session, topic, patterns)
     if row is None:
         reason = "no Device registered for this topic"

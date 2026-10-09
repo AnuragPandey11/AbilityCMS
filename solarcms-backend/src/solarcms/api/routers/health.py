@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+import hmac
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import text
 
-from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.api.deps import CurrentUser, SessionDep, get_current_user, require_permission
 from solarcms.cache import keys
 from solarcms.cache.live import get_redis
+from solarcms.config import get_settings
+from solarcms.services.metrics import render_metrics
 from solarcms.services.platform_health import platform_health
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -58,9 +61,20 @@ async def system_health(
     # readings_v, never `readings`. The API holds no privilege on the base table
     # (migration 0008), which is what caught this query being written against it
     # in the first place.
-    lag = (await session.execute(text("""
-        SELECT extract(epoch FROM now() - max(time)) FROM readings_v
-    """))).scalar()
+    #
+    # Bounded, newest window first: `max(time)` over the barrier view cannot
+    # become an ordered LIMIT 1, so unbounded it read every Reading in
+    # retention — 4.6 s at 50 Plants (docs/CAPACITY_AND_DEPLOYMENT.md §4.11).
+    # Two hours answers a working system at once; a week is read only when
+    # nothing arrived in two hours, which is itself the news.
+    ingest_lag = None
+    for window in ("2 hours", "7 days"):
+        ingest_lag = (await session.execute(text(f"""
+            SELECT extract(epoch FROM now() - max(time)) FROM readings_v
+             WHERE time > now() - interval '{window}'
+        """))).scalar()
+        if ingest_lag is not None:
+            break
     quarantined = (await session.execute(text("""
         SELECT count(*) FROM mqtt_raw_v
          WHERE quarantined AND time > now() - interval '1 hour'
@@ -92,14 +106,18 @@ async def system_health(
     try:
         for group in await get_redis().xinfo_groups(keys.STREAM_READINGS):
             if group.get("name") == keys.STREAM_READINGS_GROUP:
-                lag = group.get("lag")
-                backlog = None if lag is None else int(lag) + int(group.get("pending") or 0)
+                # Its own name: this once reused `lag`, so "ingest lag" on the
+                # page reported the alarm group's lag instead.
+                group_lag = group.get("lag")
+                backlog = (None if group_lag is None
+                           else int(group_lag) + int(group.get("pending") or 0))
     except Exception:
         # No group yet (the alarm worker has never run) — nothing to measure.
         backlog = None
 
     return {
-        "ingest_lag_seconds": float(lag) if lag is not None else None,
+        # None: nothing stored in the last week.
+        "ingest_lag_seconds": float(ingest_lag) if ingest_lag is not None else None,
         "quarantined_last_hour": quarantined,
         "alarm_stream_depth": stream_depth,
         "alarm_backlog": backlog,
@@ -108,3 +126,24 @@ async def system_health(
             for row in aggregates
         ],
     }
+
+
+@router.get("/metrics", response_class=Response)
+async def metrics(authorization: Annotated[str | None, Header()] = None) -> Response:
+    """Process health in Prometheus' text format, for a monitoring agent (§6.6).
+
+    Queue depths, save times, pass durations against their intervals, and the
+    alarm backlog — the figures that show a slow decline before it becomes an
+    outage (docs/CAPACITY_AND_DEPLOYMENT.md §6.6). From Redis only, like
+    `/health/processes`, so it still answers with the database down.
+
+    Allowed with the `METRICS_TOKEN` bearer token, for an agent that has no
+    user login, or to a signed-in platform administrator.
+    """
+    token = get_settings().metrics_token
+    presented = (authorization or "").removeprefix("Bearer ").removeprefix("bearer ")
+    if not (token and presented and hmac.compare_digest(presented, token.get_secret_value())):
+        user = await get_current_user(authorization)
+        if "system.admin" not in user.permissions:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "permission system.admin required")
+    return Response(await render_metrics(), media_type="text/plain; version=0.0.4")

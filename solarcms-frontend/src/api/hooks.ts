@@ -6,7 +6,7 @@
  * unit and every Tag name in the UI comes from it and it changes monthly.
  */
 
-import { useQueries, useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import * as catalogApi from "./endpoints/catalog";
 import * as dataIssuesApi from "./endpoints/dataIssues";
 import * as forecastApi from "./endpoints/forecast";
@@ -57,19 +57,22 @@ const FEW_SECONDS = { staleTime: 5_000 };
 const LIVE_SOCKET_FALLBACK = { staleTime: 30_000, refetchInterval: 30_000 };
 
 const LIVE_BACKED = {
-  // `/plants/{id}/dashboard` resolves every slot against the Redis values that
-  // ingest writes on each accepted message, so the data behind it is already
-  // current — the only lag left was how often it was asked for.
-  staleTime: 5_000,
-  refetchInterval: 5_000,
+  // `/plants/{id}/dashboard` is the copy the scheduler stores every 15 s
+  // (migration 0039, `services/snapshots.py`), so asking more often than that
+  // returns the same body: 15 s, the Plant screen's ceiling in
+  // docs/CAPACITY_AND_DEPLOYMENT.md §4.4.
+  staleTime: 15_000,
+  refetchInterval: 15_000,
 };
 
 const LIVE_KPI = {
-  // `/plants/{id}/kpis` runs a handful of aggregate reads. Measured at 5–10 ms
-  // per Plant against the real-time tiers (migration 0023), so a ten-second
-  // cadence across a fleet is not a load question at the F-2 ceiling.
-  staleTime: 10_000,
-  refetchInterval: 10_000,
+  // `/plants/{id}/kpis` is the copy the scheduler stores once a minute. It
+  // used to recompute the Plant's whole day on every request — not the
+  // "5–10 ms" once written here: 0.3–0.5 s per Plant on this machine, and
+  // 6–77 s at 50 Plants with history (§2.7, §10.2). 15 s keeps a returning
+  // figure prompt without asking for the same stored body four times a minute.
+  staleTime: 15_000,
+  refetchInterval: 15_000,
 };
 
 /**
@@ -90,66 +93,73 @@ const ON_RETURN = { refetchOnWindowFocus: true } as const;
 export { LIVE_KPI, LIVE_SOCKET_FALLBACK, ON_RETURN };
 
 /**
- * KPIs for a set of Plants — one request each, on the live cadence.
+ * KPIs for a set of Plants, on the live cadence — from one request.
  *
- * There is no fleet KPI endpoint by design, so every screen showing more than
- * one Plant fans out. That fan-out lives here **once**, because it did not:
- * `usePlantFleet` and `PortfolioDashboard` each grew their own copy, both with
- * `staleTime` and neither with `refetchInterval`, and the two drifted
- * independently while looking identical. Fixing one left the other frozen,
- * which is precisely how the Portfolio came to sit on figures from page load.
+ * Every screen showing more than one Plant reads them here **once**, because
+ * it did not: `usePlantFleet` and `PortfolioDashboard` each grew their own
+ * fan-out, both with `staleTime` and neither with `refetchInterval`, and the
+ * two drifted independently while looking identical.
  *
- * `kpis` is positional — `useQueries` preserves input order, so index `i` is
- * `plants[i]`, and an entry is `undefined` until that Plant's request lands.
- * Callers render per-Plant placeholders from that rather than blocking the
- * whole screen on the slowest of N requests.
+ * It was one request per Plant every ten seconds; since 9 Oct 2026 it is one
+ * request for every Plant (`usePlantSnapshots`, `GET /plants/snapshots`).
+ * `kpis` is still positional — index `i` is `plants[i]` — and an entry is
+ * `undefined` until it has arrived or where the server could not compute it,
+ * so callers keep their per-Plant placeholders.
  */
 export function usePlantKpiFanout(
   plants: { id: number }[],
   period: KpiPeriod,
 ): { kpis: (PlantKpis | undefined)[]; isLoading: boolean } {
-  const results = useQueries({
-    queries: plants.map((plant) => ({
-      queryKey: qk.plantKpis(plant.id, period),
-      queryFn: () => plantsApi.plantKpis(plant.id, period),
-      ...LIVE_KPI,
-      ...ON_RETURN,
-    })),
-  });
+  const snapshots = usePlantSnapshots(period, plants.length > 0);
+  const byPlant = new Map(
+    (snapshots.data?.plants ?? []).map((row) => [row.plant_id, row.kpis ?? undefined]),
+  );
   return {
-    kpis: results.map((query) => query.data as PlantKpis | undefined),
+    kpis: plants.map((plant) => byPlant.get(plant.id)),
     // `isLoading` only — never `isFetching`. A refetch on the live interval
-    // must not put the screen back into a loading state every ten seconds;
+    // must not put the screen back into a loading state every fifteen seconds;
     // the figure on display stays until its replacement arrives.
-    isLoading: results.some((query) => query.isLoading),
+    isLoading: snapshots.isLoading,
   };
 }
 
 /**
- * Each Plant's resolved dashboard — one request each — for the figures only a
- * slot answers, chiefly Current Power.
+ * Each Plant's resolved dashboard, for the figures only a slot answers,
+ * chiefly Current Power.
  *
  * The fleet's live generation is the sum of these, never a number computed
  * here, so every Plant's contribution keeps the provenance its own screen
- * shows. On the `LIVE_KPI` cadence rather than the socket-aware one: the
- * Portfolio does not mount `useLiveRefresh` (that would open N Plant rooms),
- * so the timer is the only thing keeping these current.
+ * shows. Shares `usePlantKpiFanout`'s single request when given the same
+ * period: one request for the whole Portfolio, not two per Plant.
  */
 export function usePlantDashboardFanout(
   plants: { id: number }[],
+  period: KpiPeriod = "today",
 ): { dashboards: (PlantDashboard | undefined)[]; isLoading: boolean } {
-  const results = useQueries({
-    queries: plants.map((plant) => ({
-      queryKey: qk.plantDashboard(plant.id),
-      queryFn: () => plantsApi.plantDashboard(plant.id),
-      ...LIVE_KPI,
-      ...ON_RETURN,
-    })),
-  });
+  const snapshots = usePlantSnapshots(period, plants.length > 0);
+  const byPlant = new Map(
+    (snapshots.data?.plants ?? []).map((row) => [row.plant_id, row.dashboard ?? undefined]),
+  );
   return {
-    dashboards: results.map((query) => query.data as PlantDashboard | undefined),
-    isLoading: results.some((query) => query.isLoading),
+    dashboards: plants.map((plant) => byPlant.get(plant.id)),
+    isLoading: snapshots.isLoading,
   };
+}
+
+/**
+ * Every visible Plant's KPIs and dashboard in one request
+ * (docs/CAPACITY_AND_DEPLOYMENT.md §4.4). Each body is what the per-Plant
+ * route returns; the server reads the scheduler's stored copies, computing
+ * only where none is fresh.
+ */
+export function usePlantSnapshots(period: KpiPeriod, enabled = true) {
+  return useQuery({
+    queryKey: qk.plantSnapshots(period),
+    queryFn: () => plantsApi.plantSnapshots(period),
+    enabled,
+    ...LIVE_KPI,
+    ...ON_RETURN,
+  });
 }
 
 export function useTags() {
