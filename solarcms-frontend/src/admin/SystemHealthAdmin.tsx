@@ -133,7 +133,8 @@ function ProcessCard({ process, now }: { process: ProcessHealth; now: number }):
             ))}
           </Row>
         ) : null}
-        {process.instances && process.instances.length > 1 ? (
+        {process.instances &&
+        process.instances.filter((copy) => copy.role !== "stopped").length > 1 ? (
           <Row label="Copies">
             <span title={process.instances.map((copy) => `${copy.instance} (${copy.role})`).join("\n")}>
               {process.instances.filter((copy) => copy.role === "active").length} working ·{" "}

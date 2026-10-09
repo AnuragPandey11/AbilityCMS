@@ -17,7 +17,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from solarcms.cache import keys
-from solarcms.cache.heartbeat import PROCESSES, SUPERVISOR, read_heartbeat_instances
+from solarcms.cache.heartbeat import (
+    PROCESSES,
+    SUPERVISOR,
+    instance_role,
+    read_heartbeat_instances,
+)
 from solarcms.cache.live import get_redis
 from solarcms.domain.system_health import assess_process, assess_supervisor
 
@@ -64,7 +69,7 @@ async def render_metrics(now: datetime | None = None) -> str:
     def labels(process: str, beat: dict[str, Any], **more: Any) -> str:
         pairs = {"process": process,
                  "instance": beat.get("instance") or f"{beat.get('host')}:{beat.get('pid')}",
-                 "role": (beat.get("extra") or {}).get("role") or "active", **more}
+                 "role": instance_role(beat), **more}
         return "{" + ",".join(f'{k}="{_label(v)}"' for k, v in pairs.items()) + "}"
 
     metric("process_working", "1 when the process's own verdict is working, else 0.")

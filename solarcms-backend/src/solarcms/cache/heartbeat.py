@@ -176,6 +176,17 @@ def _beat_time(beat: dict[str, Any]) -> datetime:
         return datetime.min.replace(tzinfo=UTC)
 
 
+def instance_role(beat: dict[str, Any]) -> str:
+    """active, standby, or stopped — a copy that has exited is history, not a copy.
+
+    A restart leaves the previous process's last heartbeat behind for a while;
+    counted as a copy it read "2 working" on a machine running one.
+    """
+    if beat.get("stopped_at") or beat.get("crashed_at"):
+        return "stopped"
+    return str((beat.get("extra") or {}).get("role") or "active")
+
+
 def choose_active(beats: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The copy whose heartbeat speaks for the process.
 
@@ -225,7 +236,7 @@ async def read_heartbeats(names: tuple[str, ...]) -> dict[str, dict[str, Any] | 
                   or b is chosen]
         out[name] = {**chosen, "instances": [
             {"instance": b.get("instance") or f"{b.get('host')}:{b.get('pid')}",
-             "role": (b.get("extra") or {}).get("role") or "active",
+             "role": instance_role(b),
              "beat_at": b.get("beat_at"), "stopped_at": b.get("stopped_at"),
              "crashed_at": b.get("crashed_at")}
             for b in sorted(recent, key=_beat_time, reverse=True)
