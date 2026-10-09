@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     # from one setting (§5.7): disable | prefer | require | verify-ca |
     # verify-full. None leaves it to the DSN. Redis takes `rediss://` instead.
     database_ssl: str | None = None
+    # Signs report download links. Unset, the JWT secret does — so rotating
+    # the login secret invalidates every outstanding link (§5.9); set this to
+    # rotate the two independently.
+    artifact_signing_secret: SecretStr | None = None
 
     # ── Storage ─────────────────────────────────────────────────────────────
     s3_bucket: str | None = None

@@ -46,11 +46,22 @@ class ArtifactStore(ABC):
     async def get(self, key: str) -> bytes | None: ...
 
 
+def _signing_secret() -> bytes:
+    """`ARTIFACT_SIGNING_SECRET` if set, else the JWT secret (as before).
+
+    Separate so that rotating the login secret need not invalidate every
+    outstanding download link (docs/CAPACITY_AND_DEPLOYMENT.md §5.9).
+    """
+    settings = get_settings()
+    secret = settings.artifact_signing_secret or settings.jwt_secret
+    return secret.get_secret_value().encode()
+
+
 class LocalArtifactStore(ArtifactStore):
     """Filesystem-backed, for development and single-node deployments.
 
-    Signing uses the JWT secret rather than a second key: it is already required
-    to be long and random, and a separate one would be a second thing to rotate.
+    Links are signed with `ARTIFACT_SIGNING_SECRET`, or the JWT secret where
+    that is unset (`_signing_secret`).
     """
 
     def __init__(self, root: Path | None = None) -> None:
@@ -77,7 +88,7 @@ class LocalArtifactStore(ArtifactStore):
 
     async def signed_url(self, key: str, ttl: timedelta = DEFAULT_URL_TTL) -> str:
         expires = int((datetime.now(UTC) + ttl).timestamp())
-        secret = get_settings().jwt_secret.get_secret_value().encode()
+        secret = _signing_secret()
         signature = hmac.new(
             secret, f"{key}:{expires}".encode(), hashlib.sha256
         ).hexdigest()
@@ -87,7 +98,7 @@ class LocalArtifactStore(ArtifactStore):
     def verify(key: str, expires: int, signature: str) -> bool:
         if datetime.now(UTC).timestamp() > expires:
             return False
-        secret = get_settings().jwt_secret.get_secret_value().encode()
+        secret = _signing_secret()
         expected = hmac.new(
             secret, f"{key}:{expires}".encode(), hashlib.sha256
         ).hexdigest()
