@@ -39,6 +39,23 @@ The live contract tests parse real responses with the application's own zod
 schemas. They fail loudly if the API is unreachable rather than passing empty.
 Credentials come from `SOLARCMS_TEST_EMAIL` / `SOLARCMS_TEST_PASSWORD`.
 
+### Hosting on Vercel
+
+`vercel.json` builds with `npm run build`, serves `dist/`, sends every path that
+is not a file to `index.html` (without it, opening `/d/inverter_monitoring`
+directly is a 404), caches the hashed `assets/` for a year and `index.html`
+never. In the project's Environment Variables, set the API's own address — the
+API runs on AWS, never behind Vercel:
+
+| Variable | Example |
+|---|---|
+| `VITE_API_BASE` | `https://api.example.com` |
+| `VITE_WS_BASE` | `wss://api.example.com` (the live socket connects straight to the API) |
+
+They are read at build time, so redeploy after changing them. On the API, set
+`CORS_ORIGINS` to the Vercel domain (`["https://app.example.com"]`); tokens
+travel in a header, not a cookie, so no cookie settings are involved.
+
 ## Layout
 
 ```

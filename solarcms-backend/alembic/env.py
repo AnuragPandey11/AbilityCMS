@@ -11,6 +11,7 @@ from sqlalchemy.pool import NullPool
 from alembic import context
 from solarcms.config import get_settings
 from solarcms.db.models import Base
+from solarcms.db.session import engine_connect_args
 
 config = context.config
 if config.config_file_name is not None:
@@ -41,6 +42,14 @@ async def _run_async() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=NullPool,
+        # The same TLS and statement-cache options as every other connection
+        # (§5.6, §5.7). Without them this step fell back to asyncpg's default,
+        # `prefer`: encrypted, but the server's certificate never checked — so
+        # with DATABASE_SSL=verify-full the step holding the owner's password
+        # trusted any server that answered (measured 9 Oct 2026 against a
+        # certificate from the wrong authority: the old step connected, this
+        # one refuses).
+        connect_args=engine_connect_args(),
     )
     async with connectable.connect() as connection:
         await connection.run_sync(_run_migrations)  # type: ignore[arg-type]

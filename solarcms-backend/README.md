@@ -265,11 +265,24 @@ laptop's (`src/solarcms/config.py`, `docs/CAPACITY_AND_DEPLOYMENT.md` §5):
 | `S3_BUCKET`, `S3_REGION` | report files in S3 (install the `aws` extra) |
 | `CORS_ORIGINS` | the app's own domain, e.g. `["https://app.example.com"]` |
 | `DB_STATEMENT_CACHE_SIZE=0` | behind a connection pooler in transaction mode |
-| `DATABASE_SSL=verify-full` | TLS to Postgres on both connection paths; Redis takes `rediss://` |
+| `DATABASE_SSL=verify-full`, `PGSSLROOTCERT` | TLS to Postgres on every connection path, migrations included, checking the server against that CA bundle |
+| `REDIS_URL=rediss://…?ssl_cert_reqs=required&ssl_ca_certs=…` | TLS to Redis, checking the server |
 | `LEADER_LOCK_DSN` | a direct database connection for the workers' leader locks, when a pooler is in front |
 | `API_WORKERS`, `FORWARDED_ALLOW_IPS` | uvicorn workers per task; the load balancer's subnets |
 | `METRICS_TOKEN` | a bearer token for `GET /health/metrics` (Prometheus text) |
 | `ENVIRONMENT=production` | refuses the fabricated-fleet scripts |
+| `API_ACCESS_LOG=true` | a log line per request (off in the container: the load balancer keeps those) |
+| `LOG_REPEAT_WINDOW_S` | how often a line true of every message ("unbound source keys") is repeated; 3600 |
+
+On a managed database there is no superuser. Create the roles as the service's
+administrator — the account the application connects as — naming it as the owner:
+
+```
+psql "$ADMIN_URL" -v owner=tsdbadmin -f scripts/bootstrap_roles.sql
+```
+
+Tested on TimescaleDB 2.30 / PostgreSQL 17 as a non-superuser with CREATEROLE, and
+over TLS with certificate checking (`docs/CAPACITY_AND_DEPLOYMENT.md` §12.1).
 
 ---
 

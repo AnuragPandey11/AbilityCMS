@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     # ── Observability ───────────────────────────────────────────────────────
     log_level: str = "INFO"
     log_json: bool = True  # False for human-readable local development
+    # A line that is true of every message a Device sends ("these keys are not
+    # mapped", "this topic is not registered") is logged once per this many
+    # seconds per Device or topic, with the count held back (logging.RepeatGate).
+    log_repeat_window_s: int = 3600
 
     @property
     def asyncpg_dsn(self) -> str:

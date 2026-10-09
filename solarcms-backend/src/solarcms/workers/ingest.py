@@ -46,7 +46,7 @@ from solarcms.config import Settings, get_settings
 from solarcms.db.rls import INGEST_ROLE, SecurityContext
 from solarcms.db.session import asyncpg_connect_args, dispose_engine, scoped_session
 from solarcms.domain.decoding import DecodedReading, DeviceResolution, TopicPattern, decode
-from solarcms.logging import configure_logging, get_logger
+from solarcms.logging import RepeatGate, configure_logging, get_logger
 from solarcms.workers.delivery import PendingAck, RedeliveryFilter, fingerprint
 from solarcms.workers.leadership import Leadership, LeadershipLost
 from solarcms.workers.resolver import (
@@ -184,6 +184,8 @@ class IngestWorker:
         self._mqtt: Any = None
         self._generation = 0
         self._redelivery = RedeliveryFilter(settings.ingest_redelivery_window_s)
+        # Lines true of every message a Device sends, said once an hour (§6.6).
+        self._repeats = RepeatGate(settings.log_repeat_window_s)
         # Alarm-stream entries whose rows committed while Redis was away, sent
         # ahead of the next batch's. Bounded: past it, the oldest go — a backlog
         # that deep is no longer worth alarming on (the stream's own cap says so).
@@ -298,8 +300,12 @@ class IngestWorker:
             log.warning("counter decreased", topic=topic,
                         device_id=resolution.device_id, keys=result.suspect_counters)
         if result.unmapped_keys:
-            log.info("unbound source keys", topic=topic,
-                     device_id=resolution.device_id, keys=result.unmapped_keys)
+            held = self._repeats.allow(
+                ("unbound", resolution.device_id, tuple(sorted(result.unmapped_keys))))
+            if held is not None:
+                log.info("unbound source keys", topic=topic,
+                         device_id=resolution.device_id, keys=result.unmapped_keys,
+                         repeats_held_back=held)
             # Surfaced, not just logged. This is what the commissioning screen
             # reads to say "this Device is sending three signals nobody has
             # mapped" — a fact that exists nowhere else, because an unmapped key
@@ -453,7 +459,9 @@ class IngestWorker:
         *, client_id: int | None = None, device_id: int | None = None,
     ) -> None:
         self.stats["quarantined"] += 1
-        log.warning("quarantined", topic=topic, reason=reason)
+        held = self._repeats.allow(("quarantined", topic, reason))
+        if held is not None:
+            log.warning("quarantined", topic=topic, reason=reason, repeats_held_back=held)
         self.batch.raw.append((
             now, topic, self._seq, json.dumps(payload), client_id, device_id, True, reason,
         ))

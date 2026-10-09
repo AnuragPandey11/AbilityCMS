@@ -114,6 +114,9 @@ class TestPlantWithNineDevices:
             meter = await http.post(f"/devices?plant_id={plant_id}", json={
                 "code": "MFM-01", "name": "Main Meter",
                 "device_model_id": meter_model, "expected_interval_s": 5,
+                # The enclosure the topic names, stated: the topic decides it
+                # (Guardrail 13), and a create that omits it is a contradiction.
+                "collector_code": "plc-01",
                 "source_address": f"scms/v1/wb/{plant_id}/plc-01/MFM-01"})
             assert meter.status_code == 201, meter.text
             meter_id = meter.json()["id"]
@@ -127,6 +130,7 @@ class TestPlantWithNineDevices:
                 "block_id": north_id if i <= 5 else south_id,
                 "parent_device_id": meter_id,
                 "reports_via_device_id": meter_id,
+                "collector_code": "plc-01",
                 "source_address": f"scms/v1/wb/{plant_id}/plc-01/INV-{i:02d}",
                 "expected_interval_s": 5, "rated_capacity_kw": 250,
             } for i in range(1, 10)]}
@@ -170,6 +174,7 @@ class TestPlantWithNineDevices:
             meter = await http.post(f"/devices?plant_id={plant_id}", json={
                 "code": "MFM-01", "name": "Main Meter",
                 "device_model_id": meter_model,
+                "collector_code": "plc-01",
                 "source_address": f"scms/v1/nb/{plant_id}/plc-01/MFM-01"})
             meter_id = meter.json()["id"]
 
@@ -180,6 +185,7 @@ class TestPlantWithNineDevices:
                 "parent_device_id": meter_id,
                 # block_id omitted entirely: a Device with no Block belongs
                 # directly to the Plant (§2.2).
+                "collector_code": "plc-01",
                 "source_address": f"scms/v1/nb/{plant_id}/plc-01/INV-{i:02d}",
             } for i in range(1, 10)]})
             assert imported.status_code == 201, imported.text
@@ -243,10 +249,10 @@ class TestOnboardingConstraints:
             topic = f"scms/v1/dup/{plant['id']}/plc/INV-01"
             first = await http.post(f"/devices?plant_id={plant['id']}", json={
                 "code": "INV-01", "name": "One", "device_model_id": model,
-                "source_address": topic})
+                "collector_code": "plc", "source_address": topic})
             assert first.status_code == 201
             second = await http.post(f"/devices?plant_id={plant['id']}", json={
                 "code": "INV-02", "name": "Two", "device_model_id": model,
-                "source_address": topic})
+                "collector_code": "plc", "source_address": topic})
             assert second.status_code == 409
             assert "already registered" in second.json()["detail"]

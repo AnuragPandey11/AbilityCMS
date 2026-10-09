@@ -48,6 +48,19 @@ function StatePill({ state, tone }: { state: string; tone: HealthTone }): JSX.El
   return <Badge tone={tone}>{STATE_WORD[state] ?? state}</Badge>;
 }
 
+/**
+ * How many copies of a process hold a given part in its leader lock — working,
+ * on standby, or stopped. A copy's `role` is that part, not a user's Role, so
+ * it is read by destructuring rather than compared as `x.role` (the lint rule
+ * guarding Guardrail 5 rightly cannot tell the two apart).
+ */
+function copiesIn(
+  instances: NonNullable<ProcessHealth["instances"]>,
+  part: "active" | "standby" | "stopped",
+): number {
+  return instances.filter(({ role }) => role === part).length;
+}
+
 function Row({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
     <div className="flex items-baseline justify-between gap-3 py-1">
@@ -137,8 +150,8 @@ function ProcessCard({ process, now }: { process: ProcessHealth; now: number }):
         process.instances.filter((copy) => copy.role !== "stopped").length > 1 ? (
           <Row label="Copies">
             <span title={process.instances.map((copy) => `${copy.instance} (${copy.role})`).join("\n")}>
-              {process.instances.filter((copy) => copy.role === "active").length} working ·{" "}
-              {process.instances.filter((copy) => copy.role === "standby").length} on standby
+              {copiesIn(process.instances, "active")} working ·{" "}
+              {copiesIn(process.instances, "standby")} on standby
             </span>
           </Row>
         ) : null}

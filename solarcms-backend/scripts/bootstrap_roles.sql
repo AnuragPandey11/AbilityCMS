@@ -2,6 +2,12 @@
 --
 --   psql -d solarcms -f scripts/bootstrap_roles.sql
 --
+-- On a managed database (Timescale Cloud, RDS) there is no superuser: run it as
+-- the service's administrator, which holds CREATEROLE, and name that account as
+-- the owner — the account the application connects as:
+--
+--   psql "$ADMIN_URL" -v owner=tsdbadmin -f scripts/bootstrap_roles.sql
+--
 -- Roles are cluster infrastructure, not an application migration's business: in
 -- most deployments the migration role has no CREATEROLE, and granting it that
 -- privilege to save one setup step would be the wrong trade. Migration 0008
@@ -13,7 +19,12 @@
 -- SET LOCAL ROLE, which is what keeps the owner's privileges out of request
 -- handling while needing only one connection pool.
 
-\set owner solarcms
+-- The owner defaults to `solarcms`, the local Docker account; `-v owner=…`
+-- names another.
+\if :{?owner}
+\else
+    \set owner solarcms
+\endif
 
 DO $$
 BEGIN
@@ -41,8 +52,11 @@ BEGIN
     END IF;
 END $$;
 
--- The owner must be able to assume both in order to SET LOCAL ROLE.
-GRANT solarcms_api, solarcms_ingest, solarcms_scheduler TO :owner;
+-- The owner must be able to assume all three in order to SET LOCAL ROLE.
+-- `WITH SET TRUE` is spelled out: on PostgreSQL 16+ a role made by a
+-- non-superuser with CREATEROLE is granted back to its maker *without* SET,
+-- and on a managed database that is exactly who runs this.
+GRANT solarcms_api, solarcms_ingest, solarcms_scheduler TO :"owner" WITH SET TRUE;
 
 -- Deliberately NOT granted: BYPASSRLS on either role, and SUPERUSER on any.
 -- The ingest worker is exempted from specific policies on specific tables in

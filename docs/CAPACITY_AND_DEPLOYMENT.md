@@ -1004,3 +1004,18 @@ Live run (`publish.py --daylight`, all five processes, 10 minutes):
 | Ingest memory | 24–50 MB | 90–181 MB (per-Device state held in memory, §4.5) |
 
 What is **not** shown by this: AWS itself (§10.5 — Fargate CPU, the managed database, real cross-AZ latency), failure drills (§6.5), and anything past ~1,200 Devices (§7). Data Issues for one Plant (~0.3–0.9 s) and operating status (~0.1–0.7 s) were not rewritten beyond passing ids and remain the slowest per-Plant requests. ⚠ The original `finish_history.py` refreshes eight days per tier in one call; on a 7.75 GB Docker VM shared with a live stack the kernel killed Postgres backends twice — refresh in slices (6 h for `agg_1m`), which also took 4.5 minutes instead of ~40.
+
+### 12.1 The checks §6.4 asked for before committing to AWS, run locally (9 Oct 2026)
+
+In throwaway containers on the same machine, never the live database.
+
+| §6.4 item | How it was tested | Result |
+|---|---|---|
+| 16. TLS to Postgres and Redis, both paths | A Postgres whose `pg_hba` rejects every unencrypted connection, a TLS-only Redis, a private certificate authority; `DATABASE_SSL=verify-full`, `PGSSLROOTCERT`, `rediss://…?ssl_cert_reqs=required&ssl_ca_certs=…` | All 40 migrations, the seed, the integration suite (64/64) and a real ingest worker (3 messages written over its own asyncpg pool and acknowledged) ran. **Found and fixed:** the migration step ignored `DATABASE_SSL` and used asyncpg's `prefer` — encrypted, certificate never checked — so it connected to a server presenting a certificate from the wrong authority; it now refuses one. |
+| 19. Creating the roles without a superuser | TimescaleDB 2.30.2 / PostgreSQL 17.11, extension pre-installed, the app's account `NOSUPERUSER CREATEROLE CREATEDB` (Timescale Cloud's `tsdbadmin` shape) | `scripts/bootstrap_roles.sql` ran as that account once it stopped hard-coding the owner (`-v owner=tsdbadmin`). |
+| 20. `SET LOCAL ROLE` needs membership | Same | On PostgreSQL 16+ a role's creator is granted it with ADMIN but **without SET**; the script's `GRANT … WITH SET TRUE` is what makes it work. Every request path in the suite switched roles as that account. |
+| 21. The migrations on a newer TimescaleDB | Same, 2.30.2 against the 2.17.2 they were written on | All 40 replayed. Continuous aggregates real-time with compression on, the 18 background jobs' settings identical to 2.17's, RLS forced on the same 30 tables; the suite passed 64/64 as the non-superuser. |
+
+Also done: per-message log lines ("unbound source keys", "quarantined") are said once an hour per Device or topic with a count of those held back, and the API container writes no line per request unless `API_ACCESS_LOG=true` (§6.6, logging cost); `solarcms-frontend/vercel.json` serves the app from Vercel against the API on AWS (§5.3).
+
+Still not covered here: Timescale Cloud itself and its connection pooler (§5.6), failover and restore drills (§6.5), and the broker's TLS and per-Client logins (§6.3), which are the broker's configuration rather than this code's.
