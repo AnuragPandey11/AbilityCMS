@@ -11,7 +11,19 @@ const token = (name) => `rgb(var(--c-${name}) / <alpha-value>)`;
 
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  darkMode: ["selector", '[data-theme="dark"]'],
+  // `dark:` means what the tokens in `index.css` mean by dark: the toggle set
+  // to dark, *or* the system dark while the toggle is on "system". It used to
+  // be the toggle alone, so with the default "system" choice on a dark
+  // machine every `dark:` class stayed light — pastel pills and badges on dark
+  // cards (9 Oct 2026). `ThemeProvider` removes `data-theme` for "system", so
+  // "not inside a light theme" is the system case.
+  darkMode: [
+    "variant",
+    [
+      '&:is([data-theme="dark"] *)',
+      '@media (prefers-color-scheme: dark) { &:not([data-theme="light"] *) }',
+    ],
+  ],
   theme: {
     extend: {
       colors: {
