@@ -60,83 +60,58 @@
        must stay a step darker than a card, and accent text on an accent tint
        over sunken must clear 4.5:1 (`tests/brand.test.tsx`). Stone needed the
        accent one notch deeper for that (#2C6A7E → #266174, 4.71:1). */
-    --c-surface: 224 220 212; /* page */
-    --c-surface-raised: 240 237 231; /* cards, panels */
-    --c-surface-sunken: 231 227 220; /* tracks, table headers, wells */
+    --c-surface: 244 245 248; /* page */
+    --c-surface-raised: 255 255 255; /* cards, panels */
+    --c-surface-sunken: 236 238 243; /* tracks, table headers, wells */
 
     /* ── Lines ───────────────────────────────────────────────────────────── */
-    /* Warm like the grounds: a cool grey hairline on stone reads as dust. */
-    --c-line: 212 206 197;
-    --c-line-soft: 227 223 216;
-    /* A line that must read as a deliberate edge rather than a divider: the
-       dashed Collector outlines and the SLD connectors. One step darker than
-       `line`, never `ink` — an enclosure is context, not content. */
-    --c-line-strong: 192 185 174;
+    --c-line: 226 232 240;
+    --c-line-soft: 241 245 249;
+    --c-line-strong: 203 213 225;
 
     /* ── Text ────────────────────────────────────────────────────────────── */
-    --c-ink: 33 38 59; /* the logo's navy: 15:1 on a card */
-    --c-ink-muted: 88 96 117;
-    --c-ink-faint: 122 130 150;
+    --c-ink: 23 29 45; /* the logo's deep navy: 16.8:1 on card */
+    --c-ink-muted: 71 85 105; /* slate-600: 7.6:1 on card */
+    --c-ink-faint: 100 116 139; /* slate-500: 4.8:1 on card (WCAG AA compliant) */
 
     /* ── Brand + status ──────────────────────────────────────────────────── */
-    --c-accent: 38 97 116;
-    --c-accent-strong: 33 84 101;
-    /* The logo's cyan at 25% over white: the ground of an icon well. */
-    --c-accent-soft: 216 238 241;
-    /* Text on an accent *fill*. White here, navy in dark: the dark accent is
-       light, and white on it would be 2.2:1. Never `text-white` on bg-accent. */
+    --c-accent: 26 95 114;
+    --c-accent-strong: 20 78 94;
+    --c-accent-soft: 224 242 246;
     --c-on-accent: 255 255 255;
-    --c-ok: 18 164 90;
-    --c-warn: 224 152 42;
-    --c-bad: 223 75 75;
-    --c-info: 58 102 219;
+    --c-ok: 16 149 83;
+    --c-warn: 215 90 0;
+    --c-bad: 225 29 72;
+    --c-info: 37 99 235;
 
     /* ── Icon wells ──────────────────────────────────────────────────────── */
-    /* Light mode only, at the user's direction (28 Sep 2026): an icon well
-       takes a hue from what its icon *depicts*, so the same icon is the same
-       colour on every screen — the sun and the bolt yellow, an energy counter
-       and the CO₂ leaf green, the Alarm bell and the thermometer red, and
-       everything else the accent. The registry is `components/icons/wells.ts`.
-       ⚠ A well's hue names the quantity, never its condition: a figure's
-       verdict is still the figure's own colour, set by the caller.
-
-       Glyph over ground, each ≥ 3:1 (graphics) and grounds at the accent
-       well's lightness. The yellow is a true yellow, not amber: 13.7 ΔE from
-       `warn`, so a sun icon does not read as a warning. */
     --c-well-yellow: 164 120 0;
-    --c-well-yellow-soft: 250 236 184;
+    --c-well-yellow-soft: 254 243 199;
     --c-well-green: 22 135 68;
-    --c-well-green-soft: 214 240 223;
+    --c-well-green-soft: 209 250 229;
     --c-well-red: 206 48 48;
-    --c-well-red-soft: 251 225 225;
+    --c-well-red-soft: 254 226 226;
 
     /* ── Navigation ──────────────────────────────────────────────────────── */
-    /* The sidebar is navy in both themes — the one place the brand is a whole
-       surface rather than an accent, running from the logo's navy to its deep
-       navy. It has its own tokens because nothing from the page works on it:
-       the page's ink is navy, and the page's light accent (a deep teal) is
-       too dark on navy. The nav takes the logo's cyan, which is exactly the
-       pairing the logo itself makes. */
     --c-nav: 33 38 59;
     --c-nav-deep: 15 29 56;
     --c-nav-ink: 238 240 245;
-    --c-nav-muted: 172 180 202;
-    --c-nav-faint: 128 138 166;
-    --c-nav-line: 52 59 86;
+    --c-nav-muted: 203 213 225;
+    --c-nav-faint: 148 163 184;
+    --c-nav-line: 30 41 59;
     --c-nav-accent: 98 188 200;
 
-    /* Quality codes 0..3 (§4.2). Bad quality must never look like data, so
-       these are deliberately kept separate from the brand palette above. */
-    --c-q0: 18 164 90;
-    --c-q1: 224 152 42;
-    --c-q2: 122 130 150;
-    --c-q3: 223 75 75;
+    /* Quality codes 0..3 (§4.2). */
+    --c-q0: 16 149 83;
+    --c-q1: 215 90 0;
+    --c-q2: 100 116 139;
+    --c-q3: 225 29 72;
 
     /* ── Chart chrome, read at runtime by ECharts and the SLD ─────────────── */
-    --c-chart-grid: 227 223 216;
-    --c-chart-axis: 122 130 150;
-    --c-chart-tooltip-bg: 240 237 231;
-    --c-chart-tooltip-border: 212 206 197;
+    --c-chart-grid: 226 232 240;
+    --c-chart-axis: 71 85 105;
+    --c-chart-tooltip-bg: 255 255 255;
+    --c-chart-tooltip-border: 203 213 225;
     /* A chart with one series, and every drawing of one quantity — a trend, a
        bar per Device, a gauge's arc, a day's columns. It was the accent, and in
        light mode a deep teal line over a teal wash on a grey card read as
@@ -219,8 +194,8 @@
        shadows, a pixel or two, not a 28px halo: a card that floats half an
        inch off the page is the look of a template, while one that sits on it
        with a firm edge is the look of an instrument. */
-    --shadow-card: 0 1px 0 rgb(56 44 30 / 0.04), 0 1px 3px rgb(56 44 30 / 0.08);
-    --shadow-soft: 0 1px 2px rgb(56 44 30 / 0.07);
+    --shadow-card: 0 1px 3px 0 rgb(15 23 42 / 0.05), 0 1px 2px -1px rgb(15 23 42 / 0.04);
+    --shadow-soft: 0 1px 2px 0 rgb(15 23 42 / 0.04);
     /* The light a ratio dial's arc gives off (`.dial-glow-*`). None in light:
        on stone a glow reads as a smudge rather than a lit instrument. */
     --dial-glow: 0;

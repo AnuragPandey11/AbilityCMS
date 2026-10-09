@@ -72,12 +72,18 @@ export function Panel({
 export type BadgeTone = "neutral" | "ok" | "warn" | "bad" | "info" | "accent";
 
 const TONES: Record<BadgeTone, string> = {
-  neutral: "border-line bg-surface-sunken text-ink-muted",
-  ok: "border-ok/30 bg-ok/10 text-ok",
-  warn: "border-warn/30 bg-warn/10 text-warn",
-  bad: "border-bad/30 bg-bad/10 text-bad",
-  info: "border-info/30 bg-info/10 text-info",
-  accent: "border-accent/30 bg-accent/10 text-accent",
+  neutral:
+    "border-slate-200 bg-slate-100 text-slate-700 dark:border-line dark:bg-surface-sunken dark:text-ink-muted",
+  ok:
+    "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-ok/30 dark:bg-ok/10 dark:text-ok",
+  warn:
+    "border-amber-300 bg-amber-100 text-amber-900 dark:border-warn/30 dark:bg-warn/10 dark:text-warn",
+  bad:
+    "border-rose-200 bg-rose-100 text-rose-800 dark:border-bad/30 dark:bg-bad/10 dark:text-bad",
+  info:
+    "border-blue-200 bg-blue-100 text-blue-800 dark:border-info/30 dark:bg-info/10 dark:text-info",
+  accent:
+    "border-cyan-200 bg-cyan-100 text-cyan-800 dark:border-accent/30 dark:bg-accent/10 dark:text-accent",
 };
 
 export function Badge({
@@ -118,9 +124,9 @@ export function Button({
 }): JSX.Element {
   const variants: Record<string, string> = {
     primary: "bg-accent text-on-accent hover:bg-accent-strong border-accent shadow-soft",
-    secondary: "border-line bg-surface-raised text-ink hover:bg-surface-sunken",
-    danger: "border-bad/40 bg-bad/10 text-bad hover:bg-bad/20",
-    ghost: "border-transparent text-ink-muted hover:text-ink",
+    secondary: "border-slate-300 dark:border-line bg-white dark:bg-surface-raised text-ink hover:bg-slate-50 dark:hover:bg-surface-sunken shadow-sm",
+    danger: "border-rose-200 bg-rose-100 text-rose-800 dark:border-bad/40 dark:bg-bad/10 dark:text-bad hover:bg-rose-200 dark:hover:bg-bad/20",
+    ghost: "border-transparent text-slate-600 dark:text-ink-muted hover:text-slate-900 dark:hover:text-ink",
   };
   return (
     <button
@@ -185,8 +191,8 @@ export function SegmentedControl<T extends string>({
               size === "lg" ? "px-4 py-1.5 text-sm font-semibold" : "px-3 py-1.5 text-xs font-medium"
             } ${
               active
-                ? "bg-surface-raised text-accent shadow-soft"
-                : "text-ink-muted hover:text-ink"
+                ? "bg-white dark:bg-surface-raised text-slate-900 dark:text-accent shadow-[0_1px_2px_rgba(0,0,0,0.08)] font-semibold"
+                : "text-slate-600 dark:text-ink-muted hover:text-slate-900 dark:hover:text-ink"
             }`}
           >
             {option.label}
@@ -236,7 +242,7 @@ export function SelectBox({
         </span>
       ) : null}
       <span
-        className={`surface-tile relative inline-flex items-center justify-between rounded-control border border-line transition focus-within:ring-2 focus-within:ring-accent/40 hover:border-line-strong ${
+        className={`surface-tile relative inline-flex items-center justify-between rounded-control border border-slate-300 dark:border-line bg-white dark:bg-surface-raised shadow-[inset_0_1px_1px_rgba(0,0,0,0.03)] transition focus-within:ring-2 focus-within:ring-accent/40 hover:border-slate-400 dark:hover:border-line-strong ${
           small ? "min-w-[10rem] gap-2 px-2.5 py-1.5 text-xs" : "min-w-[13rem] gap-3 px-3.5 py-2 text-sm"
         } ${className}`}
       >
@@ -281,8 +287,8 @@ export function Field({
 }
 
 export const inputClass =
-  "w-full rounded-control border border-line bg-surface-raised px-2.5 py-1.5 text-sm text-ink " +
-  "placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 " +
+  "w-full rounded-control border border-slate-300 dark:border-line bg-white dark:bg-surface-raised px-2.5 py-1.5 text-sm text-ink " +
+  "shadow-[inset_0_1px_1px_rgba(0,0,0,0.03)] placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 " +
   "focus:ring-accent/20 disabled:opacity-50";
 
 function EyeIcon({ off }: { off: boolean }): JSX.Element {

@@ -68,8 +68,8 @@ function navClass(collapsed: boolean) {
       collapsed ? "lg:justify-center lg:px-0" : ""
     } ${
       isActive
-        ? "bg-nav-accent/[0.14] text-nav-accent before:absolute before:inset-y-1.5 before:-left-2 before:w-[3px] before:rounded-full before:bg-nav-accent"
-        : "text-nav-muted hover:bg-nav-ink/[0.06] hover:text-nav-ink"
+        ? "bg-nav-accent/[0.15] text-nav-accent font-semibold before:absolute before:inset-y-1.5 before:-left-2 before:w-[3px] before:rounded-full before:bg-nav-accent before:shadow-[0_0_8px_rgb(98_188_200)]"
+        : "text-nav-muted hover:bg-nav-ink/[0.08] hover:text-nav-ink"
     }`;
 }
 

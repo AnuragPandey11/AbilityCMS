@@ -30,7 +30,7 @@ export function FittedFigure({
   value,
   unit,
   className = "",
-  unitClassName = "text-sm text-ink-muted",
+  unitClassName = "text-sm font-semibold text-ink-muted",
   title,
 }: {
   value: ReactNode;

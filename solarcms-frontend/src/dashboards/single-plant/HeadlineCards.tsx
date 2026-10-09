@@ -243,14 +243,14 @@ function PowerDial({
             title={title}
           />
           {slot.unit ? (
-            <span className={`${dense ? "mt-0.5 text-[10px]" : "mt-1 text-xs"} text-ink-muted`}>{slot.unit}</span>
+            <span className={`${dense ? "mt-0.5 text-[10px]" : "mt-1 text-xs"} font-semibold text-ink-muted`}>{slot.unit}</span>
           ) : null}
           <span className={`mt-0.5 ${dense ? "text-[10px]" : "text-xs"} font-semibold text-chart`}>
             {Math.round(fraction * 100)}% of AC
           </span>
         </div>
       </div>
-      <div className="-mt-2 flex justify-between px-[7%] text-[10px] text-ink-faint">
+      <div className="-mt-2 flex justify-between px-[7%] text-[10px] font-medium text-ink-muted">
         <span>0</span>
         <span>{formatNumber(capacity, { digits: 0 })} kW</span>
       </div>
@@ -570,7 +570,7 @@ function Odometer({ text, unit }: { text: string; unit: string | null }): JSX.El
           )}
         </svg>
       </div>
-      {unit ? <div className="mt-2 text-right text-xs font-medium text-ink-muted">{unit}</div> : null}
+      {unit ? <div className="mt-2 text-right text-xs font-semibold text-ink-muted">{unit}</div> : null}
     </div>
   );
 }
