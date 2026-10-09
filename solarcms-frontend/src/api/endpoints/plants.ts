@@ -11,6 +11,7 @@ import {
   PlantKpisSchema,
   PlantPageSchema,
   PlantStringsSchema,
+  InverterRankingSchema,
   SldSchema,
   parse,
   type Block,
@@ -24,6 +25,7 @@ import {
   type PlantKpis,
   type PlantPage,
   type PlantStrings,
+  type InverterRanking,
   type Sld,
 } from "../schemas";
 
@@ -107,6 +109,41 @@ export async function plantStrings(plantId: number): Promise<PlantStrings> {
     PlantStringsSchema,
     await request(`/plants/${plantId}/strings`),
     `GET /plants/${plantId}/strings`,
+  );
+}
+
+/** Which period an Inverter ranking covers — the Report tables' own names. */
+export interface InverterRankingQuery {
+  period: "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
+  /** The Plant's own dates and `HH:MM` clock times. Custom periods only. */
+  fromDate?: string;
+  toDate?: string;
+  fromTime?: string;
+  toTime?: string;
+}
+
+/**
+ * Every Inverter's generation, availability, PR, downtime and loss over a
+ * period (`services/inverter_ranking.py`; downtime ⚠ PROPOSED). At most 31 days.
+ */
+export async function inverterRanking(
+  plantId: number,
+  query: InverterRankingQuery,
+): Promise<InverterRanking> {
+  const params =
+    query.period === "custom"
+      ? {
+          period: query.period,
+          from_date: query.fromDate,
+          to_date: query.toDate,
+          from_time: query.fromTime,
+          to_time: query.toTime,
+        }
+      : { period: query.period };
+  return parse(
+    InverterRankingSchema,
+    await request(`/plants/${plantId}/inverter-ranking`, { params }),
+    `GET /plants/${plantId}/inverter-ranking`,
   );
 }
 
@@ -223,6 +260,8 @@ export interface PlantUpdate {
   region_code?: string | null;
   ac_capacity_kw?: number | null;
   dc_capacity_kwp?: number | null;
+  /** Rupees per kWh; prices what an Inverter's stops cost. `null` clears it. */
+  energy_tariff_inr_per_kwh?: number | null;
   latitude?: number | null;
   longitude?: number | null;
   commissioned_on?: string | null;

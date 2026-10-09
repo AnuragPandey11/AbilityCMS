@@ -737,14 +737,15 @@ async def create_plant(
 
     row = (await session.execute(text("""
         INSERT INTO plants (client_id, region_id, code, name, status, ac_capacity_kw,
-                            dc_capacity_kwp, latitude, longitude, timezone,
-                            commissioned_on)
-        VALUES (:client_id, :region_id, :code, :name, 'draft', :ac, :dc, :lat, :lon,
-                :tz, :commissioned_on)
+                            dc_capacity_kwp, energy_tariff_inr_per_kwh, latitude,
+                            longitude, timezone, commissioned_on)
+        VALUES (:client_id, :region_id, :code, :name, 'draft', :ac, :dc, :tariff, :lat,
+                :lon, :tz, :commissioned_on)
         RETURNING id, code, name, status
     """), {
         "client_id": client_id, "region_id": region_id, "code": body.code,
         "name": body.name, "ac": body.ac_capacity_kw, "dc": body.dc_capacity_kwp,
+        "tariff": body.energy_tariff_inr_per_kwh,
         "lat": body.latitude, "lon": body.longitude, "tz": body.timezone,
         "commissioned_on": body.commissioned_on,
     })).first()
@@ -790,6 +791,7 @@ async def update_plant(
         body,
         {"name": "name", "status": "status", "region_code": "region_id",
          "ac_capacity_kw": "ac_capacity_kw", "dc_capacity_kwp": "dc_capacity_kwp",
+         "energy_tariff_inr_per_kwh": "energy_tariff_inr_per_kwh",
          "latitude": "latitude", "longitude": "longitude",
          "commissioned_on": "commissioned_on"},
         casts={"commissioned_on": "date"},

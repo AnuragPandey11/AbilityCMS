@@ -620,6 +620,27 @@ PLANT_STOP_AT_OR_BELOW_KW: Final = 0.0
 # never an assumed "connected".
 GRID_STATUS_SOURCE: Final = ("VCB", "VCB_ON_FEEDBACK")
 
+# ── Inverter downtime and the energy it cost — ⚠ PROPOSED (9 Oct 2026, the
+# user's choices from rendered options; the client has supplied no definition).
+#
+# An Inverter is **down** in a minute when it is reporting, its AC output is at
+# or below `INVERTER_PRODUCING_ABOVE_KW`, and more than half of the *other*
+# reporting Inverters at the Plant are above it — it stood still while the
+# others ran. Minutes it sent nothing are "no data", never downtime
+# (Guardrail 16: absence never proves equipment). A stop shorter than
+# `INVERTER_DOWNTIME_MIN_MINUTES` is not counted: Inverters wake a few minutes
+# apart at dawn, and without it every late riser accrues a fault a day.
+#
+# Energy lost is counted **only while stopped** (the user's choice over a
+# comparison with neighbours at all hours, or with sunlight): in each down
+# minute, what the typical producing neighbour made per kWp of panels, times
+# this Inverter's own DC size. Needs every one of those sizes recorded —
+# `devices.dc_capacity_kwp`, never estimated from the Plant's total (the
+# user's choice). The threshold is the Plant start rule's, in the Tag's own
+# unit, kW.
+INVERTER_PRODUCING_ABOVE_KW: Final = PLANT_START_ABOVE_KW
+INVERTER_DOWNTIME_MIN_MINUTES: Final = 10
+
 
 
 # ════════════════════════════════════════════════════════════════════════════

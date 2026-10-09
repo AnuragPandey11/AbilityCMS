@@ -66,6 +66,7 @@ class Plant(Base):
     __table_args__ = (
         UniqueConstraint("client_id", "code"),
         CheckConstraint(f"status IN {PLANT_STATUSES}", name="plant_status"),
+        CheckConstraint("energy_tariff_inr_per_kwh >= 0", name="plant_tariff_not_negative"),
     )
 
     id: Mapped[int] = pk()
@@ -78,6 +79,9 @@ class Plant(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     ac_capacity_kw: Mapped[float | None] = mapped_column(Numeric(12, 2))
     dc_capacity_kwp: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    # What a kWh from this Plant is worth, in rupees — prices the energy an
+    # Inverter's stops cost (migration 0040). NULL: no loss in rupees is shown.
+    energy_tariff_inr_per_kwh: Mapped[float | None] = mapped_column(Numeric(10, 4))
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Kolkata")
@@ -124,6 +128,7 @@ class Device(Base):
             name="fk_parent_same_plant",
         ),
         CheckConstraint(f"status IN {DEVICE_STATUSES}", name="device_status"),
+        CheckConstraint("dc_capacity_kwp > 0", name="device_dc_capacity_positive"),
         CheckConstraint("parent_device_id IS NULL OR parent_device_id <> id",
                         name="device_not_own_parent"),
         CheckConstraint("collector_code IS NULL OR length(btrim(collector_code)) > 0",
@@ -166,6 +171,10 @@ class Device(Base):
     # default — the test broker publishes ~21x faster than assumed.
     expected_interval_s: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     rated_capacity_kw: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    # The panels behind this unit, in kWp — an Inverter's share of the Plant's DC
+    # capacity, entered from its design, never estimated (migration 0040).
+    # Its PR divides by this, and the energy its stops cost scales with it.
+    dc_capacity_kwp: Mapped[float | None] = mapped_column(Numeric(12, 2))
     # How many inputs of a repeating group this unit actually has — the number of
     # PV strings on an Inverter. NULL where the Model has no repeating group.
     string_count: Mapped[int | None] = mapped_column(Integer)

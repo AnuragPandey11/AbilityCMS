@@ -154,6 +154,26 @@ export function formatCapacity(
   return formatValue(value, unit, { digits: value !== null && Math.abs(value ?? 0) >= 1000 ? 0 : 1 });
 }
 
+/**
+ * Rupees, whole, in Indian digit grouping — `₹1,24,850` — the way the people
+ * reading it write money. A loss is an estimate from a stated rule, so paise
+ * would be a precision it does not have.
+ */
+export function formatRupees(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return UNDEFINED_DISPLAY;
+  }
+  return `₹${Math.round(value).toLocaleString("en-IN")}`;
+}
+
+/** A duration in hours, one decimal: `1.2 h`. Zero is a real `0.0 h`. */
+export function formatHours(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return UNDEFINED_DISPLAY;
+  }
+  return `${value.toLocaleString("en-GB", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} h`;
+}
+
 /** Compact axis/tile rendering for large counts. Never used for a unit value. */
 export function formatCompact(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {

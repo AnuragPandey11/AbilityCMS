@@ -1351,6 +1351,7 @@ function PlantDetails({
     region_code: plant?.region_code ?? "",
     ac_capacity_kw: plant?.ac_capacity_kw?.toString() ?? "",
     dc_capacity_kwp: plant?.dc_capacity_kwp?.toString() ?? "",
+    energy_tariff_inr_per_kwh: plant?.energy_tariff_inr_per_kwh?.toString() ?? "",
     latitude: plant?.latitude?.toString() ?? "",
     longitude: plant?.longitude?.toString() ?? "",
     commissioned_on: plant?.commissioned_on ?? "",
@@ -1365,6 +1366,8 @@ function PlantDetails({
         region_code: form.region_code || null,
         ac_capacity_kw: form.ac_capacity_kw ? Number(form.ac_capacity_kw) : null,
         dc_capacity_kwp: form.dc_capacity_kwp ? Number(form.dc_capacity_kwp) : null,
+        energy_tariff_inr_per_kwh:
+          form.energy_tariff_inr_per_kwh ? Number(form.energy_tariff_inr_per_kwh) : null,
         latitude: form.latitude ? Number(form.latitude) : null,
         longitude: form.longitude ? Number(form.longitude) : null,
         commissioned_on: form.commissioned_on || null,
@@ -1430,6 +1433,19 @@ function PlantDetails({
                 min={0}
                 value={form.dc_capacity_kwp}
                 onChange={(e) => setForm({ ...form, dc_capacity_kwp: e.target.value })}
+                className={inputClass}
+              />
+            </Field>
+            <Field
+              label="Tariff (₹ per kWh)"
+              hint="What a kWh from this Plant is worth. Prices the energy an Inverter's stops cost."
+            >
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={form.energy_tariff_inr_per_kwh}
+                onChange={(e) => setForm({ ...form, energy_tariff_inr_per_kwh: e.target.value })}
                 className={inputClass}
               />
             </Field>

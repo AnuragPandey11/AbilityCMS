@@ -362,6 +362,32 @@ export function usePlantStrings(plantId: number | null) {
   });
 }
 
+/**
+ * Every Inverter's period figures, for the ranking on Inverter Monitoring.
+ *
+ * The server caches a live period for a minute, so asking more often gains
+ * nothing; a period wholly past is asked for once. The previous period's table
+ * stays on screen while another loads, for the same Plant only — never a
+ * different Plant's figures under this one's name.
+ */
+export function useInverterRanking(
+  plantId: number | null,
+  query: plantsApi.InverterRankingQuery | null,
+  live: boolean,
+) {
+  return useQuery({
+    queryKey: qk.inverterRanking(plantId ?? 0, query ?? { period: "today" }),
+    queryFn: () => plantsApi.inverterRanking(plantId as number, query as plantsApi.InverterRankingQuery),
+    enabled: plantId !== null && query !== null,
+    staleTime: 60_000,
+    refetchInterval: live ? 60_000 : false,
+    retry: false,
+    placeholderData: (previous) =>
+      previous && previous.plant_id === plantId ? previous : undefined,
+    ...ON_RETURN,
+  });
+}
+
 export function usePlantSld(plantId: number | null) {
   return useQuery({
     queryKey: qk.plantSld(plantId ?? 0),

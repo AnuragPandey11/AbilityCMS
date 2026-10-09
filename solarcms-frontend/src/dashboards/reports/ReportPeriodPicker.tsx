@@ -41,6 +41,7 @@ export function ReportPeriodPicker({
   zone,
   problem,
   noteId,
+  subject = "report",
 }: {
   period: ReportPeriod;
   onPeriod: (next: ReportPeriod) => void;
@@ -51,6 +52,8 @@ export function ReportPeriodPicker({
   zone: string;
   problem: string | null;
   noteId: string;
+  /** What the period is of, for the note under a custom range. */
+  subject?: string;
 }): JSX.Element {
   const today = now.slice(0, 10);
   const { fromDate, fromTime, toDate, toTime } = range;
@@ -134,7 +137,7 @@ export function ReportPeriodPicker({
         </p>
       ) : period === "custom" ? (
         <p id={noteId} className="mt-2 text-xs text-ink-faint">
-          Times are the Plant&apos;s clock ({timezoneLabel(zone)}). The report stops at the end time;
+          Times are the Plant&apos;s clock ({timezoneLabel(zone)}). The {subject} stops at the end time;
           23:59 runs to the end of the day.
         </p>
       ) : null}

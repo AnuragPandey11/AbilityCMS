@@ -29,6 +29,11 @@
  * and values are seeded from stored readings (`useLatestValues`) so a card is
  * populated on arrival instead of after the next frame.
  *
+ * The **Inverter ranking** panel (`inverters/InverterRankingPanel`) is the
+ * period view the three shapes lack: generation, availability, PR, downtime
+ * and what the stops cost, over today, yesterday, a week or a month — the
+ * server's figures (`GET /plants/{id}/inverter-ranking`), ranked here.
+ *
  * ⚠ The ranking rule is untouched: **within a variant only** (OPEN-13,
  * Guardrail 9). The comparison chart is drawn per variant group for exactly
  * that reason — one chart of central and string Inverters together would rank
@@ -69,6 +74,7 @@ import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { DEFAULT_TIMEZONE } from "@/format/datetime";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { STALE_INTERVAL_MULTIPLIER } from "@/live/useLiveDevice";
+import { InverterRankingPanel } from "./inverters/InverterRankingPanel";
 
 const INVERTER_TYPE_CODE = "INVERTER";
 
@@ -565,6 +571,23 @@ export function InverterMonitoringDashboard(): JSX.Element {
               <RailText value={metric?.name ?? UNDEFINED_DISPLAY} size="sm" />
             </RailTile>
           </div>
+
+          {/* The period view: what each Inverter generated, how available it
+              was and what its stops cost — ranked within its variant. The
+              live comparison below answers "now"; this answers "over the day,
+              the week, the month". */}
+          {plantId !== null ? (
+            <InverterRankingPanel
+              plantId={plantId}
+              plantName={plantQuery.data?.name ?? "this Plant"}
+              timezone={timezone}
+              plantDcKwp={plantQuery.data?.dc_capacity_kwp ?? null}
+              onSelect={(deviceId) => {
+                const device = inverters.find((candidate) => candidate.id === deviceId);
+                if (device) setInspecting(device);
+              }}
+            />
+          ) : null}
 
           {grouped.map(([variant, rows]) => {
             const unspecified = variant === "unspecified";

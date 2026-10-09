@@ -8,6 +8,7 @@
  */
 
 import type { AlarmQuery } from "./endpoints/alarms";
+import type { InverterRankingQuery } from "./endpoints/plants";
 import type { ReadingsQuery } from "./endpoints/readings";
 import type { KpiPeriod } from "./schemas";
 
@@ -41,6 +42,8 @@ export const qk = {
   plantSnapshots: (period: KpiPeriod) => ["plants", "snapshots", period] as const,
   plantOperatingStatus: (id: number) => ["plants", id, "operating-status"] as const,
   plantStrings: (id: number) => ["plants", id, "strings"] as const,
+  inverterRanking: (id: number, query: InverterRankingQuery) =>
+    ["plants", id, "inverter-ranking", query] as const,
   blockKpis: (id: number, period: KpiPeriod) =>
     ["blocks", id, "kpis", period] as const,
 

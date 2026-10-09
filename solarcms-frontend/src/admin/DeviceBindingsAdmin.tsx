@@ -723,6 +723,10 @@ function DeviceSettings({
       expected_interval_s: String(device.expected_interval_s),
       rated_capacity_kw:
         device.rated_capacity_kw === null ? "" : String(device.rated_capacity_kw),
+      dc_capacity_kwp:
+        device.dc_capacity_kwp === null || device.dc_capacity_kwp === undefined
+          ? ""
+          : String(device.dc_capacity_kwp),
       string_count: device.string_count === null ? "" : String(device.string_count),
     });
   }, [device]);
@@ -739,6 +743,7 @@ function DeviceSettings({
           ? Number(form.rated_capacity_kw)
           : undefined,
         string_count: form.string_count ? Number(form.string_count) : undefined,
+        dc_capacity_kwp: form.dc_capacity_kwp ? Number(form.dc_capacity_kwp) : undefined,
         // Sent only when it changed, so an unrelated edit never re-asserts it.
         device_model_id:
           form.device_model_id && Number(form.device_model_id) !== device?.device_model_id
@@ -749,6 +754,8 @@ function DeviceSettings({
         clear: [
           form.source_address ? null : "source_address",
           form.string_count ? null : "string_count",
+          // Only an Inverter shows the box, so only an Inverter can empty it.
+          isInverter && !form.dc_capacity_kwp ? "dc_capacity_kwp" : null,
         ].filter((field): field is string => field !== null),
       }),
     onSuccess: () => {
@@ -837,6 +844,14 @@ function DeviceSettings({
               {device.rated_capacity_kw ?? "not set"} kW
             </span>
           </span>
+          {isInverter ? (
+            <span>
+              DC size{" "}
+              <span className="text-ink">
+                {device.dc_capacity_kwp != null ? `${device.dc_capacity_kwp} kWp` : "not set"}
+              </span>
+            </span>
+          ) : null}
           {stringMax > 0 ? (
             <span>
               PV strings{" "}
@@ -925,6 +940,23 @@ function DeviceSettings({
                 className={inputClass}
               />
             </Field>
+            {isInverter ? (
+              <Field
+                label="DC size (kWp)"
+                hint="The panels connected to this Inverter, from the design — not its AC rating. Its PR and the energy its stops cost on the Inverter ranking need it; it is never estimated."
+              >
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={form.dc_capacity_kwp ?? ""}
+                  onChange={(event) =>
+                    setForm((f) => ({ ...f, dc_capacity_kwp: event.target.value }))
+                  }
+                  className={inputClass}
+                />
+              </Field>
+            ) : null}
             {stringMax > 0 ? (
               <Field
                 label="PV strings on this unit"

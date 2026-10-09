@@ -200,6 +200,9 @@ export const PlantDetailSchema = z
     status: z.string(),
     ac_capacity_kw: nullableNumeric(),
     dc_capacity_kwp: nullableNumeric(),
+    // Rupees per kWh this Plant's energy is worth — prices the energy an
+    // Inverter's stops cost on the Inverter ranking. Null: none recorded.
+    energy_tariff_inr_per_kwh: nullableNumeric().optional(),
     latitude: nullableNumeric(),
     longitude: nullableNumeric(),
     // Timestamps render in the Plant's timezone, never the browser's (§4.4).
@@ -547,6 +550,82 @@ export type PlantStrings = z.infer<typeof PlantStringsSchema>;
 export type InverterStrings = PlantStrings["inverters"][number];
 export type PvString = InverterStrings["strings"][number];
 
+// ── Inverter ranking ────────────────────────────────────────────────────────
+
+/** A figure that may be undefined, with the sentence that says why. */
+const ExplainedSchema = z.object({
+  value: nullableNumeric(),
+  undefined_reason: z.string().nullable(),
+});
+export type Explained = z.infer<typeof ExplainedSchema>;
+
+/**
+ * `GET /plants/{id}/inverter-ranking` — every Inverter of a Plant over a
+ * period: generation, availability, PR, downtime, no-data time and what the
+ * stops cost (`services/inverter_ranking.py`; downtime ⚠ PROPOSED). Ranking is
+ * done here, within each variant (`dashboards/inverters/ranking.ts`).
+ */
+export const InverterRankingSchema = z.object({
+  plant_id: z.number(),
+  period: z.string(),
+  first_day: z.string(),
+  last_day: z.string(),
+  period_start: z.string(),
+  period_end: z.string(),
+  timezone: z.string(),
+  computed_at: z.string(),
+  tariff_inr_per_kwh: nullableNumeric(),
+  irradiation_kwh_m2: nullableNumeric(),
+  irradiation_reason: z.string().nullable(),
+  energy_tier: z.string(),
+  coverage: z.object({
+    period_hours: numeric(),
+    heard_hours: numeric(),
+    generating_hours: numeric(),
+  }),
+  rule: z.object({
+    producing_above_kw: numeric(),
+    min_stop_minutes: z.number(),
+    status: z.string(),
+  }),
+  inverters: z.array(
+    z.object({
+      device_id: z.number(),
+      code: z.string(),
+      name: z.string(),
+      variant: z.string().nullable(),
+      comm_status: z.string().nullable(),
+      dc_capacity_kwp: nullableNumeric(),
+      rated_capacity_kw: nullableNumeric(),
+      generation_kwh: nullableNumeric(),
+      generation_reason: z.string().nullable(),
+      refused_steps: z.number(),
+      availability: ExplainedSchema,
+      performance_ratio: ExplainedSchema,
+      generating_hours: numeric(),
+      downtime_hours: nullableNumeric(),
+      short_stop_hours: nullableNumeric(),
+      no_data_hours: nullableNumeric(),
+      planned_hours: numeric(),
+      stop_count: z.number(),
+      stops: z.array(
+        z.object({
+          start: z.string(),
+          end: z.string(),
+          minutes: z.number(),
+          lost_kwh: nullableNumeric(),
+          ongoing: z.boolean(),
+        }),
+      ),
+      lost_kwh: ExplainedSchema,
+      loss_inr: ExplainedSchema,
+      flagged_minutes: z.number(),
+    }),
+  ),
+});
+export type InverterRanking = z.infer<typeof InverterRankingSchema>;
+export type RankedInverterRow = InverterRanking["inverters"][number];
+
 export const DeviceListItemSchema = z.object({
   id: z.number(),
   code: z.string(),
@@ -596,6 +675,11 @@ export const DeviceListItemSchema = z.object({
   serial_number: z.string().nullable().optional().catch(null),
   installed_on: z.string().nullable().optional().catch(null),
   rated_capacity_kw: nullableNumeric().optional(),
+  /**
+   * The kWp of panels behind this unit — an Inverter's PR divides by it, and
+   * the energy its stops cost scales with it. Null is unknown, never estimated.
+   */
+  dc_capacity_kwp: nullableNumeric().optional(),
   string_count: z.number().nullable().optional().catch(null),
   completeness_24h: nullableNumeric().optional(),
   binding_count: z.number().nullable().optional().catch(null),
@@ -644,6 +728,7 @@ export const DeviceUpdateResultSchema = z.object({
   source_address: z.string().nullable(),
   expected_interval_s: z.number(),
   rated_capacity_kw: nullableNumeric(),
+  dc_capacity_kwp: nullableNumeric().optional(),
   string_count: z.number().nullable(),
   sld_stage_override: z.string().nullable(),
   device_model_id: z.number().optional(),

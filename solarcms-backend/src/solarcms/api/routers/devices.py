@@ -163,8 +163,8 @@ async def list_devices(
     rows = (await session.execute(text("""
         SELECT d.id, d.code, d.name, d.status, d.block_id, d.parent_device_id,
                d.reports_via_device_id, d.collector_code, d.source_address,
-               d.expected_interval_s, d.rated_capacity_kw, d.string_count,
-               d.serial_number, d.installed_on,
+               d.expected_interval_s, d.rated_capacity_kw, d.dc_capacity_kwp,
+               d.string_count, d.serial_number, d.installed_on,
                dt.code AS type_code, dt.name AS type_name, dt.in_power_path,
                -- The stage this Device folds into, and the accepted correction
                -- where one exists. The schematic orders ties by stage rather
@@ -357,11 +357,11 @@ async def _insert_devices(
                                      reports_via_device_id, collector_code,
                                      source_address,
                                      expected_interval_s, rated_capacity_kw,
-                                     string_count, installed_on)
+                                     dc_capacity_kwp, string_count, installed_on)
                 VALUES (:client_id, :plant_id, :model_id, :code, :name, :serial,
                         :block_id, :parent_id, :collector_id, :collector_code,
                         :source_address,
-                        :interval_s, :capacity, :string_count, :installed_on)
+                        :interval_s, :capacity, :dc_kwp, :string_count, :installed_on)
                 RETURNING id, code, name, status, source_address, expected_interval_s,
                           string_count, collector_code
             """), {
@@ -374,6 +374,7 @@ async def _insert_devices(
                 "source_address": device.source_address,
                 "interval_s": device.expected_interval_s,
                 "capacity": device.rated_capacity_kw,
+                "dc_kwp": device.dc_capacity_kwp,
                 "string_count": device.string_count,
                 "installed_on": device.installed_on,
             })).first()
@@ -520,7 +521,7 @@ async def update_device(
     before = (await session.execute(text("""
         SELECT client_id, plant_id, code, name, status, block_id, parent_device_id,
                reports_via_device_id, collector_code, source_address,
-               expected_interval_s, string_count, device_model_id
+               expected_interval_s, string_count, dc_capacity_kwp, device_model_id
           FROM devices WHERE id = :id
     """), {"id": device_id})).first()
     if before is None:
@@ -555,7 +556,7 @@ async def update_device(
     clear = set(body.clear or [])
     unknown = clear - {"block_id", "parent_device_id", "reports_via_device_id",
                        "collector_code", "source_address", "string_count",
-                       "sld_stage_override"}
+                       "dc_capacity_kwp", "sld_stage_override"}
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"cannot clear {sorted(unknown)}")
@@ -658,6 +659,9 @@ async def update_device(
                                          ELSE coalesce(:source_address, source_address) END,
                    expected_interval_s = coalesce(:interval_s, expected_interval_s),
                    rated_capacity_kw = coalesce(:capacity, rated_capacity_kw),
+                   dc_capacity_kwp = CASE WHEN :clear_dc_kwp THEN NULL
+                                          ELSE coalesce(CAST(:dc_kwp AS numeric),
+                                                        dc_capacity_kwp) END,
                    string_count = CASE WHEN :clear_strings THEN NULL
                                        ELSE coalesce(:string_count, string_count) END,
                    device_model_id = coalesce(:model_id, device_model_id),
@@ -670,8 +674,8 @@ async def update_device(
              WHERE id = :id
             RETURNING id, code, name, status, block_id, parent_device_id,
                       reports_via_device_id, collector_code, source_address,
-                      expected_interval_s, rated_capacity_kw, string_count,
-                      sld_stage_override, device_model_id
+                      expected_interval_s, rated_capacity_kw, dc_capacity_kwp,
+                      string_count, sld_stage_override, device_model_id
         """), {
             "id": device_id, "name": body.name, "serial": body.serial_number,
             "block_id": value("block_id", body.block_id),
@@ -682,6 +686,8 @@ async def update_device(
             "source_address": value("source_address", body.source_address),
             "interval_s": body.expected_interval_s,
             "capacity": body.rated_capacity_kw,
+            "dc_kwp": value("dc_capacity_kwp", body.dc_capacity_kwp),
+            "clear_dc_kwp": "dc_capacity_kwp" in clear,
             "string_count": value("string_count", body.string_count),
             "model_id": body.device_model_id,
             "installed_on": body.installed_on, "status": body.status,

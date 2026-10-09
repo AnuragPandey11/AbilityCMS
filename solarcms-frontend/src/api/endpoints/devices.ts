@@ -169,6 +169,11 @@ export interface DeviceCreate {
    */
   expected_interval_s?: number;
   rated_capacity_kw?: number | null;
+  /**
+   * The kWp of panels behind this unit, from its design. An Inverter's PR
+   * divides by it; clear it with `clear: ["dc_capacity_kwp"]`.
+   */
+  dc_capacity_kwp?: number | null;
   installed_on?: string | null;
   /**
    * How many inputs of the Model's repeating group this unit has — the PV

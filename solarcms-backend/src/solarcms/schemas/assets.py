@@ -37,6 +37,9 @@ class PlantCreate(BaseModel):
     region_code: str | None = None
     ac_capacity_kw: float | None = Field(default=None, ge=0)
     dc_capacity_kwp: float | None = Field(default=None, ge=0)
+    # Rupees per kWh this Plant's energy is worth, from its sale agreement —
+    # prices the energy an Inverter's stops cost (migration 0040).
+    energy_tariff_inr_per_kwh: float | None = Field(default=None, ge=0, le=1000)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     timezone: str = "Asia/Kolkata"
@@ -59,6 +62,9 @@ class PlantUpdate(BaseModel):
     region_code: str | None = None
     ac_capacity_kw: float | None = Field(default=None, ge=0)
     dc_capacity_kwp: float | None = Field(default=None, ge=0)
+    # Rupees per kWh this Plant's energy is worth, from its sale agreement —
+    # prices the energy an Inverter's stops cost (migration 0040).
+    energy_tariff_inr_per_kwh: float | None = Field(default=None, ge=0, le=1000)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     commissioned_on: date | None = None
@@ -119,6 +125,9 @@ class DeviceCreate(BaseModel):
     # faster than the assumed 60s.
     expected_interval_s: int = Field(default=60, ge=1)
     rated_capacity_kw: float | None = Field(default=None, ge=0)
+    # The kWp of panels behind this unit — an Inverter's share of the Plant's
+    # DC capacity, from its design. Its PR divides by this (migration 0040).
+    dc_capacity_kwp: float | None = Field(default=None, gt=0, le=1_000_000)
     installed_on: date | None = None
     # How many inputs of the Model's repeating group this unit has — the number
     # of PV strings on an Inverter. A fact about the unit, not the Model: the
@@ -159,6 +168,9 @@ class DeviceUpdate(BaseModel):
     source_address: str | None = None
     expected_interval_s: int | None = Field(default=None, ge=1)
     rated_capacity_kw: float | None = Field(default=None, ge=0)
+    # The kWp of panels behind this unit — an Inverter's share of the Plant's
+    # DC capacity, from its design. Its PR divides by this (migration 0040).
+    dc_capacity_kwp: float | None = Field(default=None, gt=0, le=1_000_000)
     string_count: int | None = Field(default=None, ge=0, le=512)
     # Another Model of the *same* Device Type — how an Inverter registered from
     # the broker (placeholder Model, no variant) is recorded as String or
@@ -181,7 +193,7 @@ class DeviceUpdate(BaseModel):
         default=None,
         description="Fields to set to NULL: block_id, parent_device_id, "
                     "reports_via_device_id, collector_code, source_address, "
-                    "string_count, sld_stage_override.",
+                    "string_count, dc_capacity_kwp, sld_stage_override.",
     )
 
 
