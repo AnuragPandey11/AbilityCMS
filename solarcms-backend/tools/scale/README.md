@@ -61,7 +61,8 @@ If time passes before measuring, fill the gap so "today" has no hole:
 | `ingest_bench.py` | Ingest's ceiling in messages/s on the fleet's real message mix. |
 | `latency.sh PG_MS [REDIS_MS]` | The same through Toxiproxy with delay on every round trip. ⚠ Its "+1 ms" measured as ~1.9 ms added per round trip on Docker Desktop; calibrate before reading it as a cross-AZ figure. |
 | `publish.py --daylight` + the supervisor + `monitor.py` | The live stack at 50 Plants' message rate: is every process keeping up. |
-| `viewers.py` | People on the Plant and Portfolio screens, at the frontend's own refresh cadence. |
+| `viewers.py` | People on the Plant and Portfolio screens, at the frontend's own refresh cadence. Records response sizes too. |
+| `traffic.py` | Bytes moved during a live run: broker, Redis and Postgres network counters, Postgres WAL (what a replica receives), live-frame fan-out, and log bytes by level. These feed the AWS lines billed per GB. Run with the supervisor started under `LOG_JSON=true`, and with nothing else using the Docker services. |
 
 The live run, with the stack pointed at the load-test database:
 
