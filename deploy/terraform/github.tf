@@ -7,10 +7,15 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 locals {
+  # How GitHub names this repository in a token's subject (variables.tf).
+  github_repo_owner = split("/", var.github_repo)[0]
+  github_repo_name  = split("/", var.github_repo)[1]
+  github_subject    = "repo:${local.github_repo_owner}@${var.github_owner_id}/${local.github_repo_name}@${var.github_repo_id}"
+
   github_runs = {
-    deploy          = ["repo:${var.github_repo}:environment:production"]
-    terraform_plan  = ["repo:${var.github_repo}:pull_request", "repo:${var.github_repo}:ref:refs/heads/main"]
-    terraform_apply = ["repo:${var.github_repo}:environment:infrastructure"]
+    deploy          = ["${local.github_subject}:environment:production"]
+    terraform_plan  = ["${local.github_subject}:pull_request", "${local.github_subject}:ref:refs/heads/main"]
+    terraform_apply = ["${local.github_subject}:environment:infrastructure"]
   }
   github_trust = {
     for name, runs in local.github_runs : name => jsonencode({

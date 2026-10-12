@@ -40,6 +40,21 @@ variable "github_repo" {
   }
 }
 
+# A repository created after 15 July 2026 names itself in its OIDC tokens by
+# name and ID (repo:OWNER@OWNER_ID/REPO@REPO_ID:...), so a deleted repository
+# re-created under the same name is never trusted. Both IDs are public:
+# api.github.com/repos/OWNER/REPO shows them as owner.id and id. They change
+# only if the repository is transferred to another owner.
+variable "github_owner_id" {
+  description = "The numeric ID of the repository's owner."
+  type        = number
+}
+
+variable "github_repo_id" {
+  description = "The numeric ID of the repository."
+  type        = number
+}
+
 variable "data_zone" {
   description = "Data centre of the data server and its database disk."
   type        = string
