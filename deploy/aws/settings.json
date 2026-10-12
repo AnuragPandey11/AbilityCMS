@@ -1,0 +1,24 @@
+{
+  "environment": [
+    {"name": "ENVIRONMENT", "value": "production"},
+    {"name": "LOG_LEVEL", "value": "INFO"},
+    {"name": "REDIS_URL", "value": "redis://127.0.0.1:6379/0"},
+    {"name": "DATABASE_SSL", "value": "require"},
+    {"name": "MQTT_PORT", "value": "1883"},
+    {"name": "MQTT_TLS", "value": "false"},
+    {"name": "MQTT_USERNAME", "value": "solarcms-ingest"},
+    {"name": "MQTT_SUBSCRIBE_TOPICS", "value": "[\"SCMS/V1/#\",\"scms/v1/#\"]"},
+    {"name": "CORS_ORIGINS", "value": "[\"https://app.ability-automation.com\"]"},
+    {"name": "S3_BUCKET", "value": "solarcms-reports-556935884877"},
+    {"name": "S3_REGION", "value": "ap-south-1"},
+    {"name": "SMTP_FROM", "value": "SolarCMS Alerts <alerts@ability-automation.com>"}
+  ],
+  "secrets": [
+    {"name": "DATABASE_URL", "valueFrom": "arn:aws:ssm:ap-south-1:556935884877:parameter/solarcms/prod/DATABASE_URL"},
+    {"name": "MQTT_HOST", "valueFrom": "arn:aws:ssm:ap-south-1:556935884877:parameter/solarcms/prod/MQTT_HOST"},
+    {"name": "MQTT_PASSWORD", "valueFrom": "arn:aws:ssm:ap-south-1:556935884877:parameter/solarcms/prod/MQTT_PASSWORD"},
+    {"name": "JWT_SECRET", "valueFrom": "arn:aws:ssm:ap-south-1:556935884877:parameter/solarcms/prod/JWT_SECRET"},
+    {"name": "ARTIFACT_SIGNING_SECRET", "valueFrom": "arn:aws:ssm:ap-south-1:556935884877:parameter/solarcms/prod/ARTIFACT_SIGNING_SECRET"},
+    {"name": "SMTP_URL", "valueFrom": "arn:aws:ssm:ap-south-1:556935884877:parameter/solarcms/prod/SMTP_URL"}
+  ]
+}

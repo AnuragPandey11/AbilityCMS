@@ -1,0 +1,23 @@
+{
+  "family": "solarcms-proxy",
+  "networkMode": "host",
+  "requiresCompatibilities": ["EC2"],
+  "runtimePlatform": {"cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX"},
+  "executionRoleArn": "arn:aws:iam::556935884877:role/solarcms-task-execution",
+  "volumes": [{"name": "caddy-data", "host": {"sourcePath": "/var/lib/solarcms/caddy"}}],
+  "containerDefinitions": [
+    {
+      "name": "caddy",
+      "image": "caddy:2.10.2",
+      "essential": true,
+      "memoryReservation": 128,
+      "command": ["caddy", "reverse-proxy", "--from", "api.ability-automation.com", "--to", "127.0.0.1:8000"],
+      "mountPoints": [{"sourceVolume": "caddy-data", "containerPath": "/data"}],
+      "restartPolicy": {"enabled": true, "restartAttemptPeriod": 60},
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {"awslogs-group": "/solarcms/app", "awslogs-region": "ap-south-1", "awslogs-stream-prefix": "proxy"}
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "family": "solarcms-migrate",
+  "networkMode": "host",
+  "requiresCompatibilities": ["EC2"],
+  "runtimePlatform": {"cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX"},
+  "executionRoleArn": "arn:aws:iam::556935884877:role/solarcms-task-execution",
+  "taskRoleArn": "arn:aws:iam::556935884877:role/solarcms-task",
+  "containerDefinitions": [
+    {
+      "name": "migrate",
+      "command": ["migrate"],
+      "essential": true,
+      "memoryReservation": 512
+    }
+  ]
+}

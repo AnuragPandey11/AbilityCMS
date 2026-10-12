@@ -1,0 +1,12 @@
+domain          = "ability-automation.com"
+alert_emails    = ["abilitysolarcms@gmail.com", "oakshadeai.business@gmail.com"]
+data_type       = "r7g.large"
+app_type        = "m7g.large"
+data_disk_gb    = 200
+github_repo     = "AnuragPandey11/AbilityCMS"
+github_owner_id = 91328139
+github_repo_id  = 1367352033
+data_zone       = "ap-south-1a"
+app_zone        = "ap-south-1a"
+manage_dns      = false
+outside_checks  = false

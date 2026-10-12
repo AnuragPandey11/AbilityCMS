@@ -1,0 +1,161 @@
+name: Terraform
+
+# Pull request: plan only, shown on the run's summary page.
+# Merge into main: plan again, then apply exactly that plan in the
+# "infrastructure" environment. A plan that deletes or replaces anything is
+# never applied here; it is applied from a Mac after reading it.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "deploy/terraform/**"
+      - "deploy/aws/task-redis.json"
+      - "deploy/aws/task-proxy.json"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/terraform/**"
+      - "deploy/aws/task-redis.json"
+      - "deploy/aws/task-proxy.json"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  AWS_REGION: ap-south-1
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  plan:
+    name: Plan
+    # Waits for TF_CI_ENABLED (step 8.2). Pull requests from forks get no AWS login.
+    if: ${{ vars.TF_CI_ENABLED == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    outputs:
+      changes: ${{ steps.plan.outputs.changes }}
+      removes: ${{ steps.removes.outputs.found }}
+      version: ${{ steps.version.outputs.terraform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "^1.10.0"
+          terraform_wrapper: false
+
+      - name: Note the Terraform version, so the apply uses the same one
+        id: version
+        run: echo "terraform=$(terraform version -json | jq -r .terraform_version)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to AWS as the read-only planner (no stored password)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/solarcms-github-terraform-plan
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Init
+        run: terraform init
+
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -lock=false -no-color -detailed-exitcode -out=tfplan > plan.txt 2>&1
+          code=$?
+          set -e
+          cat plan.txt
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          if [ "$code" -eq 2 ]; then echo "changes=true" >> "$GITHUB_OUTPUT"; else echo "changes=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Look for anything the plan would delete or replace
+        id: removes
+        run: |
+          terraform show -json tfplan > plan.json
+          jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | select(.type != "aws_ecs_task_definition") | .address' plan.json > removes.txt
+          if [ -s removes.txt ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Show the plan on the run's summary page
+        if: ${{ !cancelled() && steps.plan.outcome != 'skipped' }}
+        run: |
+          {
+            echo "## Terraform plan"
+            grep -E '^(Plan:|No changes\.)' plan.txt || true
+            if [ -s removes.txt ]; then
+              echo
+              echo "**This plan deletes or replaces the following, so GitHub will not apply it:**"
+              sed 's/^/- /' removes.txt
+              echo
+              echo "If it is right, apply it from a Mac (runbook: Everyday operations)."
+            fi
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```'
+            head -c 60000 plan.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop if the plan deletes or replaces anything
+        if: ${{ steps.removes.outputs.found == 'true' }}
+        run: |
+          echo "::error::The plan deletes or replaces: $(paste -sd, removes.txt). GitHub does not apply such a plan."
+          exit 1
+
+      - name: Keep the plan for the apply job
+        if: ${{ github.event_name != 'pull_request' && steps.plan.outputs.changes == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: deploy/terraform/tfplan
+          retention-days: 3
+
+  apply:
+    name: Apply
+    needs: plan
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.plan.outputs.changes == 'true' && needs.plan.outputs.removes == 'false' }}
+    runs-on: ubuntu-latest
+    environment: infrastructure
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ needs.plan.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Log in to AWS as the applier (no stored password)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/solarcms-github-terraform-apply
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Fetch the plan shown in the Plan job
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: deploy/terraform
+
+      - name: Init
+        run: terraform init
+
+      - name: Apply exactly that plan
+        run: terraform apply -no-color tfplan

@@ -38,6 +38,7 @@ import httpx
 from runpaths import run_dir
 
 LATENCY: dict[str, list[float]] = defaultdict(list)
+SIZES: dict[str, list[int]] = defaultdict(list)
 ERRORS: dict[str, int] = defaultdict(int)
 
 
@@ -53,6 +54,10 @@ async def get(h: httpx.AsyncClient, label: str, path: str) -> None:
         r = await h.get(path)
         if r.status_code >= 400:
             ERRORS[f"{label} {r.status_code}"] += 1
+        else:
+            # What the load balancer carries: the body as sent, before any
+            # compression a client might negotiate.
+            SIZES[label].append(len(r.content))
     except httpx.HTTPError as exc:
         ERRORS[f"{label} {type(exc).__name__}"] += 1
     LATENCY[label].append(time.perf_counter() - began)
@@ -98,7 +103,9 @@ def summary() -> dict[str, dict[str, float]]:
     out = {}
     for label, values in sorted(LATENCY.items()):
         v = sorted(values)
+        sizes = SIZES.get(label) or [0]
         out[label] = {"n": len(v), "p50_ms": statistics.median(v) * 1000,
+                      "avg_bytes": round(statistics.mean(sizes)),
                       "p95_ms": v[int(len(v) * 0.95) - 1] * 1000 if len(v) > 1 else v[0] * 1000,
                       "max_ms": v[-1] * 1000}
     return out

@@ -10,7 +10,9 @@
  */
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as clientsApi from "@/api/endpoints/clients";
+import { qk } from "@/api/queryKeys";
 import { useUsers } from "@/api/hooks";
 import * as usersApi from "@/api/endpoints/users";
 import type { User } from "@/api/schemas";
@@ -31,6 +33,15 @@ export function UsersAdmin(): JSX.Element {
   const { me } = useAuth();
   const queryClient = useQueryClient();
   const usersQuery = useUsers(canManage);
+  // A platform administrator belongs to no Client, so the new User's Client is
+  // chosen here. `GET /clients` is Super Admin only; a Client Admin never asks.
+  const isPlatformAdmin = me?.platform_admin === true;
+  const clientsQuery = useQuery({
+    queryKey: qk.clients(),
+    queryFn: clientsApi.listClients,
+    enabled: canManage && isPlatformAdmin,
+  });
+  const [clientId, setClientId] = useState<number | "">("");
 
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<User | null>(null);
@@ -51,7 +62,11 @@ export function UsersAdmin(): JSX.Element {
     setError(isApiError(err) ? err.displayMessage : fallback);
 
   const createUser = useMutation({
-    mutationFn: () => usersApi.createUser(form),
+    mutationFn: () =>
+      usersApi.createUser({
+        ...form,
+        ...(isPlatformAdmin && clientId !== "" ? { client_id: clientId } : {}),
+      }),
     onSuccess: () => {
       setCreating(false);
       setError(null);
@@ -264,6 +279,30 @@ export function UsersAdmin(): JSX.Element {
           subtitle="Starts with zero Plants and zero dashboards."
         >
           <div className="grid max-w-3xl grid-cols-2 gap-3 lg:grid-cols-4">
+            {isPlatformAdmin ? (
+              <Field
+                label="Client"
+                required
+                hint="You belong to no Client, so say which this User is for."
+              >
+                <select
+                  value={clientId}
+                  onChange={(event) =>
+                    setClientId(
+                      event.target.value === "" ? "" : Number(event.target.value),
+                    )
+                  }
+                  className={inputClass}
+                >
+                  <option value="">Choose a Client…</option>
+                  {(clientsQuery.data ?? []).map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name} ({client.code})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
             <Field label="Email" required>
               <input
                 type="email"
@@ -319,6 +358,7 @@ export function UsersAdmin(): JSX.Element {
               !form.email ||
               !form.password ||
               !form.full_name ||
+              (isPlatformAdmin && clientId === "") ||
               createUser.isPending
             }
             onClick={() => createUser.mutate()}

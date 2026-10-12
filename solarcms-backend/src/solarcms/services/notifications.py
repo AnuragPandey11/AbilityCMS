@@ -30,7 +30,7 @@ import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 import structlog
@@ -83,8 +83,12 @@ def _send_email_blocking(settings: Settings, to: str, subject: str, body: str) -
     than a library that is not in it.
     """
     url = urlparse(settings.smtp_url or "")
+    # The login and password are percent-encoded in the URL, so a password
+    # holding "/" or "+" (as Amazon SES's do) survives being part of it.
+    username = unquote(url.username) if url.username else None
+    password = unquote(url.password) if url.password else None
     message = EmailMessage()
-    message["From"] = url.username or "solarcms@localhost"
+    message["From"] = settings.smtp_from or username or "solarcms@localhost"
     message["To"] = to
     message["Subject"] = subject
     message.set_content(body)
@@ -97,8 +101,8 @@ def _send_email_blocking(settings: Settings, to: str, subject: str, body: str) -
         client = smtplib.SMTP(url.hostname or "localhost", port, timeout=15)
         client.starttls()
     with client:
-        if url.username and url.password:
-            client.login(url.username, url.password)
+        if username and password:
+            client.login(username, password)
         client.send_message(message)
 
 
