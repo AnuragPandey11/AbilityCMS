@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 
 from solarcms.api import errors
 from solarcms.api.routers import (
@@ -50,24 +51,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("api stopped")
 
 
+class _App(FastAPI):
+    """FastAPI with CORS as the outermost layer, so an error response carries it too.
+
+    Starlette sends the response for an unhandled exception from its outermost
+    layer, outside every `add_middleware` — so that 500 never passed through
+    CORSMiddleware, and the browser reported every server crash as "blocked by
+    CORS policy" rather than as an error (a PDF export, 13 Oct 2026). The
+    exception is still re-raised after the response, so it is logged as before.
+    """
+
+    def build_middleware_stack(self) -> ASGIApp:
+        return CORSMiddleware(
+            super().build_middleware_stack(),
+            # From settings: "*" in development, the app's own domain in
+            # production (docs/CAPACITY_AND_DEPLOYMENT.md §5.2).
+            allow_origins=get_settings().cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(
+    app = _App(
         title="SolarCMS API",
         version="0.1.0",
         lifespan=lifespan,
         # Timestamps in and out are ISO 8601 with offset; display formatting
         # (DD-MM-YYYY, tender §28) is the frontend's job (BACKEND_SPEC §8.3).
         description="Multi-tenant solar plant monitoring.",
-    )
-
-    app.add_middleware(
-        CORSMiddleware,
-        # From settings: "*" in development, the app's own domain in
-        # production (docs/CAPACITY_AND_DEPLOYMENT.md §5.2).
-        allow_origins=get_settings().cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
     )
 
     app.add_exception_handler(HTTPException, errors.http_exception_handler)
