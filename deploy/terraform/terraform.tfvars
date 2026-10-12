@@ -1,5 +1,5 @@
-domain         = "<DOMAIN>"
-alert_emails   = ["<ALERT_EMAIL>", "<ADMIN_EMAIL>"]
+domain         = "ability-automation.com"
+alert_emails   = ["abilitysolarcms@gmail.com", "oakshadeai.business@gmail.com"]
 data_type      = "r7g.large"
 app_type       = "m7g.large"
 data_disk_gb   = 200

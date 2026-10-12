@@ -3,8 +3,8 @@
   "networkMode": "host",
   "requiresCompatibilities": ["EC2"],
   "runtimePlatform": {"cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX"},
-  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/solarcms-task-execution",
-  "taskRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/solarcms-task",
+  "executionRoleArn": "arn:aws:iam::556935884877:role/solarcms-task-execution",
+  "taskRoleArn": "arn:aws:iam::556935884877:role/solarcms-task",
   "containerDefinitions": [
     {
       "name": "migrate",
