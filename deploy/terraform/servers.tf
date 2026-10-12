@@ -45,8 +45,11 @@ resource "aws_ebs_volume" "pgdata" {
   }
 }
 
+# /dev/sdf, not /dev/sdb: Ubuntu's image reserves /dev/sdb and /dev/sdc for
+# instance-store disks, so AWS refuses to attach an EBS disk there even on a
+# server that has none. Inside the server it is still /dev/nvme1n1 (step 5.3).
 resource "aws_volume_attachment" "pgdata" {
-  device_name = "/dev/sdb"
+  device_name = "/dev/sdf"
   volume_id   = aws_ebs_volume.pgdata.id
   instance_id = aws_instance.data.id
   lifecycle {
