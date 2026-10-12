@@ -39,11 +39,33 @@ async def list_users(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_user(
     email: str, password: str, full_name: str, role_code: str, session: SessionDep,
+    client_id: int | None = None,
     user: CurrentUser = Depends(require_permission("user.manage")),
 ) -> dict[str, Any]:
-    if user.client_id is None:
+    """Create a User in a Client.
+
+    A **Client Admin** creates in their own Client and `client_id` is ignored, not
+    validated, so they cannot file a User under another Client. A **platform
+    administrator** belongs to no Client and must name one, as `POST /plants`
+    does, rather than switch the whole session into it first.
+    """
+    if user.is_platform_admin and user.client_id is None:
+        if client_id is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "choose the Client this User belongs to. A platform administrator "
+                "is a member of no Client, so it cannot be inferred.")
+        owner = (await session.execute(
+            text("SELECT id FROM clients WHERE id = :id"), {"id": client_id})).first()
+        if owner is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"no Client with id {client_id}")
+        target_client_id = owner.id
+    elif user.client_id is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "a Client context is required to create a User")
+    else:
+        target_client_id = user.client_id
     if role_code not in ("admin", "employee", "guest"):
         # Deliberately excludes super_admin: a Client Admin must not be able to
         # mint a platform administrator.
@@ -63,13 +85,13 @@ async def create_user(
         INSERT INTO memberships (user_id, client_id, role_id)
         SELECT :user_id, :client_id, id FROM roles WHERE code = :role_code
         ON CONFLICT (user_id, client_id) DO UPDATE SET role_id = EXCLUDED.role_id
-    """), {"user_id": row.id, "client_id": user.client_id, "role_code": role_code})
+    """), {"user_id": row.id, "client_id": target_client_id, "role_code": role_code})
 
     await session.execute(text("""
         INSERT INTO audit_log (client_id, user_id, actor_email, action, entity_type,
                                entity_id)
         VALUES (:client_id, :actor, :email, 'user.create', 'users', :entity_id)
-    """), {"client_id": user.client_id, "actor": user.user_id, "email": email,
+    """), {"client_id": target_client_id, "actor": user.user_id, "email": email,
            "entity_id": row.id})
     # An Employee starts with zero Plant Assignments and therefore sees zero
     # Plants (I-5). That is deliberate: access is granted explicitly, never by

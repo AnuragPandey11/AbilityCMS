@@ -18,6 +18,8 @@ export async function createUser(input: {
   password: string;
   full_name: string;
   role_code: string;
+  /** Required of a platform administrator, ignored for a Client Admin. */
+  client_id?: number;
 }): Promise<unknown> {
   return request("/users", { method: "POST", params: { ...input } });
 }
