@@ -34,6 +34,29 @@ def string_topic_owner(device_code: str) -> str | None:
     return match.group("owner") if match else None
 
 
+def own_topic_of(topic: str) -> str | None:
+    """The topic a string topic's owner publishes its own readings on, or None.
+
+        …/MCR/INVERTER_1_STRING16 → …/MCR/INVERTER_1
+        …/MCR/INVERTER_1_STRING   → …/MCR/INVERTER_1
+        …/MCR/INVERTER_1          → None
+
+    Only the last segment changes: an owner sits in the same enclosure as its
+    strings, and the topic decides the enclosure (Guardrail 13).
+
+    ⚠ An Inverter that publishes on its own topic must be registered *there*,
+    with this one attached. Registered on its string topic instead, its power,
+    energy and voltages arrive on a topic it is not registered on, and every one
+    of them is thrown away. Only equipment whose own topic never publishes (an
+    SMB known only by `SMB1_STRING16`) is registered on a string topic.
+    """
+    head, separator, device_code = topic.rpartition("/")
+    owner = string_topic_owner(device_code)
+    if owner is None or not separator:
+        return None
+    return f"{head}/{owner}"
+
+
 def match_device_type(device_code: str, type_codes: Iterable[str]) -> str | None:
     """Match a Device code against the Device Type catalogue.
 

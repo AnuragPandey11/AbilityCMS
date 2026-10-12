@@ -48,7 +48,7 @@ from solarcms.domain.assumptions import (
     QUALITY_OUT_OF_RANGE,
     alias_for,
 )
-from solarcms.domain.commissioning import match_device_type, string_topic_owner
+from solarcms.domain.commissioning import match_device_type, own_topic_of, string_topic_owner
 
 Category = Literal["data_lost", "data_wrong", "setup"]
 
@@ -138,6 +138,21 @@ class TagHealth:
 
 
 @dataclass(frozen=True, slots=True)
+class OwnTopicFact:
+    """The topic a Device registered on its own string topic really publishes on.
+
+    `…/MCR/INVERTER_1` for an `INVERTER_1` whose registered topic is
+    `…/MCR/INVERTER_1_STRING`: its power, energy and voltages arrive here, on a
+    topic it is not registered on, so none of them is kept.
+    """
+
+    topic: str
+    messages: int
+    last_seen: datetime | None
+    keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class DeviceFact:
     """Everything one registered Device is, and has recently sent."""
 
@@ -165,6 +180,9 @@ class DeviceFact:
     tag_health: tuple[TagHealth, ...] = ()
     # PV input number → the most current it carried in the string window.
     string_current_max: Mapping[int, float] = field(default_factory=dict)
+    # Set only for a Device registered on its own string topic: the topic it
+    # publishes its own readings on, and what arrived there.
+    own_topic: OwnTopicFact | None = None
 
     @property
     def publishes(self) -> bool:
@@ -242,11 +260,19 @@ def find_issues(plant: PlantFacts) -> list[DataIssue]:
     issues: list[DataIssue] = []
 
     moved: set[int] = set()
+    # A Device registered on its own string topic while its own topic publishes:
+    # reported once, on the Device, with the move that fixes it — never also as
+    # "not registered, and the name is taken", which offers only a dismissal.
+    misplaced = {
+        d.own_topic.topic: d for d in devices
+        if d.own_topic is not None and d.own_topic.messages > 0 and d.status == "active"
+    }
+    issues.extend(_on_string_topic_issue(d, plant) for d in misplaced.values())
     # Keys an unattached string topic carries, per owning Device: they stopped
     # arriving *because* the topic is not attached, which that one row says.
     detached_keys: dict[int, set[str]] = {}
     if plant.unregistered is not None:
-        topic_issues = list(_topic_issues(plant, devices, moved))
+        topic_issues = list(_topic_issues(plant, devices, moved, skip=set(misplaced)))
         issues.extend(topic_issues)
         for issue in topic_issues:
             if issue.kind == "string_topic_unattached" and issue.device_id is not None:
@@ -288,18 +314,34 @@ def find_issues(plant: PlantFacts) -> list[DataIssue]:
 
 
 def _topic_issues(
-    plant: PlantFacts, devices: list[DeviceFact], moved: set[int]
+    plant: PlantFacts, devices: list[DeviceFact], moved: set[int],
+    skip: set[str] | None = None,
 ) -> Iterable[DataIssue]:
     assert plant.unregistered is not None
     by_code = {d.code: d for d in devices}
     orphan_strings: dict[str, list[UnregisteredTopic]] = {}
+    live = {t.topic for t in plant.unregistered}
+    # String topics of an owner that is not registered but publishes on its own
+    # topic too: they belong on that topic's card, registered with it in one go.
+    # Offered on a card of their own, they invited registering the owner *on its
+    # string topic*, where its own readings are then thrown away.
+    strings_of: dict[str, list[UnregisteredTopic]] = {}
+    for topic in plant.unregistered:
+        own = own_topic_of(topic.topic)
+        owner_code = string_topic_owner(topic.device_code)
+        if own in live and owner_code is not None and owner_code not in by_code:
+            strings_of.setdefault(own, []).append(topic)
+    held = {t.topic for group in strings_of.values() for t in group}
 
     for topic in sorted(plant.unregistered, key=lambda t: natural_key(t.device_code)):
+        if skip and topic.topic in skip:
+            continue
         owner_code = string_topic_owner(topic.device_code)
         if owner_code is not None:
             owner = by_code.get(owner_code)
             if owner is None:
-                orphan_strings.setdefault(owner_code, []).append(topic)
+                if topic.topic not in held:
+                    orphan_strings.setdefault(owner_code, []).append(topic)
                 continue
             if owner.collector_code == topic.collector_code:
                 yield DataIssue(
@@ -345,6 +387,12 @@ def _topic_issues(
             continue
 
         suggested = match_device_type(topic.device_code, plant.device_type_codes)
+        strings = sorted(strings_of.get(topic.topic, ()), key=lambda t: natural_key(t.device_code))
+        with_strings = (
+            f" Registering it also attaches {', '.join(s.device_code for s in strings)}, "
+            "its PV string readings, so they are kept with it."
+            if strings and registered is None else ""
+        )
         yield DataIssue(
             key=f"unregistered:{topic.topic}",
             kind="unregistered_topic", category="data_lost",
@@ -361,10 +409,12 @@ def _topic_issues(
                     "No Device Type matches its name, so choose the closest when "
                     "registering; a new kind of equipment needs a developer."
                 )
+                + with_strings
             ),
             device_code=topic.device_code,
             facts={**_topic_facts(topic), "suggested_type": suggested,
-                   "code_taken": registered is not None},
+                   "code_taken": registered is not None,
+                   "string_topics": [_topic_facts(s) for s in strings]},
         )
 
     for owner_code, topics in sorted(orphan_strings.items(), key=lambda kv: natural_key(kv[0])):
@@ -400,6 +450,56 @@ def _topic_facts(topic: UnregisteredTopic) -> dict[str, Any]:
         "interval_s": round(topic.interval_s) if topic.interval_s else None,
         "keys": list(topic.keys),
     }
+
+
+def _on_string_topic_issue(device: DeviceFact, plant: PlantFacts) -> DataIssue:
+    """A Device registered on its own string topic, while its own topic publishes.
+
+    The fix moves it to its own topic and attaches the string topic back to it,
+    so both keep feeding the one Device, then maps what its own topic sends.
+    Each key is offered with the Tag it usually means on this Device Type, as
+    `unmapped_key` does; a key with no suggestion is left for a person.
+    """
+    own = device.own_topic
+    assert own is not None
+    bound_keys = {b.source_key for b in device.bindings}
+    bound_tags = {b.tag_code for b in device.bindings}
+    suggested: list[dict[str, str]] = []
+    unsuggested: list[str] = []
+    for key in sorted(own.keys):
+        if key in bound_keys:
+            continue
+        tag = alias_for(key, device.type_code)
+        if tag is not None and plant.tag_codes and tag not in plant.tag_codes:
+            tag = None
+        if tag is None or tag in bound_tags:
+            unsuggested.append(key)
+        else:
+            suggested.append({"source_key": key, "tag_code": tag})
+            bound_tags.add(tag)
+    return DataIssue(
+        key=f"on_string_topic:{device.device_id}",
+        kind="registered_on_string_topic", category="data_lost",
+        title=f"{device.code} is registered on its string topic, not its own",
+        detail=(
+            f"{device.code} publishes its own readings on {own.topic}, but it is "
+            f"registered on {device.primary_topic}, the topic that carries only its "
+            "PV strings, so its power, energy and voltages are thrown away. Moving it "
+            "to its own topic keeps the string topic attached and maps "
+            f"{len(suggested)} of its readings."
+        ),
+        device_id=device.device_id, device_code=device.code,
+        facts={
+            "topic": own.topic,
+            "string_topic": device.primary_topic,
+            "collector_code": device.collector_code,
+            "messages": own.messages,
+            "last_seen": own.last_seen,
+            "keys": list(own.keys),
+            "suggested_bindings": suggested,
+            "unsuggested_keys": unsuggested,
+        },
+    )
 
 
 # ── One Device ──────────────────────────────────────────────────────────────

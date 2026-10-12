@@ -17,6 +17,7 @@ from solarcms.api.patching import patch_assignments
 from solarcms.cache import live
 from solarcms.cache.live import invalidate_resolution
 from solarcms.domain.assumptions import SOURCE_KEY_ALIASES
+from solarcms.domain.commissioning import own_topic_of, string_topic_owner
 from solarcms.domain.decoding import TopicPattern, collector_in_topic
 from solarcms.domain.sld import crosses_collector_boundary, would_create_cycle
 from solarcms.schemas.assets import (
@@ -152,6 +153,40 @@ async def _refuse_topic_held_as_extra(session: Any, topic: str) -> None:
             f"{topic!r} is already one of {holder.code}'s extra topics. Remove it "
             f"there first; a topic decides which Device a message belongs to, so "
             f"two Devices cannot share one.")
+
+
+async def _refuse_owner_on_its_string_topic(
+    session: Any, *, device_code: str, topic: str | None,
+) -> None:
+    """Refuse a Device registered on its own string topic while its own topic publishes.
+
+    `…/MCR/INVERTER_1_STRING` carries only INVERTER_1's PV strings. Registered
+    there, INVERTER_1's power, energy and voltages go on arriving on
+    `…/MCR/INVERTER_1`, a topic it is not registered on, and every one of them is
+    thrown away — while every screen shows it registered. It happened on
+    12 Oct 2026 to four Inverters at once, from a screen that offered it.
+
+    Equipment whose own topic never publishes (an SMB known only by
+    `SMB1_STRING16`) is still registered on a string topic: that is the only
+    topic it has. "Publishes" is a message within a day, read from what ingest
+    has stored — the same evidence discovery shows.
+    """
+    if not topic:
+        return
+    own = own_topic_of(topic)
+    if own is None or string_topic_owner(topic.rsplit("/", 1)[-1]) != device_code:
+        return
+    heard = (await session.execute(text("""
+        SELECT max(time) FROM mqtt_raw_v
+         WHERE topic = :topic AND time > now() - interval '1 day'
+    """), {"topic": own})).scalar()
+    if heard is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{device_code} publishes its own readings on {own!r}. Register it on "
+            f"that topic, then attach {topic!r} to it: that topic carries only its PV "
+            f"strings, and registered there its power, energy and voltages would be "
+            f"thrown away.")
 
 
 @router.get("/plants/{plant_id}/devices")
@@ -350,6 +385,8 @@ async def _insert_devices(
         )
         if device.source_address:
             await _refuse_topic_held_as_extra(session, device.source_address)
+        await _refuse_owner_on_its_string_topic(
+            session, device_code=device.code, topic=device.source_address)
         try:
             row = (await session.execute(text("""
                 INSERT INTO devices (client_id, plant_id, device_model_id, code, name,
@@ -563,6 +600,8 @@ async def update_device(
 
     if body.source_address and body.source_address != before.source_address:
         await _refuse_topic_held_as_extra(session, body.source_address)
+        await _refuse_owner_on_its_string_topic(
+            session, device_code=before.code, topic=body.source_address)
 
     # ── Refuse a loop at the moment it is made ───────────────────────────────
     # The composite foreign key already forces a parent to share the Plant, and a

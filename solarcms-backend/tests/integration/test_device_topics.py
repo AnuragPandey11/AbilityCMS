@@ -104,3 +104,69 @@ class TestExtraTopics:
                    AND action LIKE 'device.topic.%' ORDER BY id
             """), {"id": device_id})).all()]
         assert actions == ["device.topic.add", "device.topic.remove"]
+
+
+class TestAnInverterIsNeverRegisteredOnItsStrings:
+    """12 Oct 2026, Vardhman Group: four Inverters registered on `…_STRING` topics.
+
+    Registered there, an Inverter's power, energy and voltages arrive on its own
+    topic and are thrown away while every screen calls it registered. The server
+    refuses it from any route while the own topic publishes, and still allows
+    equipment known only by its strings (ISPL's SMB1).
+    """
+
+    async def test_refused_while_its_own_topic_publishes_and_moved_by_patch(self) -> None:
+        http, client_id = await _admin_client()
+        model = await _model_id("INVERTER")
+        async with scoped_session(SecurityContext.platform(0), role=None) as s:
+            client_code = (await s.execute(text(
+                "SELECT code FROM clients WHERE id = :id"), {"id": client_id})).scalar_one()
+        plant_code = f"OS{uuid.uuid4().hex[:6]}"
+        own = f"SCMS/V1/{client_code}/{plant_code}/MCR/INVERTER_1"
+        strings = f"{own}_STRING"
+        # Its own topic is publishing: one message stored for it, as ingest stores
+        # one it has attributed to the Client.
+        async with scoped_session(SecurityContext.platform(0), role=None) as s:
+            await s.execute(text("""
+                INSERT INTO mqtt_raw (time, topic, seq, payload, client_id, quarantined)
+                VALUES (now(), :topic, 0, CAST('{"PAC": "0"}' AS jsonb), :client, false)
+            """), {"topic": own, "client": client_id})
+
+        async with http:
+            plant = (await http.post("/plants", json={
+                "code": plant_code, "name": "Own Topic"})).json()
+            refused = await http.post(f"/devices?plant_id={plant['id']}", json={
+                "code": "INVERTER_1", "name": "Inverter 1", "device_model_id": model,
+                "source_address": strings, "collector_code": "MCR"})
+            assert refused.status_code == 422, refused.text
+            assert "publishes its own readings" in refused.json()["detail"]
+
+            # On its own topic it registers, and its strings attach.
+            created = await http.post(f"/devices?plant_id={plant['id']}", json={
+                "code": "INVERTER_1", "name": "Inverter 1", "device_model_id": model,
+                "source_address": own, "collector_code": "MCR"})
+            assert created.status_code == 201, created.text
+            device_id = created.json()["id"]
+            attached = await http.post(f"/devices/{device_id}/topics", json={"topic": strings})
+            assert attached.status_code == 201, attached.text
+
+            # A move back onto its strings is refused the same way.
+            detached = await http.delete(f"/devices/{device_id}/topics", params={"topic": strings})
+            assert detached.status_code in (200, 204), detached.text
+            moved = await http.patch(f"/devices/{device_id}", json={"source_address": strings})
+            assert moved.status_code == 422, moved.text
+
+    async def test_strings_only_equipment_still_registers_on_its_strings(self) -> None:
+        http, client_id = await _admin_client()
+        model = await _model_id("SMB")
+        async with scoped_session(SecurityContext.platform(0), role=None) as s:
+            client_code = (await s.execute(text(
+                "SELECT code FROM clients WHERE id = :id"), {"id": client_id})).scalar_one()
+        plant_code = f"SO{uuid.uuid4().hex[:6]}"
+        async with http:
+            plant = (await http.post("/plants", json={
+                "code": plant_code, "name": "Strings Only"})).json()
+            created = await http.post(f"/devices?plant_id={plant['id']}", json={
+                "code": "SMB1", "name": "SMB 1", "device_model_id": model,
+                "source_address": f"SCMS/V1/{client_code}/{plant_code}/SMB1_STRING16"})
+            assert created.status_code == 201, created.text

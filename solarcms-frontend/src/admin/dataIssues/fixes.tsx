@@ -19,8 +19,9 @@ import type { DataIssue } from "@/api/endpoints/dataIssues";
 import type { DeviceModel, Tag } from "@/api/schemas";
 import { Button } from "@/components/ui";
 import { formatAge, formatDateTime } from "@/format/datetime";
+import { describeMove, moveToOwnTopic } from "@/admin/stringTopics";
 import {
-  bool, bursts, num, numbers, plain, sample, str, strings, topics,
+  bool, bursts, num, numbers, plain, sample, str, strings, suggestedBindings, topics,
 } from "./kinds";
 import type { IssueActions } from "./useIssueActions";
 
@@ -60,7 +61,8 @@ export function RowSummary({ issue, timezone }: { issue: DataIssue; timezone: st
   switch (issue.kind) {
     case "unregistered_topic":
     case "topic_moved":
-    case "string_topic_unattached":
+    case "string_topic_unattached": {
+      const riding = issue.kind === "unregistered_topic" ? topics(issue, "string_topics") : [];
       return (
         <>
           <Topic value={str(issue, "topic")} />
@@ -68,6 +70,20 @@ export function RowSummary({ issue, timezone }: { issue: DataIssue; timezone: st
             {strings(issue, "keys").length} reading(s) · every ~{plain(num(issue, "interval_s"))} s ·
             last {ago(str(issue, "last_seen"))}
             {issue.kind === "topic_moved" ? <> · was <Mono>{str(issue, "old_topic") ?? "no topic"}</Mono></> : null}
+            {riding.length ? (
+              <> · its strings arrive on {riding.map((t) => <Mono key={t.topic}>{t.device_code} </Mono>)}and are attached with it</>
+            ) : null}
+          </Muted>
+        </>
+      );
+    }
+    case "registered_on_string_topic":
+      return (
+        <>
+          <Topic value={str(issue, "topic")} />
+          <Muted>
+            registered on <Mono>{str(issue, "string_topic") ?? "—"}</Mono> · {strings(issue, "keys").length} reading(s)
+            thrown away · last {ago(str(issue, "last_seen"))}
           </Muted>
         </>
       );
@@ -248,6 +264,30 @@ export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): J
     );
   }
   switch (issue.kind) {
+    case "registered_on_string_topic": {
+      const deviceId = issue.device_id;
+      const own = str(issue, "topic");
+      const strings_ = str(issue, "string_topic");
+      const code = issue.device_code ?? "the Device";
+      return (
+        <Button
+          variant="primary"
+          disabled={busy || deviceId === null || own === null || strings_ === null}
+          title="Moves it to its own topic, attaches the string topic back to it, and maps what its own topic sends."
+          onClick={() => {
+            let message = `${code} moved to its own topic.`;
+            void ctx.actions.run([issue.key], async () => {
+              const result = await moveToOwnTopic(
+                deviceId as number, own as string, strings_ as string, suggestedBindings(issue),
+              );
+              message = describeMove(code, result);
+            }, () => message);
+          }}
+        >
+          {busy ? "Moving…" : `Move ${code} to its own topic`}
+        </Button>
+      );
+    }
     case "unregistered_topic":
       return <RegisterFix issue={issue} ctx={ctx} busy={busy} />;
     case "unregistered_strings":
@@ -382,6 +422,7 @@ export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): J
 function RegisterFix({ issue, ctx, busy }: { issue: DataIssue; ctx: FixContext; busy: boolean }): JSX.Element {
   const isStrings = issue.kind === "unregistered_strings";
   const ownerTopics = isStrings ? topics(issue) : [];
+  const ridingStrings = isStrings ? [] : topics(issue, "string_topics");
   const code = isStrings ? (str(issue, "owner_code") ?? "") : (str(issue, "device_code") ?? "");
   const suggestedType = str(issue, "suggested_type");
   const candidates = useMemo(
@@ -423,7 +464,18 @@ function RegisterFix({ issue, ctx, busy }: { issue: DataIssue; ctx: FixContext; 
       for (const extra of ownerTopics.slice(1)) {
         await devicesApi.addDeviceTopic(created.id, extra.topic, "Attached when registered from Data Issues");
       }
-    }, `${code} registered${isStrings && ownerTopics.length > 1 ? `, with ${ownerTopics.length} topics` : ""}.`);
+      // An Inverter's string topics, registered with it in the same step: its
+      // strings are its own inputs, never equipment of their own.
+      for (const extra of ridingStrings) {
+        await devicesApi.addDeviceTopic(created.id, extra.topic, "Attached when registered from Data Issues");
+      }
+    }, `${code} registered${
+      isStrings && ownerTopics.length > 1
+        ? `, with ${ownerTopics.length} topics`
+        : ridingStrings.length
+          ? `, with ${ridingStrings.map((t) => t.device_code).join(", ")} attached`
+          : ""
+    }.`);
   };
 
   return (

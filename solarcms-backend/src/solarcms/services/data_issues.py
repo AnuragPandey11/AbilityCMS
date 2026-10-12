@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import statistics
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import pairwise
 from typing import Any
@@ -45,9 +46,11 @@ from solarcms.domain.assumptions import (
     QUALITY_OUT_OF_RANGE,
     QUALITY_UNPARSEABLE,
 )
+from solarcms.domain.commissioning import own_topic_of, string_topic_owner
 from solarcms.domain.data_issues import (
     BindingFact,
     DeviceFact,
+    OwnTopicFact,
     PlantFacts,
     ReplayBurst,
     TagHealth,
@@ -58,6 +61,16 @@ from solarcms.services import scope
 
 # The same look-back discovery uses, so a topic offered there is offered here.
 UNREGISTERED_WINDOW = "interval '7 days'"
+
+
+@dataclass(slots=True)
+class _OwnSeen:
+    """What arrived on a Device's own topic while it is registered elsewhere."""
+
+    messages: int = 0
+    last: datetime | None = None
+    # Keys in the order first seen, newest message first.
+    keys: dict[str, None] = field(default_factory=dict)
 
 
 async def gather(
@@ -94,6 +107,8 @@ async def gather(
     primary_times: dict[int, list[datetime]] = defaultdict(list)
     health: dict[int, list[TagHealth]] = defaultdict(list)
     string_max: dict[int, dict[int, float]] = defaultdict(dict)
+    own_of: dict[str, int] = {}
+    own_seen: dict[str, _OwnSeen] = {}
 
     if device_ids:
         for row in (await session.execute(text("""
@@ -148,6 +163,40 @@ async def gather(
                     # Newest first, so the first value seen is the latest.
                     keys[device_id].setdefault(key, value)
 
+        # A Device registered on its own string topic (`INVERTER_1` on
+        # `…/INVERTER_1_STRING`) whose own topic `…/INVERTER_1` publishes too:
+        # what arrives there is thrown away, so the domain offers the move.
+        own_of = {
+            own: row.id for row in device_rows
+            if row.source_address
+            and (own := own_topic_of(row.source_address)) is not None
+            and string_topic_owner(row.source_address.rsplit("/", 1)[-1]) == row.code
+            and own not in topics
+        }
+        if own_of:
+            for row in (await session.execute(text("""
+                SELECT t.topic, m.time, m.payload
+                  FROM unnest(CAST(:topics AS text[])) AS t(topic)
+                  CROSS JOIN LATERAL (
+                      SELECT r.time, r.payload FROM mqtt_raw_v r
+                       WHERE r.topic = t.topic
+                         AND r.time > now() - make_interval(
+                                 secs => CAST(:window AS double precision))
+                       ORDER BY r.time DESC
+                       LIMIT :limit
+                  ) m
+                 ORDER BY m.time DESC
+            """), {"topics": list(own_of), "window": DATA_ISSUE_PAYLOAD_WINDOW_S,
+                   "limit": DATA_ISSUE_PAYLOAD_MESSAGES})).all():
+                seen = own_seen.setdefault(row.topic, _OwnSeen())
+                seen.messages += 1
+                # Newest first, so the first time seen is the latest.
+                seen.last = seen.last or row.time
+                payload = row.payload if isinstance(row.payload, dict) else {}
+                flat, _ = normalise_payload(payload)
+                for key in flat:
+                    seen.keys.setdefault(key, None)
+
         # Judged against the range ingest judged them against: the binding's
         # own where it narrows the Tag's, else the Tag's.
         for row in (await session.execute(text("""
@@ -199,10 +248,13 @@ async def gather(
                     index = int(row.tag_code[2:].split("_", 1)[0])
                     string_max[row.device_id][index] = float(row.peak)
 
+    own_by_device = {device_id: own for own, device_id in own_of.items()}
     devices = []
     for row in device_rows:
         times = sorted(primary_times.get(row.id, []))
         gaps = [(b - a).total_seconds() for a, b in pairwise(times)]
+        own = own_by_device.get(row.id)
+        seen = own_seen.get(own, _OwnSeen()) if own else _OwnSeen()
         devices.append(DeviceFact(
             device_id=row.id, code=row.code, type_code=row.type_code,
             status=row.status, comm_status=row.comm_status,
@@ -220,6 +272,10 @@ async def gather(
             measured_gaps=len(gaps),
             tag_health=tuple(health.get(row.id, ())),
             string_current_max=string_max.get(row.id, {}),
+            own_topic=OwnTopicFact(
+                topic=own, messages=seen.messages, last_seen=seen.last,
+                keys=tuple(seen.keys),
+            ) if own else None,
         ))
 
     unregistered = (
