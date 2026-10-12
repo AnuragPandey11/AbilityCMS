@@ -31,6 +31,7 @@ import {
 import * as dataIssuesApi from "@/api/endpoints/dataIssues";
 import * as devicesApi from "@/api/endpoints/devices";
 import * as discoveryApi from "@/api/endpoints/discovery";
+import { moveToOwnTopic } from "@/admin/stringTopics";
 import type { DataIssue, IssueCategory } from "@/api/endpoints/dataIssues";
 import { usePermission } from "@/auth/usePermission";
 import { usePlantScope } from "@/state/usePlantScope";
@@ -39,7 +40,7 @@ import { Badge, Button, Panel } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonPanel } from "@/components/state";
 import { IconCheck } from "@/components/icons";
 import { formatAge, formatDateTime, formatTime } from "@/format/datetime";
-import { CATEGORIES, groupByKind, kindInfo, num, str, type IssueGroup } from "./kinds";
+import { CATEGORIES, groupByKind, kindInfo, num, str, suggestedBindings, type IssueGroup } from "./kinds";
 import {
   AckControl, RowFix, RowSummary, compactInput, inverterModelFor, type FixContext,
 } from "./fixes";
@@ -446,6 +447,33 @@ function BulkActions({ group, ctx }: { group: IssueGroup; ctx: FixContext }): JS
 
   let fix: JSX.Element | null = null;
   switch (group.kind) {
+    case "registered_on_string_topic": {
+      let mapped = 0;
+      const skipped: string[] = [];
+      fix = ctx.canManage ? (
+        <Button
+          variant="primary"
+          disabled={busy}
+          title="Moves each to its own topic, attaches its string topic back to it, and maps what its own topic sends."
+          onClick={() =>
+            void ctx.actions.run(keys, each(async (issue) => {
+              const result = await moveToOwnTopic(
+                issue.device_id as number, str(issue, "topic") as string,
+                str(issue, "string_topic") as string, suggestedBindings(issue),
+              );
+              mapped += result.mapped;
+              skipped.push(...result.skipped.map((key) => `${issue.device_code ?? ""} ${key}`));
+            }), () =>
+              `${issues.length} moved to their own topics, string topics still attached, and ` +
+              `${mapped} reading(s) mapped.` +
+              (skipped.length ? ` Not mapped: ${skipped.join(", ")} — see the unmapped card.` : ""))
+          }
+        >
+          Move all {issues.length}
+        </Button>
+      ) : null;
+      break;
+    }
     case "string_topic_unattached":
       fix = ctx.canManage ? (
         <Button

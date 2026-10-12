@@ -22,6 +22,11 @@ export const KINDS: Record<string, KindInfo> = {
     label: "Plant stopped sending",
     explain: "Nothing has arrived from any of this Plant's Devices recently.",
   },
+  registered_on_string_topic: {
+    label: "Inverter registered on its string topic",
+    explain:
+      "It is registered on the topic that carries only its PV strings, so the power, energy and voltages it sends on its own topic are thrown away. Moving it to its own topic keeps the string topic attached.",
+  },
   topic_moved: {
     label: "Device moved to a new topic",
     explain:
@@ -180,9 +185,13 @@ export interface TopicFact {
   keys: string[];
 }
 
-/** `facts.topics` of an `unregistered_strings` issue. */
-export function topics(issue: DataIssue): TopicFact[] {
-  const value = issue.facts.topics;
+/**
+ * `facts.topics` of an `unregistered_strings` issue, or another list of topics
+ * by name — `facts.string_topics` of an `unregistered_topic` issue, the string
+ * topics registered with it.
+ */
+export function topics(issue: DataIssue, key = "topics"): TopicFact[] {
+  const value = issue.facts[key];
   if (!Array.isArray(value)) return [];
   const out: TopicFact[] = [];
   for (const item of value) {
@@ -235,4 +244,17 @@ export function sample(value: unknown): string {
 export function plain(value: number | null): string {
   if (value === null) return "—";
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+}
+
+/** `facts.suggested_bindings` of a `registered_on_string_topic` issue. */
+export function suggestedBindings(issue: DataIssue): { source_key: string; tag_code: string }[] {
+  const value = issue.facts.suggested_bindings;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (item === null || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    return typeof record.source_key === "string" && typeof record.tag_code === "string"
+      ? [{ source_key: record.source_key, tag_code: record.tag_code }]
+      : [];
+  });
 }

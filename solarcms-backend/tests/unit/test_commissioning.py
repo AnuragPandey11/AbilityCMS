@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from solarcms.domain.assumptions import MAX_PV_STRINGS, TAG_SPECS, alias_for
-from solarcms.domain.commissioning import match_device_type, string_topic_owner
+from solarcms.domain.commissioning import match_device_type, own_topic_of, string_topic_owner
 
 # The seeded catalogue's codes (services/seed.DEVICE_TYPES), as a literal so the
 # test reads the same whatever the seed later grows.
@@ -38,6 +38,27 @@ class TestStringTopicOwner:
     ])
     def test_anything_else_is_its_own_device(self, code: str) -> None:
         assert string_topic_owner(code) is None
+
+
+class TestOwnTopicOf:
+    @pytest.mark.parametrize(("topic", "own"), [
+        # Vardhman Group, 12 Oct 2026: no number after _STRING.
+        ("SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MCR/INVERTER_1_STRING",
+         "SCMS/V1/VARDHMAN_GROUP/SPINNING_AND_GENERAL_MILLS/MCR/INVERTER_1"),
+        # KULAR_GREEN, 6 Oct 2026.
+        ("SCMS/V1/KULAR_GREEN/KULAR_GREEN/MCR/INVERTER_10_STRING28",
+         "SCMS/V1/KULAR_GREEN/KULAR_GREEN/MCR/INVERTER_10"),
+        # Five segments: no enclosure, and none is invented.
+        ("SCMS/V1/ISPL/UNIT1/SMB1_STRING16", "SCMS/V1/ISPL/UNIT1/SMB1"),
+    ])
+    def test_a_string_topic_names_its_owners_own_topic(self, topic: str, own: str) -> None:
+        assert own_topic_of(topic) == own
+
+    @pytest.mark.parametrize("topic", [
+        "SCMS/V1/C/P/MCR/INVERTER_1", "SCMS/V1/C/P/MFM", "INVERTER_1_STRING16", "",
+    ])
+    def test_anything_else_has_none(self, topic: str) -> None:
+        assert own_topic_of(topic) is None
 
 
 class TestMatchDeviceType:

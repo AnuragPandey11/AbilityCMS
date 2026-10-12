@@ -19,9 +19,15 @@ export interface IssueActions {
   done: string | null;
   /**
    * Run `work` for the rows named by `keys`. Runs one at a time when given
-   * several, so a bulk fix stops at nothing and reports per row.
+   * several, so a bulk fix stops at nothing and reports per row. A function
+   * for `doneMessage` is read once the work is over, so it can say what the
+   * work found (how many readings a move mapped).
    */
-  run: (keys: string[], work: (key: string) => Promise<void>, doneMessage: string) => Promise<void>;
+  run: (
+    keys: string[],
+    work: (key: string) => Promise<void>,
+    doneMessage: string | (() => string),
+  ) => Promise<void>;
   clearDone: () => void;
 }
 
@@ -77,10 +83,11 @@ export function useIssueActions(plantId: number | null): IssueActions {
         return next;
       });
       if (failed < keys.length) {
+        const said = typeof doneMessage === "function" ? doneMessage() : doneMessage;
         setDone(
           failed === 0
-            ? doneMessage
-            : `${doneMessage} ${failed} of ${keys.length} could not be done — see the rows marked in red.`,
+            ? said
+            : `${said} ${failed} of ${keys.length} could not be done — see the rows marked in red.`,
         );
       }
       await refresh();

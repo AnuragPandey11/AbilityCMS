@@ -52,6 +52,13 @@ import { formatAge } from "@/format/datetime";
 import type { DeviceListItem } from "@/api/schemas";
 import type { DiscoveredDevice } from "@/api/endpoints/discovery";
 import { PublishingCodes, usePrefillOnce, type PublishingCode } from "@/admin/PublishingCodes";
+import {
+  describeMove,
+  moveToOwnTopic,
+  onItsOwnStringTopic,
+  ownTopicOf,
+  type SuggestedBinding,
+} from "@/admin/stringTopics";
 
 const AGE = (iso: string): string => formatAge((Date.now() - Date.parse(iso)) / 1000);
 
@@ -136,6 +143,10 @@ export function PlantEditor(): JSX.Element {
     enabled: canDiscover && Boolean(plant?.client_code),
     retry: false,
   });
+  const discoveredHere = useMemo(
+    () => discovered.data?.find((p) => p.plant_code === plant?.code)?.devices ?? [],
+    [discovered.data, plant?.code],
+  );
 
   const observed = useQuery({
     queryKey: ["discovery", "topic", expanded, modelFor[expanded ?? ""] ?? null],
@@ -145,7 +156,11 @@ export function PlantEditor(): JSX.Element {
       const modelId = modelFor[expanded ?? ""] ?? null;
       const type = modelId
         ? modelsQuery.data?.find((m) => m.id === modelId)?.device_type_code
-        : row?.device?.type_code;
+        : (row?.device?.type_code
+          // A topic whose name a registered Device already holds (an Inverter
+          // registered on its own string topic): read it as that Device's Type,
+          // since `VRY` is kV on a meter and V on an Inverter.
+          ?? devices.find((d) => d.code === row?.found?.device_code)?.type_code);
       return discoveryApi.discoverTopic(String(topic), type ?? null);
     },
     enabled: canDiscover && expanded !== null,
@@ -249,15 +264,16 @@ export function PlantEditor(): JSX.Element {
       // A string topic whose owner publishes nothing else (an SMB known only
       // by `SMB1_STRING16`) registers the *owner*, never a Device called
       // `SMB1_STRING16`.
-      const code = row.found.string_owner_code ?? row.found.device_code;
+      const found = row.found;
+      const code = found.string_owner_code ?? found.device_code;
       const observedKeys = observed.data?.keys.map((key) => key.source_key) ?? [];
-      return devicesApi.createDevice(plantId, {
+      const created = await devicesApi.createDevice(plantId, {
         code,
         name: code.replace(/[_-]+/g, " "),
         device_model_id: modelId,
-        source_address: row.found.topic,
+        source_address: found.topic,
         // Read from the topic, never chosen — the topic decides the enclosure.
-        collector_code: row.found.collector_code,
+        collector_code: found.collector_code,
         // Measured, not the assumed 60s. Health thresholds multiply this.
         expected_interval_s: observed.data?.interval_s ?? 60,
         // What it was seen sending, and only that: a Device on its Type's
@@ -267,12 +283,33 @@ export function PlantEditor(): JSX.Element {
         bind_from_model: observedKeys.length === 0,
         observed_keys: observedKeys,
       });
+      // Its string topics — an Inverter's `…_STRING16`/`…_STRING28`, an SMB's
+      // second — are its own inputs: attached in the same step, rather than left
+      // in the list to be found later, or registered as equipment of their own.
+      const riding = discoveredHere.filter(
+        (d) =>
+          d.string_owner_code === code &&
+          d.topic !== found.topic &&
+          d.registered_device_id === null &&
+          d.collector_code === found.collector_code &&
+          d.status !== "silent",
+      );
+      for (const extra of riding) {
+        await devicesApi.addDeviceTopic(
+          created.id, extra.topic, "Attached when registered from Plants & Devices",
+        );
+      }
+      return { ...created, attached: riding.map((d) => d.device_code) };
     },
     onSuccess: (created) => {
       setError(null);
       setNote(
         `${created.code} registered${
           created.bindings ? ` with ${created.bindings.bound} Tag binding(s)` : ""
+        }${
+          created.attached.length
+            ? `, and ${created.attached.join(", ")} attached as its string topic${created.attached.length > 1 ? "s" : ""}`
+            : ""
         }. Wire it up in Plant Hierarchy when you know what it feeds.`,
       );
       setExpanded(null);
@@ -329,8 +366,82 @@ export function PlantEditor(): JSX.Element {
       setExpanded(null);
       refresh();
     },
-    onError: (err) =>
-      setError(isApiError(err) ? err.displayMessage : "Could not remove the Device."),
+    onError: (err, { id, force }) => {
+      const message = isApiError(err) ? err.displayMessage : "Could not remove the Device.";
+      // Refused because it holds Readings: say how many, and ask once more —
+      // a Device registered by mistake minutes ago is otherwise a dead end,
+      // since decommissioning keeps its name taken.
+      if (!force && isApiError(err) && err.status === 409 && /stored Reading/.test(message)) {
+        const code = devices.find((d) => d.id === id)?.code ?? "this Device";
+        const ok = window.confirm(
+          `${message}\n\nRemove ${code} and permanently delete those Readings too? ` +
+            `This cannot be undone.`,
+        );
+        if (ok) {
+          remove.mutate({ id, force: true });
+          return;
+        }
+      }
+      setError(message);
+    },
+  });
+
+  // ── An Inverter registered on its own string topic ──────────────────────
+  // Publishing now and registered to nothing, by topic.
+  const liveUnregistered = useMemo(
+    () =>
+      new Set(
+        rows.flatMap((r) =>
+          r.device === null && r.found && r.found.status !== "silent" ? [r.found.topic] : [],
+        ),
+      ),
+    [rows],
+  );
+  /** A string row whose owner is not registered but publishes its own topic here. */
+  const ownerPendingFor = (row: Row): string | null => {
+    const found = row.found;
+    if (row.device || !found?.string_owner_code || found.string_owner_device_id != null) return null;
+    const own = ownTopicOf(found.topic);
+    return own !== null && liveUnregistered.has(own) ? found.string_owner_code : null;
+  };
+  /** The Device registered, by mistake, on this own-topic row's string topic. */
+  const misplacedFor = (row: Row): DeviceListItem | null => {
+    const found = row.found;
+    if (row.device || !found) return null;
+    return (
+      devices.find(
+        (d) =>
+          d.code === found.device_code &&
+          d.source_address != null &&
+          ownTopicOf(d.source_address) === found.topic,
+      ) ?? null
+    );
+  };
+  /** A registered Device on its own string topic while its own topic publishes. */
+  const strandedFor = (row: Row): boolean => {
+    const device = row.device;
+    if (!device?.source_address || !onItsOwnStringTopic(device.code, device.source_address)) {
+      return false;
+    }
+    const own = ownTopicOf(device.source_address);
+    return own !== null && liveUnregistered.has(own);
+  };
+
+  const move = useMutation({
+    mutationFn: ({
+      device, ownTopic, bindings,
+    }: { device: DeviceListItem; ownTopic: string; bindings: SuggestedBinding[] }) =>
+      moveToOwnTopic(device.id, ownTopic, device.source_address ?? "", bindings),
+    onSuccess: (result, { device }) => {
+      setError(null);
+      setNote(describeMove(device.code, result));
+      setExpanded(null);
+      refresh();
+    },
+    onError: (err) => {
+      setError(isApiError(err) ? err.displayMessage : "Could not move the Device.");
+      refresh();
+    },
   });
 
   if (!canManage) {
@@ -547,11 +658,22 @@ export function PlantEditor(): JSX.Element {
                             row.device && changeStatus.mutate({ id: row.device.id, status })
                           }
                           canDiscover={canDiscover}
+                          ownerPending={ownerPendingFor(row)}
+                          misplaced={misplacedFor(row)}
+                          stranded={strandedFor(row)}
+                          onMove={(bindings) => {
+                            const device = misplacedFor(row);
+                            if (device && row.found) {
+                              move.mutate({ device, ownTopic: row.found.topic, bindings });
+                            }
+                          }}
+                          moving={move.isPending}
                           onRemove={() => {
                             if (!row.device) return;
                             const ok = window.confirm(
-                              `Remove ${row.device.code}?\n\nIf it has stored Readings the ` +
-                                `server refuses — decommission instead to keep its history.`,
+                              `Remove ${row.device.code}?\n\nIf it has stored Readings you are ` +
+                                `asked again before they are deleted. To keep its history, ` +
+                                `decommission it instead.`,
                             );
                             if (ok) remove.mutate({ id: row.device.id, force: false });
                           }}
@@ -1012,8 +1134,17 @@ function AddDeviceByTopic({
 function DeviceRow({
   row, open, onToggle, observed, models, modelId, onModel,
   onRegister, registering, onAttach, attaching, onDetach, onStatus, onRemove, canDiscover,
+  ownerPending, misplaced, stranded, onMove, moving,
 }: {
   canDiscover: boolean;
+  /** A string topic whose owner publishes its own topic here: register that, not this. */
+  ownerPending: string | null;
+  /** The Device holding this own topic's name, registered on its string topic by mistake. */
+  misplaced: DeviceListItem | null;
+  /** This Device sits on its own string topic while its own topic publishes. */
+  stranded: boolean;
+  onMove: (bindings: SuggestedBinding[]) => void;
+  moving: boolean;
   row: Row;
   open: boolean;
   onToggle: () => void;
@@ -1036,6 +1167,10 @@ function DeviceRow({
   // An unattached PV-string topic whose Inverter is registered here: attach it.
   const ownerId = !device ? (found?.string_owner_device_id ?? null) : null;
   const ownerCode = found?.string_owner_code ?? null;
+  // What this topic's own readings mean, as the Device holding its name reads them.
+  const suggested: SuggestedBinding[] = (observed?.data?.keys ?? []).flatMap((key) =>
+    key.suggested_tag_code ? [{ source_key: key.source_key, tag_code: key.suggested_tag_code }] : [],
+  );
 
   return (
     <li className={`rounded border ${device ? "border-line" : "border-warn/40 bg-warn/5"}`}>
@@ -1057,9 +1192,16 @@ function DeviceRow({
           </Badge>
         ) : ownerId !== null ? (
           <Badge tone="warn">strings of {ownerCode} — not attached, data being discarded</Badge>
+        ) : ownerPending !== null ? (
+          <Badge tone="warn">strings of {ownerPending} — attached when {ownerPending} is registered</Badge>
+        ) : misplaced !== null ? (
+          <Badge tone="warn">{misplaced.code} is registered on its string topic — data being discarded</Badge>
         ) : (
           <Badge tone="warn">not registered — data being discarded</Badge>
         )}
+        {device && stranded ? (
+          <Badge tone="warn">on its string topic — move it to its own</Badge>
+        ) : null}
         {collector ? (
           <span
             className="rounded border border-dashed border-line-strong px-1.5 text-[10px] text-ink-muted"
@@ -1164,8 +1306,42 @@ function DeviceRow({
             </div>
           ) : null}
 
+          {/* ── Strings of an owner that publishes its own topic here ─────── */}
+          {!device && found && ownerPending !== null ? (
+            <div className="rounded border border-line bg-surface p-3">
+              <p className="text-xs leading-relaxed text-ink">
+                This topic carries the PV string readings of <strong>{ownerPending}</strong>, which
+                also publishes on its own topic, listed here as {ownerPending}. Register{" "}
+                {ownerPending} there and this topic is attached to it in the same step. Registered on
+                this topic instead, its power, energy and voltages would be thrown away.
+              </p>
+            </div>
+          ) : null}
+
+          {/* ── Its name is held by a Device on its string topic: move it ── */}
+          {!device && found && misplaced !== null ? (
+            <div className="rounded border border-line bg-surface p-3">
+              <p className="text-xs leading-relaxed text-ink">
+                <strong>{misplaced.code}</strong> is registered on{" "}
+                <span className="font-mono">{misplaced.source_address}</span>, the topic that
+                carries only its PV strings, so what it sends here (its power, energy and
+                voltages) is thrown away. Move it here: the string topic stays attached to it,
+                and {suggested.length} of the readings below are mapped.
+              </p>
+              <div className="mt-2">
+                <Button
+                  variant="primary"
+                  disabled={moving || !observed?.data}
+                  onClick={() => onMove(suggested)}
+                >
+                  {moving ? "Moving…" : `Move ${misplaced.code} here`}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           {/* ── Not registered: choose a Model and confirm ─────────────── */}
-          {!device && found && ownerId === null ? (
+          {!device && found && ownerId === null && ownerPending === null && misplaced === null ? (
             <div className="rounded border border-line bg-surface p-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field
@@ -1290,7 +1466,7 @@ function DeviceRow({
                 type="button"
                 onClick={onRemove}
                 className="ml-auto text-[11px] text-bad hover:underline"
-                title="Delete it entirely. Refused if it has stored Readings."
+                title="Delete it entirely. If it has stored Readings you are asked again, naming how many, before they are deleted."
               >
                 remove
               </button>

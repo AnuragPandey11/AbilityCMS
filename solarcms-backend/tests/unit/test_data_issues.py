@@ -10,6 +10,7 @@ from solarcms.domain.assumptions import QUALITY_UNPARSEABLE as EMPTY
 from solarcms.domain.data_issues import (
     BindingFact,
     DeviceFact,
+    OwnTopicFact,
     PlantFacts,
     ReplayBurst,
     TagHealth,
@@ -486,6 +487,78 @@ class TestUnregisteredTopics:
         [issue] = find_issues(plant(live, unregistered=(topic("MFM", collector="MCR"),)))
         assert issue.kind == "unregistered_topic"
         assert issue.facts["code_taken"] is True
+
+
+class TestAnInverterWithItsOwnTopic:
+    """An Inverter publishing on its own topic is registered there, never on its strings.
+
+    12 Oct 2026, Vardhman Group: four Inverters were registered on
+    `…/INVERTER_n_STRING` from a card that offered it, and their power, energy
+    and voltages were thrown away while every screen called them registered.
+    """
+
+    def test_its_string_topic_is_registered_with_it_in_one_card(self) -> None:
+        issues = find_issues(plant(unregistered=(
+            topic("INVERTER_1", collector="MCR"), topic("INVERTER_1_STRING", collector="MCR"))))
+        assert [i.kind for i in issues] == ["unregistered_topic"]
+        [issue] = issues
+        assert issue.facts["topic"] == "SCMS/V1/C/P/MCR/INVERTER_1"
+        assert [t["device_code"] for t in issue.facts["string_topics"]] == ["INVERTER_1_STRING"]
+        assert "also attaches INVERTER_1_STRING" in issue.detail
+
+    def test_every_string_topic_rides_with_it(self) -> None:
+        issues = find_issues(plant(unregistered=(
+            topic("INVERTER_1_STRING28", collector="MCR"),
+            topic("INVERTER_1", collector="MCR"),
+            topic("INVERTER_1_STRING16", collector="MCR"))))
+        [issue] = issues
+        assert [t["device_code"] for t in issue.facts["string_topics"]] == [
+            "INVERTER_1_STRING16", "INVERTER_1_STRING28"]
+
+    def test_an_inverter_with_no_strings_carries_none(self) -> None:
+        [issue] = find_issues(plant(unregistered=(topic("INVERTER_2", collector="MCR"),)))
+        assert issue.facts["string_topics"] == []
+
+    def test_strings_only_equipment_is_still_registered_from_its_strings(self) -> None:
+        # ISPL's SMB1: its own topic never publishes, so its strings are all it has.
+        [issue] = find_issues(plant(unregistered=(topic("SMB1_STRING16", collector="MCR"),)))
+        assert issue.kind == "unregistered_strings"
+
+    def _misplaced(self, *, messages: int = 4) -> DeviceFact:
+        return publishing(
+            device(1, "INVERTER_1", "INVERTER", collector_code="MCR", string_count=16,
+                   primary_topic="SCMS/V1/C/P/MCR/INVERTER_1_STRING",
+                   bindings=(binding(1, "I1", "PV1_CURRENT"),),
+                   own_topic=OwnTopicFact(
+                       topic="SCMS/V1/C/P/MCR/INVERTER_1", messages=messages,
+                       last_seen=NOW, keys=("PAC", "F", "I1", "XYZ"))),
+            I1=0.0,
+        )
+
+    def test_one_registered_on_its_strings_is_offered_the_move(self) -> None:
+        issues = find_issues(plant(self._misplaced()))
+        [issue] = [i for i in issues if i.kind == "registered_on_string_topic"]
+        assert issue.category == "data_lost"
+        assert issue.device_id == 1
+        assert issue.facts["topic"] == "SCMS/V1/C/P/MCR/INVERTER_1"
+        assert issue.facts["string_topic"] == "SCMS/V1/C/P/MCR/INVERTER_1_STRING"
+        # I1 is already mapped, from the strings; XYZ means nothing known.
+        assert issue.facts["suggested_bindings"] == [
+            {"source_key": "F", "tag_code": "FREQUENCY"},
+            {"source_key": "PAC", "tag_code": "AC_ACTIVE_POWER"},
+        ]
+        assert issue.facts["unsuggested_keys"] == ["XYZ"]
+
+    def test_its_own_topic_is_not_also_reported_as_a_name_taken(self) -> None:
+        # The dead end it replaces: "already registered on another topic — dismiss".
+        issues = find_issues(plant(
+            self._misplaced(), unregistered=(topic("INVERTER_1", collector="MCR"),)))
+        assert "registered_on_string_topic" in [i.kind for i in issues]
+        assert "unregistered_topic" not in [i.kind for i in issues]
+
+    def test_nothing_is_offered_while_its_own_topic_is_quiet(self) -> None:
+        issues = find_issues(plant(self._misplaced(messages=0)))
+        assert "registered_on_string_topic" not in [i.kind for i in issues]
 
 
 class TestOrdering:
