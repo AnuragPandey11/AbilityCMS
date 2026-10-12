@@ -116,10 +116,6 @@ class Settings(BaseSettings):
 
     # ── Notifications ───────────────────────────────────────────────────────
     smtp_url: str | None = None
-    # The sender's address, e.g. "SolarCMS <alerts@example.com>". Unset, the
-    # SMTP login name is used, which suits a mailbox login but not a provider
-    # such as Amazon SES, whose login is a key ID no mail server accepts as a sender.
-    smtp_from: str | None = None
     whatsapp_api_url: str | None = None  # ⚠ provider unconfirmed (MASTER §8.2)
     whatsapp_api_token: SecretStr | None = None
 
