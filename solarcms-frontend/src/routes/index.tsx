@@ -40,6 +40,7 @@ import { DataIssuesAdmin } from "@/admin/dataIssues/DataIssuesAdmin";
 import { DeviceBindingsAdmin } from "@/admin/DeviceBindingsAdmin";
 import { AlarmRulesAdmin } from "@/admin/AlarmRulesAdmin";
 import { UsersAdmin } from "@/admin/UsersAdmin";
+import { AlarmEmailsAdmin } from "@/admin/AlarmEmailsAdmin";
 import { SystemAdmin } from "@/admin/SystemAdmin";
 import { SystemHealthAdmin } from "@/admin/SystemHealthAdmin";
 import { usePermission, type Permission } from "@/auth/usePermission";
@@ -246,6 +247,14 @@ export function AppRoutes(): JSX.Element {
           element={
             <RequirePermission permission="user.manage">
               <UsersAdmin />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="/admin/alarm-emails"
+          element={
+            <RequirePermission permission="user.manage">
+              <AlarmEmailsAdmin />
             </RequirePermission>
           }
         />
