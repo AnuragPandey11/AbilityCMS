@@ -10,6 +10,8 @@ here; they live in `domain/assumptions.py` and nowhere else (BACKEND_SPEC §0.3)
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, PostgresDsn, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -86,6 +88,12 @@ class Settings(BaseSettings):
     # A read-only token for `GET /health/metrics`, so a monitoring agent can
     # scrape it without a user login (§6.6). Unset: platform administrators only.
     metrics_token: SecretStr | None = None
+
+    # What restarts a process that exits. "solarcms" is `python -m
+    # solarcms.supervisor`, which System Health expects to hear beating; "ecs"
+    # and "docker" run each process as its own container under a restart
+    # policy, so that supervisor never runs and its absence is not a problem.
+    process_supervisor: Literal["solarcms", "ecs", "docker"] = "solarcms"
 
     # ── Deployment (docs/CAPACITY_AND_DEPLOYMENT.md §5) ──────────────────────
     # Every default below is the laptop's behaviour; AWS sets them.

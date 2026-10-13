@@ -20,7 +20,7 @@
 
 import { usePlatformHealth, useSystemHealth } from "@/api/hooks";
 import type { HealthTone, PlatformHealth, ProcessHealth } from "@/api/schemas";
-import { PROCESS_LABEL, STATE_WORD, agoText, problems, span } from "@/admin/platformHealth";
+import { MANAGER_WORD, PROCESS_LABEL, STATE_WORD, agoText, problems, span } from "@/admin/platformHealth";
 import { StatTile } from "@/components/charts/KpiTile";
 import { Badge, Panel } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
@@ -29,7 +29,7 @@ import { formatAge, formatDateTime } from "@/format/datetime";
 import { formatNumber } from "@/format/value";
 
 // Re-exported so a test or another screen can reach them from the page.
-export { PROCESS_LABEL, STATE_WORD, agoText, problems, span };
+export { MANAGER_WORD, PROCESS_LABEL, STATE_WORD, agoText, problems, span };
 
 const FRAME: Record<HealthTone, string> = {
   // A frame lights up only for bad news; "working" is the plain card.
@@ -70,7 +70,24 @@ function Row({ label, children }: { label: string; children: React.ReactNode }):
   );
 }
 
-function ProcessCard({ process, now }: { process: ProcessHealth; now: number }): JSX.Element {
+/** Who restarts the processes when it is a container platform rather than `solarcms.supervisor`. */
+function externalManager(health: PlatformHealth): string | null {
+  const supervisor = health.supervisor;
+  if (supervisor?.state !== "external") return null;
+  const code = supervisor.managed_by ?? "";
+  return MANAGER_WORD[code] ?? (code || "the container platform");
+}
+
+function ProcessCard({
+  process,
+  now,
+  restartedBy,
+}: {
+  process: ProcessHealth;
+  now: number;
+  /** Set where a container platform restarts each process; its counts are its own. */
+  restartedBy: string | null;
+}): JSX.Element {
   const supervised = process.supervised;
   const isApi = process.name === "api";
   return (
@@ -126,6 +143,10 @@ function ProcessCard({ process, now }: { process: ProcessHealth; now: number }):
               {supervised.last_exit_at ? (
                 <span className="text-ink-muted"> · last {agoText(supervised.last_exit_at, now)}, code {supervised.last_exit_code ?? "?"}</span>
               ) : null}
+            </span>
+          ) : restartedBy ? (
+            <span className="text-ink-muted" title={`${restartedBy} restarts this process if it exits, and keeps its own count of how often.`}>
+              by {restartedBy}
             </span>
           ) : (
             <span className="text-ink-muted">not supervised</span>
@@ -201,6 +222,7 @@ function BrokerCard({ health, now }: { health: PlatformHealth; now: number }): J
 function SupervisorCard({ health, now }: { health: PlatformHealth; now: number }): JSX.Element | null {
   const supervisor = health.supervisor;
   if (!supervisor) return null;
+  const manager = externalManager(health);
   return (
     <div data-testid="supervisor" className={`surface-tile rounded-card border p-4 ${FRAME[supervisor.tone]}`}>
       <div className="flex items-start justify-between gap-3">
@@ -208,14 +230,21 @@ function SupervisorCard({ health, now }: { health: PlatformHealth; now: number }
           <div className="text-sm font-semibold text-ink">Supervisor</div>
           <div className="mt-0.5 text-xs text-ink-faint">Starts the processes above and restarts any that exits.</div>
         </div>
-        <StatePill state={supervisor.state} tone={supervisor.tone} />
+        {manager ? (
+          <Badge tone={supervisor.tone}>{manager}</Badge>
+        ) : (
+          <StatePill state={supervisor.state} tone={supervisor.tone} />
+        )}
       </div>
       <p className={`mt-2 text-xs leading-snug ${REASON_TEXT[supervisor.tone]}`}>{supervisor.reason}</p>
-      <dl className="mt-2 divide-y divide-line-soft text-xs">
-        <Row label="Running since">{supervisor.started_at ? formatDateTime(supervisor.started_at) : "—"}</Row>
-        <Row label="Last heartbeat">{agoText(supervisor.beat_at, now)}</Row>
-        <Row label="Logs"><span className="break-all font-mono">{supervisor.log_dir ?? "—"}</span></Row>
-      </dl>
+      {/* Its heartbeat and logs describe `solarcms.supervisor`, which does not run here. */}
+      {manager ? null : (
+        <dl className="mt-2 divide-y divide-line-soft text-xs">
+          <Row label="Running since">{supervisor.started_at ? formatDateTime(supervisor.started_at) : "—"}</Row>
+          <Row label="Last heartbeat">{agoText(supervisor.beat_at, now)}</Row>
+          <Row label="Logs"><span className="break-all font-mono">{supervisor.log_dir ?? "—"}</span></Row>
+        </dl>
+      )}
     </div>
   );
 }
@@ -223,6 +252,7 @@ function SupervisorCard({ health, now }: { health: PlatformHealth; now: number }
 export function PlatformHealthView({ health }: { health: PlatformHealth }): JSX.Element {
   const now = Date.parse(health.as_of);
   const issues = problems(health);
+  const restartedBy = externalManager(health);
   return (
     <div className="space-y-4">
       {issues.length > 0 ? (
@@ -246,7 +276,7 @@ export function PlatformHealthView({ health }: { health: PlatformHealth }): JSX.
       <Panel title="Processes" subtitle="Each one's own heartbeat, every 10 seconds." tray padding="p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {health.processes.map((process) => (
-            <ProcessCard key={process.name} process={process} now={now} />
+            <ProcessCard key={process.name} process={process} now={now} restartedBy={restartedBy} />
           ))}
         </div>
       </Panel>

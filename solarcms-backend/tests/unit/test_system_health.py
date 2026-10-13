@@ -146,9 +146,18 @@ def test_never_a_message_since_connecting_long_ago_is_quiet() -> None:
 # ── The supervisor, and the whole ───────────────────────────────────────────
 
 def test_no_supervisor_is_a_warning_not_an_outage() -> None:
-    verdict = assess_supervisor(None, NOW)
+    verdict = assess_supervisor(None, NOW, managed_by="solarcms")
     assert (verdict.state, verdict.tone) == ("absent", "warn")
     assert "nothing restarts" in verdict.reason
+
+
+def test_a_container_platform_that_restarts_each_process_is_not_a_problem() -> None:
+    # On AWS each process is an ECS container with a restart policy, so no
+    # solarcms.supervisor ever beats — and nothing about that is wrong.
+    for platform, name in (("ecs", "Amazon ECS"), ("docker", "Docker")):
+        verdict = assess_supervisor(None, NOW, managed_by=platform)
+        assert (verdict.state, verdict.tone) == ("external", "ok")
+        assert name in verdict.reason
 
 
 def test_the_worst_verdict_is_the_whole() -> None:

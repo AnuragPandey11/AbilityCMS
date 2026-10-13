@@ -43,7 +43,7 @@ from solarcms.domain.assumptions import (
 
 State = Literal[
     "not_seen", "stopped", "down", "failing", "stalled", "degraded", "starting",
-    "working", "connected", "quiet", "disconnected", "unknown", "absent",
+    "working", "connected", "quiet", "disconnected", "unknown", "absent", "external",
 ]
 Tone = Literal["ok", "warn", "bad"]
 
@@ -180,7 +180,26 @@ def assess_broker(ingest: Mapping[str, Any] | None, ingest_verdict: Verdict,
                    f"{ago(quiet_for or 0)} ago.")
 
 
-def assess_supervisor(beat: Mapping[str, Any] | None, now: datetime) -> Verdict:
+#: Who restarts a process that exits, where it is not `solarcms.supervisor`.
+#: Each runs every process as its own container under a restart policy.
+EXTERNAL_SUPERVISOR: dict[str, str] = {
+    "ecs": ("Amazon ECS runs each process as its own container and restarts one "
+            "that exits; this platform's own supervisor is not used here."),
+    "docker": ("Docker runs each process as its own container and restarts one "
+               "that exits; this platform's own supervisor is not used here."),
+}
+
+
+def assess_supervisor(beat: Mapping[str, Any] | None, now: datetime, *,
+                      managed_by: str) -> Verdict:
+    """`managed_by` is the deployment's own statement (`PROCESS_SUPERVISOR`).
+
+    Under ECS or Docker no `solarcms.supervisor` ever runs, so judging by its
+    heartbeat would report "nothing restarts a crash" on every deployment where
+    something does — a warning that is always on, and soon never read.
+    """
+    if managed_by in EXTERNAL_SUPERVISOR:
+        return Verdict("external", "ok", EXTERNAL_SUPERVISOR[managed_by])
     if beat is None:
         return Verdict("absent", "warn",
                        "No supervisor: the processes were started by hand, and nothing "

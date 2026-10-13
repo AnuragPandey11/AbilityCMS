@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from solarcms.cache.heartbeat import PROCESSES, SUPERVISOR, read_heartbeats
+from solarcms.config import get_settings
 from solarcms.domain.system_health import (
     Verdict,
     assess_broker,
@@ -72,7 +73,8 @@ async def platform_health(now: datetime | None = None) -> dict[str, Any]:
         }
 
     supervisor_beat = beats[SUPERVISOR]
-    supervisor = assess_supervisor(supervisor_beat, moment)
+    managed_by = get_settings().process_supervisor
+    supervisor = assess_supervisor(supervisor_beat, moment, managed_by=managed_by)
     # A dead supervisor's list of children is history, not the present.
     children: dict[str, Any] = (
         (supervisor_beat or {}).get("extra", {}).get("children", {})
@@ -114,6 +116,9 @@ async def platform_health(now: datetime | None = None) -> dict[str, Any]:
         },
         "supervisor": {
             "state": supervisor.state, "tone": supervisor.tone, "reason": supervisor.reason,
+            # "solarcms", or the container platform that restarts each process
+            # instead — whose restart counts are its own, not reported here.
+            "managed_by": managed_by,
             **{field: (supervisor_beat or {}).get(field)
                for field in ("pid", "host", "started_at", "beat_at")},
             "log_dir": (supervisor_beat or {}).get("extra", {}).get("log_dir"),
