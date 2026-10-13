@@ -57,7 +57,11 @@ jobs:
 
   deploy:
     needs: test
-    if: ${{ always() && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
+    # !cancelled(), not always(): either lets deploy run when test is skipped
+    # (releasing an image built earlier), but always() also ignores Cancel, so a
+    # deploy waiting on an approval nobody could give could only be force-cancelled
+    # through the API — and it blocked every later deploy behind it (13 Oct 2026).
+    if: ${{ !cancelled() && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
     runs-on: ubuntu-latest
     environment: production
     steps:
