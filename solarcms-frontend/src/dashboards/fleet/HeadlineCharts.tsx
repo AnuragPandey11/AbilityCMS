@@ -19,6 +19,7 @@
  * alone: every segment is named in the legend beside it.
  */
 
+import { Fragment, type ReactNode } from "react";
 import {
   UNDEFINED_DISPLAY,
   formatHeadline,
@@ -100,6 +101,27 @@ function amountText(value: number): string {
 
 function shareText(share: number): string {
   return formatRatioAsPercent(share, share > 0 && share < 0.1 ? 1 : 0);
+}
+
+/** A code with a line-break opportunity after each "_" and "-", its natural word breaks. */
+export function breakableCode(code: string): ReactNode[] {
+  // Not split(/(?<=…)/): a lookbehind does not parse before Safari 16.4.
+  const parts: string[] = [];
+  let part = "";
+  for (const char of code) {
+    part += char;
+    if (char === "_" || char === "-") {
+      parts.push(part);
+      part = "";
+    }
+  }
+  if (part) parts.push(part);
+  return parts.map((piece, index) => (
+    <Fragment key={index}>
+      {index > 0 ? <wbr /> : null}
+      {piece}
+    </Fragment>
+  ));
 }
 
 // ── Donut ───────────────────────────────────────────────────────────────────
@@ -278,8 +300,15 @@ export function PlantDonut({
               <span className="figure text-[1.35rem] font-semibold leading-none text-ink">
                 {ofCapacity ? amountText(centreMark.value ?? 0) : shareOf(centreMark)}
               </span>
-              <span className="mt-1 max-w-[3.75rem] truncate font-mono text-[9px] leading-none text-ink-muted">
-                {centreMark.short}
+              {/*
+                Inside the hole, which is ~63px wide at its middle and narrows
+                below it, where this sits: one line of 60px ran an 11-letter
+                code into the ring. Two lines of 44px fit all the way down,
+                broken after "_" or "-" where possible, and a code longer
+                than that ends in an ellipsis; the legend has it whole.
+              */}
+              <span className="mt-0.5 line-clamp-2 max-w-[2.75rem] break-words font-mono text-[9px] leading-[10px] text-ink-muted">
+                {breakableCode(centreMark.short)}
               </span>
             </>
           ) : (
