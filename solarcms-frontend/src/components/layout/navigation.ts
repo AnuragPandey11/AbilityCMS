@@ -31,6 +31,7 @@ import {
   IconHealth,
   IconInverter,
   IconIrradiance,
+  IconMail,
   IconMapping,
   IconDataIssues,
   IconMeter,
@@ -212,6 +213,7 @@ export const ADMIN_LINKS: AdminLink[] = [
   { to: "/admin/bindings", label: "Tag Mapping", permission: "config.modify", icon: IconMapping },
   { to: "/admin/alarm-rules", label: "Alarm Rules", permission: "config.modify", icon: IconAlarm },
   { to: "/admin/users", label: "Users", permission: "user.manage", icon: IconUsers },
+  { to: "/admin/alarm-emails", label: "Alarm Emails", permission: "user.manage", icon: IconMail },
   { to: "/admin/health", label: "System Health", permission: "system.admin", icon: IconHealth },
   { to: "/admin/system", label: "System", permission: "system.admin", icon: IconSystem },
 ];

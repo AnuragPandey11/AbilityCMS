@@ -157,6 +157,14 @@ export const IconAlarm = (p: IconProps) => (
   </Svg>
 );
 
+/** Alarm emails — an envelope, because what is configured is who gets mailed. */
+export const IconMail = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5.5" width="18" height="13" rx="1.8" />
+    <path d="m3.6 6.6 7.3 6a1.8 1.8 0 0 0 2.2 0l7.3-6" />
+  </Svg>
+);
+
 /** Reports — a document whose content is a chart, because that is what these are. */
 export const IconReport = (p: IconProps) => (
   <Svg {...p}>

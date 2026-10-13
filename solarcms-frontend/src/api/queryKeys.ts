@@ -87,6 +87,10 @@ export const qk = {
     ["reports", "tables", kind, plantId, period, fromDate, toDate, fromTime, toTime] as const,
 
   users: () => ["users"] as const,
+  /** `null` is the caller's own Client; a platform administrator names one. */
+  alarmEmails: (clientId: number | null) => ["alarm-emails", clientId ?? "own"] as const,
+  alarmEmailOptions: (clientId: number | null) =>
+    ["alarm-emails", "options", clientId ?? "own"] as const,
   clients: () => ["clients"] as const,
   regions: () => ["regions"] as const,
   audit: (params?: unknown) => ["audit", params ?? {}] as const,
