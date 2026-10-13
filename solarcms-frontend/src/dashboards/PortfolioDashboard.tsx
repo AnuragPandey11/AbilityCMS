@@ -49,6 +49,7 @@ import {
   variantNote,
 } from "@/format/value";
 import { useSelection } from "@/state/selection";
+import { usePermission } from "@/auth/usePermission";
 import { useNavigate } from "react-router-dom";
 import {
   IconAlarm,
@@ -114,8 +115,12 @@ function groupByPlant<T extends { plant_id: number | null }>(rows: T[]): Map<num
   return grouped;
 }
 
+/** The Onboarding panel's anchor, which the header's notice scrolls to. */
+const ONBOARDING_PANEL = "portfolio-onboarding";
+
 export function PortfolioDashboard(): JSX.Element {
   const navigate = useNavigate();
+  const canManagePlants = usePermission("plant.manage");
   const { period, setPeriod, setPlantId } = useSelection();
   const plantsQuery = useAllPlants();
   const alarmsQuery = useAlarms({ state: "active", limit: 500 });
@@ -251,7 +256,7 @@ export function PortfolioDashboard(): JSX.Element {
       }),
     ),
   );
-  const fleetStatus = fleetStatusWord(counts, counted.length);
+  const fleetStatus = fleetStatusWord(counts, counted.length, onboarding.length);
   const countedDevices = counted.flatMap((plant) => healthByPlant.get(plant.id) ?? []);
   const devicesOnline = countedDevices.filter((d) => d.comm_status === "online").length;
 
@@ -409,6 +414,33 @@ export function PortfolioDashboard(): JSX.Element {
             claim than the headline implies, and the difference is invisible
             unless it is said.
           */}
+          {/*
+            Onboarding Plants are listed at the foot of the page, which on a
+            fleet where none is active yet is below a screen of empty tiles —
+            so the page looked as if its Plants had vanished. Say it up here.
+          */}
+          {onboarding.length > 0 ? (
+            <p
+              data-testid="onboarding-notice"
+              className={`mt-1 text-xs ${counted.length === 0 ? "text-warn" : "text-ink-muted"}`}
+            >
+              {counted.length === 0
+                ? `None of the ${onboarding.length} visible Plant${onboarding.length === 1 ? " is" : "s is"} active yet, so nothing below is counted. `
+                : `${onboarding.length} more Plant${onboarding.length === 1 ? " is" : "s are"} still onboarding and not counted. `}
+              {canManagePlants
+                ? "A Plant counts once it is activated, from the status beside its name on Single Plant. "
+                : "A Plant counts once an administrator activates it. "}
+              <button
+                type="button"
+                className="text-accent hover:underline"
+                onClick={() =>
+                  document.getElementById(ONBOARDING_PANEL)?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }
+              >
+                See {onboarding.length === 1 ? "it" : "them"}
+              </button>
+            </p>
+          ) : null}
           {split.notInstrumented > 0 ? (
             <p className="mt-1 text-xs text-warn">
               {split.notInstrumented} of {counted.length} active Plant(s) have no Devices
@@ -423,7 +455,8 @@ export function PortfolioDashboard(): JSX.Element {
             label="Plants online"
             title="Active Plants whose every Device is reporting with no Alarm open."
           >
-            <span className={counts.online === counted.length ? "text-ok" : "text-ink"}>
+            {/* 0 / 0 is not "all online": nothing is counted at all. */}
+            <span className={counted.length > 0 && counts.online === counted.length ? "text-ok" : "text-ink"}>
               {counts.online} / {counted.length}
             </span>
           </HeaderCell>
@@ -713,21 +746,23 @@ export function PortfolioDashboard(): JSX.Element {
       />
 
       {onboarding.length > 0 ? (
-        <Panel
-          title="Onboarding"
-          subtitle="Draft and commissioning Plants — visible, but excluded from every total above."
-        >
-          <SectionHeading note="A partly mapped Plant would distort fleet performance, so these are kept out of the figures until they are active.">
-            <Badge tone="warn">Not counted</Badge>
-          </SectionHeading>
-          <DataTable
-            rows={onboarding}
-            columns={columns}
-            rowKey={(plant) => plant.id}
-            onRowClick={(plant) => openPlant(plant.id)}
-            filterPlaceholder="Filter onboarding Plants…"
-          />
-        </Panel>
+        <div id={ONBOARDING_PANEL}>
+          <Panel
+            title="Onboarding"
+            subtitle="Draft and commissioning Plants — visible, but excluded from every total above."
+          >
+            <SectionHeading note="A partly mapped Plant would distort fleet performance, so these are kept out of the figures until they are active.">
+              <Badge tone="warn">Not counted</Badge>
+            </SectionHeading>
+            <DataTable
+              rows={onboarding}
+              columns={columns}
+              rowKey={(plant) => plant.id}
+              onRowClick={(plant) => openPlant(plant.id)}
+              filterPlaceholder="Filter onboarding Plants…"
+            />
+          </Panel>
+        </div>
       ) : null}
     </div>
   );

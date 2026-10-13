@@ -1126,6 +1126,9 @@ export const PlatformHealthSchema = z.object({
       started_at: z.string().nullable(),
       beat_at: z.string().nullable(),
       log_dir: z.string().nullable(),
+      /** "solarcms", or the container platform that restarts each process
+       * instead ("ecs", "docker"). Absent from an older server. */
+      managed_by: z.string().nullable().optional().catch(null),
     })
     .nullable(),
 });

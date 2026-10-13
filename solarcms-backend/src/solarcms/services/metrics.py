@@ -74,7 +74,10 @@ async def render_metrics(now: datetime | None = None) -> str:
 
     metric("process_working", "1 when the process's own verdict is working, else 0.")
     for process, beat in rows:
-        verdict = (assess_supervisor(beat, moment) if process == SUPERVISOR
+        # A supervisor row exists only because `solarcms.supervisor` beat, so
+        # it is judged as that, whatever else the deployment restarts with.
+        verdict = (assess_supervisor(beat, moment, managed_by="solarcms")
+                   if process == SUPERVISOR
                    else assess_process(process, beat, moment))
         lines.append(f"solarcms_process_working{labels(process, beat, state=verdict.state)} "
                      f"{1 if verdict.state == 'working' else 0}")

@@ -108,6 +108,25 @@ describe("the verdicts", () => {
     expect(screen.getByTestId("process-scheduler").textContent).toContain("not supervised");
   });
 
+  it("names the container platform that restarts each process, and raises no problem for it", () => {
+    // On AWS no solarcms.supervisor runs: ECS restarts each container itself.
+    const health = parsed({
+      processes: [process("ingest", { supervised: null })],
+      supervisor: {
+        state: "external", tone: "ok",
+        reason: "Amazon ECS runs each process as its own container and restarts one that exits.",
+        pid: null, host: null, started_at: null, beat_at: null, log_dir: null, managed_by: "ecs",
+      },
+    });
+    view(health);
+    expect(problems(health)).toEqual([]);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("supervisor").textContent).toContain("Amazon ECS");
+    expect(screen.getByTestId("supervisor").textContent).not.toContain("Last heartbeat");
+    expect(screen.getByTestId("process-ingest").textContent).toContain("by Amazon ECS");
+    expect(screen.getByTestId("process-ingest").textContent).not.toContain("not supervised");
+  });
+
   it("names a broker that is connected but silent", () => {
     const health = parsed({
       overall: "warn",

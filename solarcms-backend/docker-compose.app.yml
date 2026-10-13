@@ -26,6 +26,8 @@ x-app: &app
     MQTT_CLIENT_ID: solarcms-ingest-container
     MQTT_SUBSCRIBE_TOPICS: '["scms/v1/#","SCMS/V1/#"]'
     ENVIRONMENT: ${ENVIRONMENT:-development}
+    # `restart: unless-stopped` below is what restarts a crash here.
+    PROCESS_SUPERVISOR: docker
   depends_on:
     postgres: {condition: service_healthy}
     redis: {condition: service_healthy}

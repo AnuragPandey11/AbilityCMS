@@ -51,6 +51,14 @@ describe("plant condition", () => {
     expect(fleetStatusWord(conditionCounts(["online", "online"]), 2).word).toBe("NORMAL");
     expect(fleetStatusWord(conditionCounts(["online", "fault"]), 2).tone).toBe("bad");
   });
+
+  it("says the Plants are onboarding, not that there are none, when none is active yet", () => {
+    // Two Plants visible and both in commissioning: "NO PLANTS" read as data lost.
+    const none = conditionCounts([]);
+    expect(fleetStatusWord(none, 0, 2).word).toBe("ONBOARDING");
+    expect(fleetStatusWord(none, 0, 2).detail).toContain("2 still onboarding");
+    expect(fleetStatusWord(none, 0).word).toBe("NO PLANTS");
+  });
 });
 
 describe("live power sum", () => {

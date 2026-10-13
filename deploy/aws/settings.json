@@ -11,7 +11,8 @@
     {"name": "CORS_ORIGINS", "value": "[\"https://app.ability-automation.com\"]"},
     {"name": "S3_BUCKET", "value": "solarcms-reports-556935884877"},
     {"name": "S3_REGION", "value": "ap-south-1"},
-    {"name": "SMTP_FROM", "value": "SolarCMS Alerts <alerts@ability-automation.com>"}
+    {"name": "SMTP_FROM", "value": "SolarCMS Alerts <alerts@ability-automation.com>"},
+    {"name": "PROCESS_SUPERVISOR", "value": "ecs"}
   ],
   "secrets": [
     {"name": "DATABASE_URL", "valueFrom": "arn:aws:ssm:ap-south-1:556935884877:parameter/solarcms/prod/DATABASE_URL"},

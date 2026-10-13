@@ -904,15 +904,33 @@ async def commissioning_readiness(
             flag("blocking", "device_without_topic",
                  f"{device.code} has no MQTT topic, so nothing can be attributed "
                  f"to it.", device_id=device.id, device_code=device.code)
+        keys = await live.read_unmapped_keys(device.id)
         if device.binding_count == 0:
             flag("blocking", "device_without_bindings",
                  f"{device.code} has no Tag bindings, so its payload decodes to "
                  f"nothing.", device_id=device.id, device_code=device.code)
         elif device.binding_count < device.expected_binding_count:
-            flag("warning", "device_partially_bound",
-                 f"{device.code} has {device.binding_count} of "
-                 f"{device.expected_binding_count} Tags bound.",
-                 device_id=device.id, device_code=device.code)
+            # The Model's list is the client's generic schedule, which no one
+            # make sends in full: their Inverters send each string's current
+            # and power but no string voltage, so every broker-registered one
+            # read "74 of 103" and was told to re-seed — which binds 29 Tags
+            # that never arrive. What decides is whether anything it *sends* is
+            # unbound, and ingest records exactly that (unmapped keys, 24 h).
+            if device.comm_status not in ("online", "degraded"):
+                # Not heard lately, so nothing says what it sends: the schedule
+                # is the only guide there is.
+                flag("warning", "device_partially_bound",
+                     f"{device.code} has {device.binding_count} of "
+                     f"{device.expected_binding_count} Tags bound.",
+                     device_id=device.id, device_code=device.code)
+            elif not keys:
+                flag("info", "device_sends_part_of_model",
+                     f"{device.code} is bound to {device.binding_count} Tags, which "
+                     f"covers every signal it sends; its Model lists "
+                     f"{device.expected_binding_count}.",
+                     device_id=device.id, device_code=device.code)
+            # With unbound keys arriving, the unmapped-keys warning below names
+            # them, and binding those is the action.
         if device.comm_status in ("offline", "unknown"):
             flag("warning", "device_never_heard",
                  f"{device.code} has not been heard from "
@@ -932,7 +950,6 @@ async def commissioning_readiness(
                  f"Single Line Diagram.", device_id=device.id,
                  device_code=device.code)
 
-        keys = await live.read_unmapped_keys(device.id)
         if keys:
             unmapped_total += len(keys)
             flag("warning", "device_unmapped_keys",

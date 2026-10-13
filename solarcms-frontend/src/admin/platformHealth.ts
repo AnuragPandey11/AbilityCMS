@@ -28,6 +28,13 @@ export const STATE_WORD: Record<string, string> = {
   disconnected: "Disconnected",
   unknown: "Unknown",
   absent: "Not running",
+  external: "External",
+};
+
+/** The container platform that restarts each process where `solarcms.supervisor` is not used. */
+export const MANAGER_WORD: Record<string, string> = {
+  ecs: "Amazon ECS",
+  docker: "Docker",
 };
 
 /**
