@@ -1,4 +1,4 @@
-"""Request bodies for Alarm Rules."""
+"""Request bodies for Alarm Rules and Alarm email subscriptions."""
 
 from __future__ import annotations
 
@@ -52,3 +52,22 @@ class AlarmRuleWrite(BaseModel):
         if self.scope_type != "global" and self.scope_id is None:
             raise ValueError(f"scope_type {self.scope_type!r} requires a scope_id")
         return self
+
+
+class NotificationSubscriptionCreate(BaseModel):
+    """Email one User about one Client's Alarms, for a Plant or every Plant."""
+
+    user_id: int
+    #: None: every Plant of the Client — a Client Admin only, since nobody else
+    #: can see every Plant (`domain/notification_scope`).
+    plant_id: int | None = None
+    min_severity: str = Field(default="medium", pattern="^(critical|high|medium|low)$")
+    channel: str = Field(default="email", pattern="^email$")
+    #: Required of a platform administrator, who belongs to no Client; ignored
+    #: for a Client Admin, whose Client comes from the session.
+    client_id: int | None = None
+
+
+class NotificationSubscriptionUpdate(BaseModel):
+    min_severity: str | None = Field(default=None, pattern="^(critical|high|medium|low)$")
+    enabled: bool | None = None

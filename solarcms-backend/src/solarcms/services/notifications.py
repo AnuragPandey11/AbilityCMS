@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from solarcms.config import Settings, get_settings
 from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
 from solarcms.db.session import scoped_session
+from solarcms.domain.notification_scope import SEVERITY_RANK
 
 log = structlog.get_logger(__name__)
 
@@ -204,15 +205,30 @@ async def queue_alarm_notifications(
     Subscriptions are per Plant or Client-wide (`plant_id IS NULL`). Severity
     gating happens in SQL so that a Low-severity Alarm never even builds a
     recipient list. Returns how many were queued.
-    """
-    severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-    rank = severity_rank.get(severity, 0)
 
+    ⚠ Nobody is emailed about a Plant they cannot see (`domain/notification_scope`):
+    the subscriber must be active, still a member of this Client, and either its
+    Client Admin or assigned the Alarm's Plant. Checked here, at sending, and not
+    only when the subscription was made — access changes afterwards, and a
+    subscription must not outlive it. An Alarm with no Plant goes to admins only.
+    """
+    rank = SEVERITY_RANK.get(severity, 0)
+
+    # ⚠ Every use of :plant_id is CAST: it is compared with bigint columns and
+    # tested for NULL, and asyncpg refuses one bind deduced as two types.
     subscribers = (await session.execute(text("""
         SELECT s.user_id, s.channel, s.message_template
           FROM notification_subscriptions s
+          JOIN users u       ON u.id = s.user_id AND u.is_active
+          JOIN memberships m ON m.user_id = s.user_id AND m.client_id = s.client_id
+          JOIN roles r       ON r.id = m.role_id
          WHERE s.client_id = :client_id AND s.enabled
-           AND (s.plant_id IS NULL OR s.plant_id = :plant_id)
+           AND (s.plant_id IS NULL OR s.plant_id = CAST(:plant_id AS bigint))
+           AND (r.code = 'admin'
+                OR (CAST(:plant_id AS bigint) IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM user_plant_access upa
+                                 WHERE upa.membership_id = m.id
+                                   AND upa.plant_id = CAST(:plant_id AS bigint))))
            AND CASE s.min_severity WHEN 'low' THEN 0 WHEN 'medium' THEN 1
                                    WHEN 'high' THEN 2 ELSE 3 END <= :rank
          ORDER BY s.priority DESC

@@ -23,6 +23,7 @@ from solarcms.api.routers import (
     forecast,
     health,
     inverter_ranking,
+    notifications,
     operations,
     plants,
     readings,
@@ -91,7 +92,8 @@ def create_app() -> FastAPI:
                    catalog.router, regions.router, readings.router, alarms.router,
                    reports.router, operations.router, data_issues.router, forecast.router,
                    status_codes.router, inverter_ranking.router,
-                   users.router, health.router, audit.router, ws_router):
+                   users.router, notifications.router, health.router, audit.router,
+                   ws_router):
         app.include_router(router)
 
     @app.get("/healthz", tags=["ops"])

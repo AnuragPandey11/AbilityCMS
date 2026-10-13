@@ -39,6 +39,7 @@ GUARDED = [
     ("GET", "/alarm-rules", "config.modify"),
     ("GET", "/devices/1/bindings", "config.modify"),
     ("GET", "/users", "user.manage"),
+    ("GET", "/notification-subscriptions", "user.manage"),
     ("POST", "/plants", "plant.manage"),
     ("GET", "/audit", "system.admin"),
     ("GET", "/clients", "system.admin"),
