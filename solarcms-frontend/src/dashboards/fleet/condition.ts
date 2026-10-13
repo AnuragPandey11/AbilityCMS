@@ -72,8 +72,19 @@ export function conditionCounts(conditions: PlantCondition[]): Record<PlantCondi
 export function fleetStatusWord(
   counts: Record<PlantCondition, number>,
   total: number,
+  /** Draft and commissioning Plants, visible but not counted. */
+  onboarding = 0,
 ): { word: string; tone: "ok" | "warn" | "bad" | "neutral"; detail: string } {
-  if (total === 0) return { word: "NO PLANTS", tone: "neutral", detail: "No active Plant is visible." };
+  if (total === 0) {
+    // "NO PLANTS" beside a header saying two are visible reads as data lost.
+    return onboarding > 0
+      ? {
+          word: "ONBOARDING",
+          tone: "neutral",
+          detail: `No Plant is active yet: ${onboarding} still onboarding, and none is counted until it is activated.`,
+        }
+      : { word: "NO PLANTS", tone: "neutral", detail: "No active Plant is visible." };
+  }
   if (counts.fault > 0) {
     return {
       word: "FAULT",
