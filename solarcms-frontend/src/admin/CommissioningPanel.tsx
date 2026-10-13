@@ -46,7 +46,9 @@ const REMEDY: Record<string, string> = {
   device_without_bindings:
     "Open Device Bindings and map its payload keys to Tags, or re-seed them from its Model.",
   device_partially_bound:
-    "Some of the Model's signals are unbound — check the string count and re-seed from the Model.",
+    "Nothing has been heard from it lately, so it is checked against its Model's list: check the string count, and re-seed from the Model only if it really sends those signals.",
+  device_sends_part_of_model:
+    "Nothing to do. The Model's list is the generic signal schedule and this Device does not send the rest; re-seeding from the Model would bind Tags that never arrive.",
   device_never_heard:
     "Nothing has arrived from this Device yet. Check the publisher's credentials and topic.",
   inverter_without_capacity:
