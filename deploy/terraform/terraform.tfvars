@@ -9,4 +9,4 @@ github_repo_id  = 1367352033
 data_zone       = "ap-south-1a"
 app_zone        = "ap-south-1a"
 manage_dns      = false
-outside_checks  = false
+outside_checks  = true

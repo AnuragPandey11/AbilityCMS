@@ -92,6 +92,28 @@ describe("fleet headline donut", () => {
     expect(screen.getAllByText("P2")).toHaveLength(2);
   });
 
+  it("lets a long code in the centre break after its underscores rather than run into the ring", () => {
+    const named = [
+      { id: 1, name: "Kular Green", code: "KULAR_GREEN" },
+      { id: 2, name: "Spinning", code: "SPINNING_AND_GENERAL_MILLS" },
+    ];
+    const { container } = wrap(
+      <PlantDonut
+        label="Energy"
+        marks={plantMarks(named, (id) => (id === 1 ? 900 : 100))}
+        unit="kWh"
+        empty="Nothing generated yet"
+        highlight={null}
+        onHighlight={() => undefined}
+      />,
+    );
+    const centre = [...container.querySelectorAll("span")].find((span) =>
+      span.className.includes("line-clamp-2"),
+    );
+    expect(centre?.textContent).toBe("KULAR_GREEN");
+    expect(centre?.innerHTML).toBe("KULAR_<wbr>GREEN");
+  });
+
   it("refuses to split a total of zero", () => {
     const { container } = donut([0, 0]);
     expect(container.querySelectorAll("circle[stroke-dasharray]")).toHaveLength(0);
