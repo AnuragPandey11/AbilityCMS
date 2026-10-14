@@ -282,6 +282,16 @@ export const IconDevices = (p: IconProps) => (
   </Svg>
 );
 
+/** Plant Onboarding — a checklist worked through in order. */
+export const IconOnboarding = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4.6" y="4" width="14.8" height="17" rx="2.2" />
+    <path d="M9 4V3.4a1.2 1.2 0 0 1 1.2-1.2h3.6A1.2 1.2 0 0 1 15 3.4V4" />
+    <path d="M8 10.2l1.4 1.4 2.4-2.6M13.8 10.6h2.4" />
+    <path d="M8 15.8l1.4 1.4 2.4-2.6M13.8 16.2h2.4" />
+  </Svg>
+);
+
 /** Wiring & Diagram — nodes and the edges between them. */
 export const IconWiring = (p: IconProps) => (
   <Svg {...p}>

@@ -1,10 +1,14 @@
 /**
- * Create a Client (`POST /clients`, Super Admin only).
+ * Create a Client and its first login (`POST /clients`, Super Admin only).
  *
  * A new Client starts in `onboarding` and has no Plants; `onCreated` receives
- * the row so the caller can switch the session into it and carry on — the
- * onboarding wizard does exactly that, because a Plant cannot be created
- * without an active Client (I-9).
+ * the row so the onboarding wizard can carry straight on to its first Plant.
+ *
+ * ⚠ The login is part of the form, not a later step. This form used to create
+ * the Client alone, so a Client made in the wizard could be signed into by
+ * nobody — finished-looking on every screen, with only its creator knowing a
+ * step was outstanding. The server creates both in one transaction, as
+ * Clients → "+ Add a Client" always has.
  *
  * ⚠ The commercial fields (GSTIN, client number, contact, contract) are
  * PROPOSED, not client-confirmed — migration 0019. All optional: a Client is
@@ -17,13 +21,20 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/api/queryKeys";
 import * as clientsApi from "@/api/endpoints/clients";
 import { isApiError } from "@/api/problem";
-import { Button, Field, inputClass } from "@/components/ui";
+import { Button, Field, PasswordInput, inputClass } from "@/components/ui";
 
 // The API enforces this too, and so does a CHECK constraint. Repeated here only
 // so the operator is told before the round trip, never as the authority.
 const GSTIN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 
 const today = (): string => new Date().toISOString().slice(0, 10);
+
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** The server's own minimum for a first login (`FirstUser.password`). */
+export const FIRST_LOGIN_MIN_PASSWORD = 8;
+
+type FirstRole = "admin" | "employee" | "guest";
 
 /** Shown live beside the day count, so the stored date is never a surprise. */
 function expiryPreview(start: string, days: string): string | null {
@@ -37,9 +48,10 @@ function expiryPreview(start: string, days: string): string | null {
 
 export function NewClientForm({
   onCreated,
-  submitLabel = "Create Client",
+  submitLabel = "Create Client and login",
 }: {
-  onCreated?: (client: clientsApi.CreatedClient) => void;
+  /** The created Client, and the email that can now sign in to it. */
+  onCreated?: (client: clientsApi.CreatedClient, loginEmail: string) => void;
   submitLabel?: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
@@ -51,6 +63,10 @@ export function NewClientForm({
   const [contactEmail, setContactEmail] = useState("");
   const [contractStart, setContractStart] = useState(today());
   const [contractDays, setContractDays] = useState("");
+  const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<FirstRole>("admin");
   const [error, setError] = useState<string | null>(null);
 
   const gstError =
@@ -72,6 +88,10 @@ export function NewClientForm({
     setContactEmail("");
     setContractStart(today());
     setContractDays("");
+    setEmail("");
+    setFullName("");
+    setPassword("");
+    setRole("admin");
   };
 
   const create = useMutation({
@@ -89,12 +109,21 @@ export function NewClientForm({
         contact_email: contactEmail.trim() || null,
         contract_start_date: contractDays.trim() ? contractStart : null,
         contract_valid_days: contractDays.trim() ? Number(contractDays) : null,
+        // Sent together on purpose: the server creates both in one
+        // transaction, so a failure leaves no half-made Client behind.
+        first_user: {
+          email: email.trim(),
+          password,
+          full_name: fullName.trim() || null,
+          role_code: role,
+        },
       }),
     onSuccess: (created) => {
+      const loginEmail = email.trim();
       setError(null);
       reset();
       void queryClient.invalidateQueries({ queryKey: qk.clients() });
-      onCreated?.(created);
+      onCreated?.(created, loginEmail);
     },
     onError: (err) =>
       setError(
@@ -102,8 +131,10 @@ export function NewClientForm({
       ),
   });
 
+  const loginReady =
+    EMAIL.test(email.trim()) && password.length >= FIRST_LOGIN_MIN_PASSWORD;
   const canSubmit =
-    code.trim() !== "" && name.trim() !== "" && !gstError && !create.isPending;
+    code.trim() !== "" && name.trim() !== "" && loginReady && !gstError && !create.isPending;
 
   return (
     <form
@@ -135,6 +166,59 @@ export function NewClientForm({
           />
         </Field>
       </div>
+
+      <fieldset className="mt-5 border-t border-line pt-4">
+        <legend className="sr-only">First login</legend>
+        <p className="mb-1 text-[11px] uppercase tracking-wide text-ink-faint">
+          First login — created with the Client
+        </p>
+        <p className="mb-3 max-w-xl text-[11px] leading-relaxed text-ink-muted">
+          A Client Admin sees every Plant of their Client, including ones added later.
+          Any other role starts with no Plants until they are assigned under Users.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Email" required>
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className={inputClass}
+              autoComplete="off"
+              placeholder="admin@example.com"
+            />
+          </Field>
+          <Field label="Full name">
+            <input
+              value={fullName}
+              onChange={(event) => setFullName(event.target.value)}
+              className={inputClass}
+              autoComplete="off"
+            />
+          </Field>
+          <Field
+            label="Password"
+            required
+            hint={`At least ${FIRST_LOGIN_MIN_PASSWORD} characters. Give it to the person afterwards.`}
+          >
+            <PasswordInput
+              value={password}
+              onChange={setPassword}
+              autoComplete="new-password"
+            />
+          </Field>
+          <Field label="Role" required>
+            <select
+              value={role}
+              onChange={(event) => setRole(event.target.value as FirstRole)}
+              className={inputClass}
+            >
+              <option value="admin">Client Admin — sees every Plant</option>
+              <option value="employee">Employee — needs Plant access granted</option>
+              <option value="guest">Guest — demonstration Clients only</option>
+            </select>
+          </Field>
+        </div>
+      </fieldset>
 
       <fieldset className="mt-5 border-t border-line pt-4">
         <legend className="sr-only">Commercial details</legend>
@@ -227,14 +311,17 @@ export function NewClientForm({
           {error}
         </div>
       ) : null}
-      <Button
-        type="submit"
-        variant="primary"
-        className="mt-4"
-        disabled={!canSubmit}
-      >
-        {create.isPending ? "Creating…" : submitLabel}
-      </Button>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Button type="submit" variant="primary" disabled={!canSubmit}>
+          {create.isPending ? "Creating…" : submitLabel}
+        </Button>
+        {!loginReady || !code.trim() || !name.trim() ? (
+          <span className="text-[11px] text-ink-faint">
+            Needs a code, a name, and a login with a password of at least{" "}
+            {FIRST_LOGIN_MIN_PASSWORD} characters.
+          </span>
+        ) : null}
+      </div>
     </form>
   );
 }

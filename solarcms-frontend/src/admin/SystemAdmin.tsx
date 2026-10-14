@@ -19,7 +19,6 @@ import type { AuditEntry, Client } from "@/api/schemas";
 import { Panel, Badge, inputClass } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { DataTable, type Column } from "@/components/tables/DataTable";
-import { NewClientForm } from "@/admin/NewClientForm";
 import { formatDateTime } from "@/format/datetime";
 import { usePermission } from "@/auth/usePermission";
 import { useAuth } from "@/auth/AuthProvider";
@@ -201,9 +200,12 @@ export function SystemAdmin(): JSX.Element {
         .
       </p>
 
+      {/* No "New Client" form here. It created a Client with no login, and
+          adding a Client already has two homes that create both together:
+          Clients → "+ Add a Client" and Plant Onboarding. */}
       <Panel
         title="Clients"
-        subtitle="Switching Client is a full state reset — every cached query is discarded."
+        subtitle="Switching Client is a full state reset — every cached query is discarded. To add a Client, use Clients or Plant Onboarding."
       >
         {clientsQuery.isLoading ? (
           <LoadingState label="Loading Clients" />
@@ -217,13 +219,6 @@ export function SystemAdmin(): JSX.Element {
             filterPlaceholder="Filter Clients…"
           />
         )}
-      </Panel>
-
-      <Panel
-        title="New Client"
-        subtitle="A Client owns Plants, Users and Alarms. It starts in onboarding with no Plants — use “switch to” above, then Plant onboarding, to add the first one."
-      >
-        <NewClientForm />
       </Panel>
 
       <Panel
