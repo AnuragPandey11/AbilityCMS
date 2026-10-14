@@ -193,7 +193,7 @@ export function RowSummary({ issue, timezone }: { issue: DataIssue; timezone: st
           <Muted inline>{num(issue, "inputs_with_current")} carried current in the last day</Muted>
         </Line>
       );
-    case "isStringshidden":
+    case "strings_hidden":
       return (
         <Line>
           Count is {num(issue, "string_count")}, but input(s) {numbers(issue, "hidden").join(", ")} carry current
@@ -392,7 +392,7 @@ export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): J
       );
     }
     case "string_count_missing":
-    case "isStringshidden":
+    case "strings_hidden":
     case "string_count_high":
       return <StringCountFix issue={issue} ctx={ctx} busy={busy} />;
     case "inverter_type_missing":
@@ -748,7 +748,7 @@ function NumberField({
 function StringCountFix({ issue, ctx, busy }: { issue: DataIssue; ctx: FixContext; busy: boolean }): JSX.Element {
   const sent = num(issue, "inputs_sent");
   const hidden = numbers(issue, "hidden");
-  const suggested = issue.kind === "isStringshidden" ? Math.max(sent ?? 0, ...hidden) : sent;
+  const suggested = issue.kind === "strings_hidden" ? Math.max(sent ?? 0, ...hidden) : sent;
   return (
     <NumberFix
       issue={issue} ctx={ctx} busy={busy} label="Strings" unit=""
