@@ -193,7 +193,9 @@ export async function customCatalog(plantIds: number[]): Promise<CustomCatalog> 
 export async function customTable(definition: CustomReportDefinition): Promise<ReportTable> {
   return parse(
     ReportTableSchema,
-    await request("/reports/custom/table", { method: "POST", body: definition }),
+    // A read with a body (the definition is too long for a query string), and
+    // the preview's query: it must not be announced as a write.
+    await request("/reports/custom/table", { method: "POST", body: definition, read: true }),
     "POST /reports/custom/table",
   );
 }

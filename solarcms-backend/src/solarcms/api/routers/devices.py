@@ -29,6 +29,7 @@ from solarcms.schemas.assets import (
     DeviceTopicCreate,
     DeviceUpdate,
 )
+from solarcms.services import snapshots
 from solarcms.services.device_topics import (
     TopicRefused,
     attach_topic,
@@ -373,6 +374,8 @@ async def _insert_devices(
         text("SELECT client_id FROM plants WHERE id = :id"), {"id": plant_id})).first()
     if plant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+    # A new Device changes what the dashboard's slots resolve to.
+    snapshots.plant_edited(session, plant_id)
 
     out: list[dict[str, Any]] = []
     for device in devices:
@@ -535,6 +538,8 @@ async def delete_device(
     # decoding into a Device that no longer exists for five minutes.
     for topic in topics:
         await invalidate_resolution(topic)
+    # By Plant: after the commit there is no Device to find it from.
+    snapshots.plant_edited(session, row.plant_id)
 
     await _audit(session, user, row.client_id, "device.delete", device_id,
                  before={"code": row.code, "topic": row.source_address,
@@ -753,6 +758,9 @@ async def update_device(
     # edit silently failed. Every topic of the Device, extras included: each is
     # cached separately, with the same bindings and status.
     await invalidate_device(session, device_id, before.source_address)
+    # Its size, Model, string count, wiring and status are what the Plant's
+    # stored figures and schematic were worked out from.
+    snapshots.plant_edited(session, before.plant_id)
 
     await _audit(session, user, before.client_id, "device.update", device_id,
                  before=dict(before._mapping), after=dict(row._mapping))
@@ -784,6 +792,7 @@ async def rebind_from_model(
     result = await bind_from_model(session, device.client_id, device_id,
                                    replace=replace)
     await invalidate_device(session, device_id)
+    snapshots.device_edited(session, device_id)
     await _audit(session, user, device.client_id, "device.bindings.from_model",
                  device_id, after={**result, "replace": replace})
     return result
@@ -939,6 +948,8 @@ async def replace_bindings(
     # corrected scale takes effect on the next message rather than in five minutes.
     # Every topic: an Inverter's string topic decodes against these bindings too.
     cleared = await invalidate_device(session, device_id)
+    # The dashboard's slots resolve against bindings.
+    snapshots.device_edited(session, device_id)
     return {"device_id": device_id, "bindings": len(body.bindings),
             "resolution_cache": "invalidated" if cleared else "n/a"}
 
@@ -1019,6 +1030,7 @@ async def add_binding(
     # Every topic of the Device decodes against these bindings, and each one's
     # resolution is cached; the next message must use the new mapping.
     await invalidate_device(session, device_id)
+    snapshots.device_edited(session, device_id)
     await live.remove_unmapped_keys(device_id, [body.source_key])
     return dict(row._mapping)
 
@@ -1077,6 +1089,7 @@ async def update_binding(
                  after={k: after._mapping[k] for k in sent if k in after._mapping}
                  | {"tag_code": after.tag_code})
     await invalidate_device(session, device_id)
+    snapshots.device_edited(session, device_id)
     await live.remove_unmapped_keys(device_id, [after.source_key])
     return dict(after._mapping)
 

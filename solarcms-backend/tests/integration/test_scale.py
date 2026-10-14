@@ -112,6 +112,112 @@ class TestSnapshots:
             assert kpis["computed_at"] != "stale", "a stale copy was served as current"
 
 
+async def _tag_stored_copies(plant_id: int) -> None:
+    """Mark the stored bodies, so a response can say whether it was one."""
+    async with scoped_session(SecurityContext.platform(0), role=SCHEDULER_ROLE) as s:
+        await s.execute(text("""
+            UPDATE plant_snapshots
+               SET payload = jsonb_set(payload, '{stored_copy}', 'true')
+             WHERE plant_id = :p
+        """), {"p": plant_id})
+
+
+async def _served_stored(http: httpx.AsyncClient, plant_id: int) -> dict[str, bool]:
+    kpis = (await http.get(f"/plants/{plant_id}/kpis")).json()
+    board = (await http.get(f"/plants/{plant_id}/dashboard")).json()
+    return {"kpis": kpis.get("stored_copy") is True,
+            "dashboard": board.get("stored_copy") is True}
+
+
+class TestSetAsideOnEdit:
+    """An edit sets the Plant's stored figures aside (migration 0042).
+
+    Each of these runs the mark as the API role, under the caller's RLS — so a
+    missing GRANT shows here as a copy still being served, not as a log line.
+    """
+
+    async def test_an_edit_to_the_plant_sets_its_copies_aside(self) -> None:
+        mine = await _client_with_plant()
+        await snapshots.refresh_all(kpis=True)
+        await _tag_stored_copies(mine["plant_id"])
+        async with await _login(mine["email"]) as http:
+            assert await _served_stored(http, mine["plant_id"]) == {
+                "kpis": True, "dashboard": True}
+            edit = await http.patch(f"/plants/{mine['plant_id']}",
+                                    json={"dc_capacity_kwp": 1200})
+            assert edit.status_code == 200, edit.text
+            # The very next read computes afresh, from the new capacity.
+            assert await _served_stored(http, mine["plant_id"]) == {
+                "kpis": False, "dashboard": False}
+
+        # The scheduler's next pass began after the edit, so it is served again.
+        await snapshots.refresh_all(kpis=True)
+        await _tag_stored_copies(mine["plant_id"])
+        async with await _login(mine["email"]) as http:
+            assert await _served_stored(http, mine["plant_id"]) == {
+                "kpis": True, "dashboard": True}
+
+    async def test_a_pass_that_began_before_the_edit_is_not_served(self) -> None:
+        # The race the column exists for: a pass already under way when the
+        # edit lands stores figures worked out from the old settings.
+        mine = await _client_with_plant()
+        await snapshots.refresh_all(kpis=True)
+        await _tag_stored_copies(mine["plant_id"])
+        async with scoped_session(SecurityContext.platform(0), role=SCHEDULER_ROLE) as s:
+            await s.execute(text("""
+                UPDATE plant_snapshots SET plant_edited_at = computed_at + interval '1 second'
+                 WHERE plant_id = :p
+            """), {"p": mine["plant_id"]})
+        async with await _login(mine["email"]) as http:
+            assert await _served_stored(http, mine["plant_id"]) == {
+                "kpis": False, "dashboard": False}
+            fleet = (await http.get("/plants/snapshots")).json()
+            row = next(r for r in fleet["plants"] if r["plant_id"] == mine["plant_id"])
+            assert row["kpis"].get("stored_copy") is not True
+            assert row["dashboard"].get("stored_copy") is not True
+
+    async def test_a_refused_edit_leaves_the_copies_in_place(self) -> None:
+        mine = await _client_with_plant()
+        await snapshots.refresh_all(kpis=True)
+        await _tag_stored_copies(mine["plant_id"])
+        async with await _login(mine["email"]) as http:
+            refused = await http.patch(f"/plants/{mine['plant_id']}",
+                                       json={"region_code": "NO-SUCH-REGION"})
+            assert refused.status_code == 422, refused.text
+            assert await _served_stored(http, mine["plant_id"]) == {
+                "kpis": True, "dashboard": True}
+
+    async def test_an_edit_to_a_devices_bindings_finds_its_plant(self) -> None:
+        mine = await _client_with_plant()
+        async with scoped_session(SecurityContext.platform(0), role=None) as s:
+            device_id = (await s.execute(text("""
+                INSERT INTO devices (client_id, plant_id, device_model_id, code, name)
+                SELECT :c, :p, dm.id, 'INV-1', 'INV-1'
+                  FROM device_models dm JOIN device_types dt ON dt.id = dm.device_type_id
+                 WHERE dt.code = 'INVERTER' ORDER BY dm.id LIMIT 1
+                RETURNING id
+            """), {"c": mine["client_id"], "p": mine["plant_id"]})).scalar_one()
+        await snapshots.refresh_all(kpis=True)
+        await _tag_stored_copies(mine["plant_id"])
+        async with await _login(mine["email"]) as http:
+            rebound = await http.post(f"/devices/{device_id}/bindings/from-model")
+            assert rebound.status_code == 200, rebound.text
+            assert await _served_stored(http, mine["plant_id"]) == {
+                "kpis": False, "dashboard": False}
+
+    async def test_another_plants_copies_are_left_alone(self) -> None:
+        mine, theirs = await _client_with_plant(), await _client_with_plant()
+        await snapshots.refresh_all(kpis=True)
+        await _tag_stored_copies(theirs["plant_id"])
+        async with await _login(mine["email"]) as http:
+            edit = await http.patch(f"/plants/{mine['plant_id']}",
+                                    json={"dc_capacity_kwp": 900})
+            assert edit.status_code == 200, edit.text
+        async with await _login(theirs["email"]) as http:
+            assert await _served_stored(http, theirs["plant_id"]) == {
+                "kpis": True, "dashboard": True}
+
+
 class TestSchedulerReads:
     async def test_the_scheduler_role_may_read_the_minute_tiers(self) -> None:
         # The health sweep now sums agg_15m; without 0037 this was "permission

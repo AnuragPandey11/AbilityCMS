@@ -319,6 +319,10 @@ export function variantWords(
 ): string | null {
   if (!variant) return null;
   switch (variant) {
+    // PR divides by the horizontal sensor (`PLANT_IRRADIATION_SOURCE`); the
+    // plane-of-array wording is kept for the day it divides by GTI instead.
+    case "ghi_uncorrected":
+      return "horizontal irradiance (GHI), not temperature-corrected";
     case "poa_uncorrected":
       return "plane-of-array irradiance, not temperature-corrected";
     case "ac_capacity_calendar_hours":

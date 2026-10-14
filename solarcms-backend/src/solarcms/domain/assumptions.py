@@ -450,13 +450,16 @@ DERIVED_TAG_FORMULAS: Final[dict[str, tuple[str, str]]] = {
     ),
     # ── SUPPLIED: (TODAY_ENERGY/(CUMMULATIVE GHI*DC CAPACITY)) * 100.0
     #
-    # ⚠ This is **not** the IEC 61724 PR in `formulas.py`, and the difference is
-    # deliberate. Theirs divides by GHI (horizontal) where ours used GTI/POA
-    # (plane-of-array), and theirs is a percentage where ours was a fraction.
-    # Both are kept: this one is what the client's reports must agree with, and
-    # `formulas.performance_ratio` stays as the reference definition so the two
-    # can be compared rather than conflated (the same reason
-    # REPORTED_PERFORMANCE_RATIO exists). PR_VARIANT records which produced a row.
+    # ⚠ This is **not** the IEC 61724 PR in `formulas.py`. Theirs is a
+    # percentage where ours is a fraction, and ours divides by whichever sensor
+    # `PLANT_IRRADIATION_SOURCE` names — GHI (horizontal) today, as theirs does,
+    # though IEC 61724 means plane-of-array (GTI), which on a tilted array reads
+    # higher and so gives a lower PR (86.7% against 100.0% on KULAR_GREEN,
+    # 14 Oct 2026). Both are kept: this one is what the client's reports must
+    # agree with, and `formulas.performance_ratio` stays as the reference
+    # definition so the two can be compared rather than conflated (the same
+    # reason REPORTED_PERFORMANCE_RATIO exists). PR_VARIANT records which
+    # produced a row.
     "PERFORMANCE_RATIO": (
         "(PLANT_ENERGY_TODAY / (AVG.GHI_CUMULATIVE * DC_CAPACITY)) * 100.0", "plant",
     ),
@@ -1078,7 +1081,12 @@ def alias_for(source_key: str, device_type_code: str | None = None) -> str | Non
 
 
 DEFAULT_GRID_EMISSION_FACTOR_KG_PER_KWH: Final = 0.82  # CEA all-India average, approximate
-PR_VARIANT: Final = "poa_uncorrected"  # not temperature-corrected
+# Names the sensor PR divides by, so it must follow `PLANT_IRRADIATION_SOURCE`
+# (`tests/unit/test_assumptions_integrity.py` holds the two together). It said
+# "poa_uncorrected" — plane-of-array — while the source was the horizontal
+# GHI_CUMULATIVE, and every screen printed "plane-of-array" beneath a figure
+# that was not (14 Oct 2026).
+PR_VARIANT: Final = "ghi_uncorrected"  # not temperature-corrected
 CUF_VARIANT: Final = "ac_capacity_calendar_hours"  # no exclusions
 AVAILABILITY_VARIANT: Final = "time_based_excluding_comms"
 
@@ -1254,7 +1262,15 @@ MIN_INTERVAL_S_BY_CATEGORY: Final[dict[str, int]] = {
     # sampling loses only resolution.
     "status": 0,
 }
-MIN_INTERVAL_S_CUMULATIVE: Final = 300  # monotonic; throttling loses nothing
+# Every minute, like the performance Tags. It was 300 s on the grounds that a
+# monotonic counter loses nothing when sampled less often — true of a total,
+# false of "now": each Device's latest stored value was up to five minutes old,
+# each on its own schedule, so at ~60 kWh a minute the Inverters' sum and the
+# meter's advance since midnight swapped places on screen and PR wobbled with
+# them (KULAR_GREEN, 14 Oct 2026). ⚠ Coverage counts what was owed against the
+# Tag's *current* throttle, so a period reaching back before this change reads
+# slightly low for these Tags; the history of throttles is not kept.
+MIN_INTERVAL_S_CUMULATIVE: Final = 60
 LIVE_ROLLUP_HEARTBEAT_S: Final = 5
 HEALTH_SWEEP_INTERVAL_S: Final = 60
 

@@ -14,6 +14,7 @@ import {
   formatRatioAsPercent,
   formatValue,
   variantNote,
+  variantWords,
   digitsForUnit,
   formatCompact,
   ratioIsImplausible,
@@ -81,6 +82,15 @@ describe("provisional formulas are surfaced (OPEN-16)", () => {
     expect(variantNote("poa_uncorrected")).toContain("poa uncorrected");
     expect(variantNote("poa_uncorrected")).toContain("OPEN-16");
     expect(variantNote(null)).toContain("unspecified");
+  });
+
+  it("says which sensor PR divides by, and never claims plane-of-array for GHI", () => {
+    // The dial read "plane-of-array" for weeks under a PR divided by the flat
+    // sensor — 100.0% where the tilted sensor gives 86.7%.
+    const words = variantWords("ghi_uncorrected", "today");
+    expect(words).toContain("horizontal");
+    expect(words).not.toContain("plane-of-array");
+    expect(variantWords("poa_uncorrected", "today")).toContain("plane-of-array");
   });
 });
 

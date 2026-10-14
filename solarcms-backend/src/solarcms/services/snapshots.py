@@ -14,7 +14,12 @@ midnight. Now:
 * the API returns the stored copy while it is fresh, and computes only when it
   is not — a new Plant, or a stopped scheduler — so a stopped scheduler makes
   screens slower, never wrong;
-* the Portfolio reads every Plant's copy in one request (`read_fleet`).
+* the Portfolio reads every Plant's copy in one request (`read_fleet`);
+* an edit to a Plant or one of its Devices sets that Plant's copies aside
+  (`plant_edited`, `device_edited`, migration 0042): a copy is fresh only if
+  the scheduler *began* it after the Plant's last edit, so the screen's
+  re-read straight after a save computes afresh rather than serving figures
+  worked out from the old settings for up to two and a half minutes.
 
 Nothing about any figure changes: not the rules, not the provenance, not the
 coverage — only when and how often the work is done. Each stored body carries
@@ -41,7 +46,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
-from solarcms.db.session import scoped_session
+from solarcms.db.session import after_commit, scoped_session
 from solarcms.services import dashboard
 from solarcms.services.kpis import compute_plant_kpis
 
@@ -62,6 +67,9 @@ KPI_MAX_AGE_S = 150
 #: Plants worked out at once, each on its own session.
 CONCURRENCY = 4
 
+#: A copy worked out before the Plant's last edit is not served, however young.
+_NOT_SET_ASIDE = "(plant_edited_at IS NULL OR computed_at > plant_edited_at)"
+
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, datetime | date):
@@ -80,10 +88,11 @@ def _encode(payload: dict[str, Any]) -> str:
 
 async def _read(session: AsyncSession, plant_id: int, kind: str,
                 max_age_s: int) -> dict[str, Any] | None:
-    row = (await session.execute(text("""
+    row = (await session.execute(text(f"""
         SELECT payload FROM plant_snapshots
          WHERE plant_id = :plant_id AND kind = :kind
            AND computed_at > now() - make_interval(secs => CAST(:max_age AS integer))
+           AND {_NOT_SET_ASIDE}
     """), {"plant_id": plant_id, "kind": kind, "max_age": max_age_s})).first()
     return dict(row.payload) if row is not None else None
 
@@ -117,12 +126,13 @@ async def read_fleet(
     if not plants:
         return []
     ids = [row.id for row in plants]
-    rows = (await session.execute(text("""
+    rows = (await session.execute(text(f"""
         SELECT plant_id, kind, payload FROM plant_snapshots
          WHERE plant_id = ANY(:ids) AND kind = ANY(:kinds)
            AND computed_at > now() - make_interval(secs => CASE kind
                    WHEN 'dashboard' THEN CAST(:dash_age AS integer)
                    ELSE CAST(:kpi_age AS integer) END)
+           AND {_NOT_SET_ASIDE}
     """), {"ids": ids, "kinds": [f"kpis:{period}", "dashboard"],
            "dash_age": DASHBOARD_MAX_AGE_S, "kpi_age": KPI_MAX_AGE_S})).all()
     found: dict[tuple[int, str], dict[str, Any]] = {
@@ -154,6 +164,55 @@ async def read_fleet(
     return out
 
 
+# ── setting copies aside after an edit ──────────────────────────────────────
+
+_EDITED = "snapshots.edited"
+
+
+def plant_edited(session: AsyncSession, plant_id: int) -> None:
+    """Set this Plant's copies aside once the caller's transaction commits."""
+    _edited(session).plants.add(plant_id)
+
+
+def device_edited(session: AsyncSession, device_id: int) -> None:
+    """Set the copies of this Device's Plant aside once the transaction commits.
+
+    By Device, because the routes that change a Device's bindings know only the
+    Device; its Plant is found after the commit. A Device the transaction
+    deleted is found by nobody, so a delete names its Plant instead.
+    """
+    _edited(session).devices.add(device_id)
+
+
+class _Edited:
+    def __init__(self) -> None:
+        self.plants: set[int] = set()
+        self.devices: set[int] = set()
+
+    async def set_aside(self, context: SecurityContext, role: str | None) -> None:
+        # After the commit, in a transaction of its own, by the database's
+        # clock — the clock `_work` stamps a copy with — so a pass that began
+        # before the edit was visible is the one refused. Set inside the edit's
+        # own transaction, a pass starting between this statement and the
+        # commit would read the old settings and still count as later.
+        async with scoped_session(context, role=role) as session:
+            await session.execute(text("""
+                UPDATE plant_snapshots SET plant_edited_at = clock_timestamp()
+                 WHERE plant_id = ANY(:plant_ids)
+                    OR plant_id IN (SELECT plant_id FROM devices WHERE id = ANY(:device_ids))
+            """), {"plant_ids": sorted(self.plants), "device_ids": sorted(self.devices)})
+
+
+def _edited(session: AsyncSession) -> _Edited:
+    held = session.info.get(_EDITED)
+    if isinstance(held, _Edited):
+        return held
+    edited = _Edited()
+    session.info[_EDITED] = edited
+    after_commit(session, _EDITED, edited.set_aside)
+    return edited
+
+
 # ── working them out, on the scheduler ───────────────────────────────────────
 
 
@@ -174,7 +233,11 @@ async def _work(plant_id: int, client_id: int, *, kpis: bool) -> int:
     now = datetime.now(UTC)
     stored = 0
     async with scoped_session(SecurityContext.platform(0), role=SCHEDULER_ROLE) as s:
-        await _store(s, plant_id, client_id, "dashboard", now,
+        # Stamped with when the pass *began*, on the database's clock: an edit
+        # sets copies aside by that clock (`_Edited.set_aside`), and this
+        # server's clock and the database server's need not agree.
+        began = (await s.execute(text("SELECT clock_timestamp()"))).scalar_one()
+        await _store(s, plant_id, client_id, "dashboard", began,
                      await dashboard.render(s, plant_id))
         stored += 1
         if kpis:
@@ -182,7 +245,7 @@ async def _work(plant_id: int, client_id: int, *, kpis: bool) -> int:
                 result = await compute_plant_kpis(
                     s, plant_id, period, compare=period in COMPARED, now=now)
                 if result is not None:
-                    await _store(s, plant_id, client_id, f"kpis:{period}", now, result)
+                    await _store(s, plant_id, client_id, f"kpis:{period}", began, result)
                     stored += 1
     return stored
 

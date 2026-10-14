@@ -131,3 +131,21 @@ class TestEnergyPrecedence:
         # No Inverter: it measures generation, never what the Plant drew.
         export = [t for t, _tag in a.PLANT_ENERGY_COUNTER_PRECEDENCE if t != "INVERTER"]
         assert [t for t, _tag in a.PLANT_IMPORT_COUNTER_PRECEDENCE] == export
+
+
+class TestPerformanceRatio:
+    def test_the_variant_names_the_sensor_pr_divides_by(self) -> None:
+        # The dial's footnote is worded from the variant. It said
+        # "plane-of-array" while PR divided by the horizontal sensor, and on a
+        # tilted array that is the difference between 86.7% and 100.0%.
+        plane = {"GHI_CUMULATIVE": "ghi", "GTI_CUMULATIVE": "poa"}[
+            a.PLANT_IRRADIATION_SOURCE[1]]
+        assert a.PR_VARIANT.startswith(f"{plane}_")
+
+
+class TestThrottles:
+    def test_counters_are_stored_as_often_as_power(self) -> None:
+        # A "today" figure is a counter's latest stored value. Stored less often
+        # than power, the Inverters' sum and the meter's advance are each up to
+        # one throttle old on their own schedules, and swap places on screen.
+        assert a.MIN_INTERVAL_S_CUMULATIVE <= a.MIN_INTERVAL_S_BY_CATEGORY["performance"]

@@ -52,15 +52,21 @@ def specific_yield(energy_kwh: float, dc_capacity_kwp: float) -> FormulaResult:
 
 
 def performance_ratio(
-    energy_kwh: float, poa_irradiation_wh_m2: float, dc_capacity_kwp: float
+    energy_kwh: float, irradiation_wh_m2: float, dc_capacity_kwp: float
 ) -> FormulaResult:
     """PR = actual yield / reference yield. Dimensionless, nominally 0 to 1.
 
-    ⚠ ASSUMED: uses POA irradiance and is **not** temperature-corrected. A
-    temperature-corrected PR runs several points higher in hot weather, which is
-    exactly the disagreement OPEN-16 exists to prevent.
+    ⚠ ASSUMED: **not** temperature-corrected. A temperature-corrected PR runs
+    several points higher in hot weather, which is exactly the disagreement
+    OPEN-16 exists to prevent.
 
-    ⚠ Note the unit trap: `poa_irradiation_wh_m2` is *irradiation* (energy, Wh/m²)
+    ⚠ The irradiation is whatever the caller passes, and every caller passes
+    `PLANT_IRRADIATION_SOURCE` — the horizontal GHI sensor, which is what
+    `PR_VARIANT` names. IEC 61724 divides by plane-of-array (GTI) instead; on a
+    tilted array that reads higher, so this PR reads higher than IEC's and can
+    pass 100% (100.0% against 86.7% on KULAR_GREEN, 14 Oct 2026).
+
+    ⚠ Note the unit trap: `irradiation_wh_m2` is *irradiation* (energy, Wh/m²)
     over the same period as `energy_kwh`, not *irradiance* (power, W/m²). The
     client's broker publishes a figure whose unit is unconfirmed — see
     docs/BROKER_OBSERVATIONS.md §4.1, where the same number is defensible as
@@ -68,11 +74,11 @@ def performance_ratio(
     """
     if dc_capacity_kwp <= 0:
         return FormulaResult(None, PR_VARIANT, "dc_capacity_kwp is zero or unknown")
-    if poa_irradiation_wh_m2 <= 0:
+    if irradiation_wh_m2 <= 0:
         # At night this is the normal case, not an error. PR is undefined with no
         # irradiation, and reporting 0 would drag every daily average down.
         return FormulaResult(None, PR_VARIANT, "no irradiation in period")
-    reference_yield = poa_irradiation_wh_m2 / G_REF_W_PER_M2
+    reference_yield = irradiation_wh_m2 / G_REF_W_PER_M2
     return FormulaResult((energy_kwh / dc_capacity_kwp) / reference_yield, PR_VARIANT)
 
 

@@ -587,6 +587,8 @@ async def set_collector_parent(
         text("SELECT client_id FROM plants WHERE id = :id"), {"id": plant_id})).first()
     if plant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+    # The schematic's stages are stored with the dashboard.
+    snapshots.plant_edited(session, plant_id)
 
     members = (await session.execute(text("""
         SELECT count(*) AS n FROM devices
@@ -771,6 +773,9 @@ async def update_plant(
         {"id": plant_id})).first()
     if before is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plant not found")
+    # Capacities, tariff and status are what the stored figures are worked out
+    # from; set aside only if this commits.
+    snapshots.plant_edited(session, plant_id)
 
     # A Region sent as null clears the Plant's Region; one sent as a code must
     # resolve, so an unknown code is refused rather than quietly ignored.
@@ -1085,6 +1090,7 @@ async def change_plant_status(
 
     if body.status == plant.status:
         return {"plant_id": plant_id, "status": plant.status, "changed": False}
+    snapshots.plant_edited(session, plant_id)
 
     readiness = await commissioning_readiness(plant_id, session, user)
     if body.status == "active" and not readiness["ready"] and not body.force:

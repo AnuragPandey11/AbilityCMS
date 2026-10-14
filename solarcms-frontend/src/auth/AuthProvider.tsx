@@ -18,6 +18,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as authApi from "@/api/endpoints/auth";
+import { CONFIGURATION_REFRESH_MS, useRefreshAfterWrites } from "@/api/afterWrite";
 import { setSessionLostHandler } from "@/api/client";
 import { getTokens, onTokensChanged, setTokens } from "@/api/tokens";
 import { ApiError, isApiError } from "@/api/problem";
@@ -85,6 +86,48 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   useEffect(() => {
     void loadMe();
   }, [loadMe]);
+
+  /**
+   * Re-read the identity after a write: its `plants` drive the Plant picker
+   * everywhere, and a Plant created, renamed or brought into service changes
+   * them. Unlike `loadMe` a failure keeps the identity held — a dropped
+   * request after a save must not sign anybody out (a lost session still
+   * reaches the session-lost handler) — and the answer is dropped if the
+   * session changed while it was in flight, or one Client's identity could
+   * land on another's. An unchanged identity keeps the same object, so a write
+   * does not re-render everything that reads it.
+   */
+  const rereadMe = useCallback(async () => {
+    const asked = getTokens()?.access_token;
+    if (!asked) return;
+    try {
+      const identity = await authApi.me();
+      if (getTokens()?.access_token !== asked) return;
+      setMe((held) =>
+        held !== null && JSON.stringify(held) === JSON.stringify(identity) ? held : identity,
+      );
+    } catch {
+      // Keep what is held; see above.
+    }
+  }, []);
+
+  useRefreshAfterWrites(queryClient, rereadMe);
+
+  useEffect(() => {
+    // Somebody else's edit — a Plant renamed, an assignment granted — reaches
+    // this tab when it is next looked at, and within a minute while it is.
+    // Never while hidden: a background tab asking every minute is load with
+    // nobody reading the answer.
+    const reread = () => {
+      if (document.visibilityState === "visible") void rereadMe();
+    };
+    const timer = setInterval(reread, CONFIGURATION_REFRESH_MS);
+    document.addEventListener("visibilitychange", reread);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", reread);
+    };
+  }, [rereadMe]);
 
   useEffect(
     // Another tab logging out must not leave this one holding a live cache.
