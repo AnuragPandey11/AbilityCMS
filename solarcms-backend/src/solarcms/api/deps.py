@@ -23,7 +23,7 @@ from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solarcms.api.auth import AuthError, decode_token
+from solarcms.api.auth import AuthError, TokenClaims, decode_token
 from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
 
@@ -78,6 +78,53 @@ async def _load_permissions(
     return frozenset(row[0] for row in rows)
 
 
+async def resolve_user(claims: TokenClaims) -> CurrentUser:
+    """Who a verified token speaks for *now*: active, still a member, in what role.
+
+    ⚠ The role is read from the membership on every request, never taken from
+    the token. It decides what RLS shows (`app_can_see_plant` gives an admin
+    every Plant), and a token keeps the role it was issued with — refreshing it
+    copies that role forward — so a demoted Client Admin would otherwise go on
+    seeing every Plant until they signed out. A platform administrator who has
+    switched into a Client they hold no membership of keeps the token's role.
+
+    Raises `AuthError` for a disabled account or a membership that has been
+    removed: both are ejected on their next request, not when the token expires.
+    """
+    # Read under a platform context: the lookup spans memberships for a User
+    # whose Client scope is exactly what is being established, so it cannot
+    # itself be Client-scoped without circularity.
+    async with scoped_session(SecurityContext.platform(claims.user_id), role=None) as s:
+        active = await s.execute(
+            text("SELECT is_active FROM users WHERE id = :id"), {"id": claims.user_id}
+        )
+        is_active = active.scalar()
+        if is_active is None or not is_active:
+            # A deactivated User's existing tokens must stop working at once.
+            raise AuthError("user is inactive")
+        role_code = claims.role_code
+        if claims.client_id is not None:
+            member_role = (await s.execute(text("""
+                SELECT r.code FROM memberships m JOIN roles r ON r.id = m.role_id
+                 WHERE m.user_id = :user_id AND m.client_id = :client_id
+            """), {"user_id": claims.user_id, "client_id": claims.client_id})).scalar()
+            if member_role is not None:
+                role_code = member_role
+            elif not claims.is_platform_admin:
+                raise AuthError("no longer a member of this Client")
+        permissions = await _load_permissions(
+            s, claims.user_id, claims.client_id, claims.is_platform_admin
+        )
+
+    return CurrentUser(
+        user_id=claims.user_id,
+        client_id=claims.client_id,
+        role_code=role_code,
+        is_platform_admin=claims.is_platform_admin,
+        permissions=permissions,
+    )
+
+
 async def get_current_user(
     authorization: Annotated[str | None, Header()] = None,
 ) -> CurrentUser:
@@ -86,31 +133,9 @@ async def get_current_user(
         raise _unauthorized("missing bearer token")
     try:
         claims = decode_token(authorization.split(" ", 1)[1], expect="access")
+        return await resolve_user(claims)
     except AuthError as exc:
         raise _unauthorized(str(exc)) from exc
-
-    # Permissions are read under a platform context: the lookup spans memberships
-    # for a User whose Client scope is exactly what is being established, so it
-    # cannot itself be Client-scoped without circularity.
-    async with scoped_session(SecurityContext.platform(claims.user_id), role=None) as s:
-        active = await s.execute(
-            text("SELECT is_active FROM users WHERE id = :id"), {"id": claims.user_id}
-        )
-        is_active = active.scalar()
-        if is_active is None or not is_active:
-            # A deactivated User's existing tokens must stop working at once.
-            raise _unauthorized("user is inactive")
-        permissions = await _load_permissions(
-            s, claims.user_id, claims.client_id, claims.is_platform_admin
-        )
-
-    return CurrentUser(
-        user_id=claims.user_id,
-        client_id=claims.client_id,
-        role_code=claims.role_code,
-        is_platform_admin=claims.is_platform_admin,
-        permissions=permissions,
-    )
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]

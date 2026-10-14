@@ -36,9 +36,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import text
 
 from solarcms.api.auth import AuthError, decode_token
+from solarcms.api.deps import resolve_user
 from solarcms.cache import keys
 from solarcms.cache.live import get_redis
-from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
 
 log = structlog.get_logger("ws")
@@ -198,13 +198,13 @@ async def _authorised_rooms(token: str) -> tuple[int, list[str]]:
     zero rooms (I-5).
     """
     claims = decode_token(token, expect="access")
-    context = SecurityContext(
-        user_id=claims.user_id, client_id=claims.client_id,
-        role_code=claims.role_code, is_platform_admin=claims.is_platform_admin,
-    )
-    async with scoped_session(context) as session:
+    # The same check every request makes: a disabled account or a removed
+    # membership is refused, and the role comes from the membership rather than
+    # the token, so a demoted Client Admin is not handed every Plant's room.
+    user = await resolve_user(claims)
+    async with scoped_session(user.context) as session:
         rows = (await session.execute(text("SELECT id, client_id FROM plants"))).all()
-    return claims.user_id, [room_key(r.client_id, r.id) for r in rows]
+    return user.user_id, [room_key(r.client_id, r.id) for r in rows]
 
 
 @router.websocket("/ws/live")
