@@ -22,12 +22,24 @@ async def list_users(
 ) -> list[dict[str, Any]]:
     """Users of the caller's Client only — reached through `memberships`, which
     is Client-scoped by RLS. `users` itself is not, because one person may belong
-    to several Clients."""
+    to several Clients.
+
+    Each row carries the Plants and dashboards the membership holds now, so the
+    Access panel opens showing them ticked. Both PUTs replace the whole list,
+    and a panel that opened blank turned "add one Plant" into "revoke the rest".
+    """
     rows = (await session.execute(text("""
         SELECT u.id, u.email, u.full_name, u.is_active, u.last_login_at,
                r.code AS role_code,
                (SELECT count(*) FROM user_plant_access upa
-                 WHERE upa.membership_id = m.id) AS assigned_plants
+                 WHERE upa.membership_id = m.id) AS assigned_plants,
+               ARRAY(SELECT upa.plant_id FROM user_plant_access upa
+                      WHERE upa.membership_id = m.id
+                      ORDER BY upa.plant_id) AS plant_ids,
+               ARRAY(SELECT d.code FROM user_dashboard_access uda
+                       JOIN dashboards d ON d.id = uda.dashboard_id
+                      WHERE uda.membership_id = m.id
+                      ORDER BY d.sort_order) AS dashboards
           FROM memberships m
           JOIN users u ON u.id = m.user_id
           JOIN roles r ON r.id = m.role_id
@@ -176,16 +188,51 @@ async def update_user(
     Reached through `memberships`, which is Client-scoped by RLS — so a User who
     is not a member of the caller's Client is a 404 here regardless of whether
     they exist elsewhere. `users` itself is not Client-scoped, because one person
-    may legitimately belong to several Clients.
+    may legitimately belong to several Clients — so a password set here is that
+    person's one password, for every Client they sign in to.
+
+    A role change takes effect on the person's next request: `get_current_user`
+    reads the role from the membership, never from the token.
     """
     membership = (await session.execute(text("""
-        SELECT m.id, m.role_id FROM memberships m
+        SELECT m.id, r.code AS role_code, u.platform_role
+          FROM memberships m
+          JOIN roles r ON r.id = m.role_id
+          JOIN users u ON u.id = m.user_id
          WHERE m.user_id = :user_id AND m.client_id = :client_id
     """), {"user_id": user_id, "client_id": actor.client_id})).first()
     if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user is not a member")
 
-    if body.role_code is not None:
+    # A Client's administrator must not be able to take over a platform
+    # administrator's account by resetting its password or disabling it.
+    if membership.platform_role == "super_admin" and not actor.is_platform_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "a platform administrator's account is managed by the platform")
+
+    role_changes = body.role_code is not None and body.role_code != membership.role_code
+    if role_changes and user_id == actor.user_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "you cannot change your own role. Ask another administrator, so nobody "
+            "demotes themselves by accident.")
+    if role_changes and membership.role_code == "admin":
+        # The last Client Admin leaving the role would leave nobody able to
+        # manage the Client's Users, Plants or Alarm emails.
+        other_admins = (await session.execute(text("""
+            SELECT count(*) FROM memberships m
+              JOIN roles r ON r.id = m.role_id
+              JOIN users u ON u.id = m.user_id
+             WHERE m.client_id = :client_id AND r.code = 'admin'
+               AND m.user_id <> :user_id AND u.is_active
+        """), {"client_id": actor.client_id, "user_id": user_id})).scalar()
+        if not other_admins:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "this is the Client's only active Client Admin. Make someone else "
+                "Client Admin first, so the Client is never left without one.")
+
+    if role_changes:
         await session.execute(text("""
             UPDATE memberships SET role_id = (SELECT id FROM roles WHERE code = :code)
              WHERE id = :membership_id
@@ -208,7 +255,10 @@ async def update_user(
         INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
         VALUES (:client_id, :actor, 'user.update', 'users', :id, CAST(:after AS jsonb))
     """), {"client_id": actor.client_id, "actor": actor.user_id, "id": user_id,
-           "after": json.dumps({"role": body.role_code, "is_active": body.is_active})})
+           # Never the password itself, only that it was set.
+           "after": json.dumps({"role": body.role_code, "is_active": body.is_active,
+                                "full_name": body.full_name,
+                                "password_changed": body.password is not None})})
     return {**dict(row._mapping), "role": body.role_code}
 
 

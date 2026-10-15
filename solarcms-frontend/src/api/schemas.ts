@@ -1230,6 +1230,10 @@ export const UserSchema = z.object({
   role_code: z.string(),
   // Zero assignments means zero Plants, never full access (I-5, Guardrail 7).
   assigned_plants: z.number(),
+  // What the membership holds now, so the Access panel opens with it ticked —
+  // both lists are replaced whole on save. Defaulted for an older server.
+  plant_ids: z.array(z.coerce.number()).default([]),
+  dashboards: z.array(z.string()).default([]),
 });
 export type User = z.infer<typeof UserSchema>;
 

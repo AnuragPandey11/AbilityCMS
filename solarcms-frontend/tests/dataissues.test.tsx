@@ -209,6 +209,35 @@ describe("Data Issues", () => {
     expect(screen.getByText(/visible to the platform administrator only/)).toBeInTheDocument();
   });
 
+  it("raises a string count to show every working string, one Device or all", async () => {
+    // The kind the server sends is `strings_hidden`. The screen once matched a
+    // misspelling of it, so these rows arrived with no summary and no fix.
+    const hidden = (id: number, code: string, hiddenInputs: number[]) =>
+      issue({
+        key: `strings_hidden:${id}`, kind: "strings_hidden", category: "data_wrong",
+        device_id: id, device_code: code,
+        facts: { string_count: 12, inputs_sent: 16, inputs_with_current: 14, hidden: hiddenInputs },
+      });
+    response = {
+      ...baseResponse(),
+      counts: { data_lost: 0, data_wrong: 2, setup: 0, acknowledged: 0 },
+      issues: [hidden(51, "INVERTER_1", [13, 14]), hidden(52, "INVERTER_2", [13])],
+    };
+    renderScreen();
+    const strings = card("Working strings not shown");
+    expect(within(strings).getAllByText(/but input\(s\) 13/)).toHaveLength(2);
+
+    const first = within(strings).getByText("INVERTER_1").closest("li") as HTMLElement;
+    expect(within(first).getByRole("textbox", { name: /Strings for INVERTER_1/ })).toHaveValue("16");
+    fireEvent.click(within(first).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(devices.updateDevice).toHaveBeenCalledWith(51, { string_count: 16 }));
+
+    devices.updateDevice.mockClear();
+    fireEvent.click(within(strings).getByRole("button", { name: "Show every working string" }));
+    await waitFor(() => expect(devices.updateDevice).toHaveBeenCalledTimes(2));
+    expect(devices.updateDevice).toHaveBeenCalledWith(52, { string_count: 16 });
+  });
+
   it("uses what was measured, for one Device", async () => {
     response = { ...baseResponse(), counts: { ...baseResponse().counts, data_lost: 0 },
       issues: [INTERVAL] };

@@ -40,7 +40,7 @@ import { Badge, Button, Panel } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonPanel } from "@/components/state";
 import { IconCheck } from "@/components/icons";
 import { formatAge, formatDateTime, formatTime } from "@/format/datetime";
-import { CATEGORIES, groupByKind, kindInfo, num, str, suggestedBindings, type IssueGroup } from "./kinds";
+import { CATEGORIES, groupByKind, kindInfo, num, numbers, str, suggestedBindings, type IssueGroup } from "./kinds";
 import {
   AckControl, RowFix, RowSummary, compactInput, inverterModelFor, type FixContext,
 } from "./fixes";
@@ -563,6 +563,26 @@ function BulkActions({ group, ctx }: { group: IssueGroup; ctx: FixContext }): JS
           }
         >
           Set each to what it sends
+        </Button>
+      ) : null;
+      break;
+    case "strings_hidden":
+      // The same count the row's own box offers: enough to show every input
+      // carrying current, never fewer than the Device sends.
+      fix = ctx.canManage ? (
+        <Button
+          variant="primary"
+          disabled={busy}
+          title="Raise each Device's string count so every input carrying current is shown."
+          onClick={() =>
+            void ctx.actions.run(keys, each(async (issue) => {
+              await devicesApi.updateDevice(issue.device_id as number, {
+                string_count: Math.max(num(issue, "inputs_sent") ?? 0, ...numbers(issue, "hidden")),
+              });
+            }), `${issues.length} string counts raised to show every working string.`)
+          }
+        >
+          Show every working string
         </Button>
       ) : null;
       break;

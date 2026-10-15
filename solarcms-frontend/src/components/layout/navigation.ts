@@ -35,6 +35,7 @@ import {
   IconMapping,
   IconDataIssues,
   IconMeter,
+  IconOnboarding,
   IconOverview,
   IconPlant,
   IconPortfolio,
@@ -208,6 +209,10 @@ export const ADMIN_LINKS: AdminLink[] = [
   // The hub for everything the broker sends that is not being kept or not
   // trusted; first after Clients, because it is where the work is listed.
   { to: "/admin/data-issues", label: "Data Issues", permission: "config.modify", icon: IconDataIssues },
+  // The guided path through a whole Plant — Client, Plant, Blocks, Devices,
+  // commissioning — beside the screen that edits a Plant afterwards. It was
+  // reachable only from a Data Issues link or by typing its address.
+  { to: "/admin/onboarding", label: "Plant Onboarding", permission: "plant.manage", icon: IconOnboarding },
   { to: "/admin/plant-setup", label: "Plants & Devices", permission: "plant.manage", icon: IconDevices },
   { to: "/admin/hierarchy", label: "Wiring & Diagram", permission: "plant.manage", icon: IconWiring },
   { to: "/admin/bindings", label: "Tag Mapping", permission: "config.modify", icon: IconMapping },

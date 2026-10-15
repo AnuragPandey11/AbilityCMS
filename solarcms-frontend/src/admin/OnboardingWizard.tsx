@@ -378,8 +378,8 @@ export function OnboardingWizard(): JSX.Element {
       setCreatedDevices(result.devices);
       setError(null);
       setMessage(
-        `${result.created} Device(s) registered. Wire them up in Plant ` +
-          `Hierarchy, where the diagram is beside you as you do it.`,
+        `${result.created} Device(s) registered. Wire them up in Wiring ` +
+          `& Diagram, where the diagram is beside you as you do it.`,
       );
       advanceTo(STEP_COMMISSION);
       void queryClient.invalidateQueries({ queryKey: ["plants"] });
@@ -699,14 +699,19 @@ export function OnboardingWizard(): JSX.Element {
               <div className="border-t border-line pt-4">
                 <h3 className="mb-1 text-sm font-medium text-ink">New Client</h3>
                 <p className="mb-3 text-xs text-ink-muted">
-                  Create the Client, then continue straight into its first Plant.
+                  Create the Client and its first login, then continue straight into
+                  its first Plant.
                 </p>
                 <NewClientForm
-                  submitLabel="Create Client and continue"
-                  onCreated={(client) => {
+                  submitLabel="Create Client and login, and continue"
+                  onCreated={(client, loginEmail) => {
                     setError(null);
                     void queryClient.invalidateQueries({ queryKey: qk.clients() });
                     chooseClient(client.id, `${client.code} · ${client.name}`);
+                    setMessage(
+                      `${client.code} created, and ${loginEmail} can sign in now. ` +
+                        "Next, its first Plant.",
+                    );
                   }}
                 />
               </div>
@@ -1204,8 +1209,8 @@ export function OnboardingWizard(): JSX.Element {
         >
           <p className="max-w-2xl text-xs leading-relaxed text-ink-muted">
             {createdDevices.length} Device(s) are registered. Each needs its Tag
-            bindings set before its Readings decode — that is done on the Device
-            Bindings screen, where the current binding sits beside what is
+            bindings set before its Readings decode — that is done on the Tag
+            Mapping screen, where the current binding sits beside what is
             actually arriving.
           </p>
           <div className="mt-2 flex flex-wrap gap-1">
