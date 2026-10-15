@@ -29,6 +29,7 @@ import type { TrendWindow } from "@/api/trendWindow";
 import { useDashboard } from "@/auth/useDashboard";
 import { InfoHint, Panel, SegmentedControl, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { CommStatusPill, PlantPicker, SeverityBadge } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { OverlayTrendChart } from "@/components/charts/OverlayTrendChart";
@@ -62,6 +63,13 @@ function deviceName(device: Pick<DeviceListItem, "name" | "code">): string | nul
 export function figureShown(figure: FigureSpec, filled: Filled, bound: Set<string> | null): boolean {
   if (!figure.optional) return true;
   return filled.value !== null || (bound !== null && figure.codes.some((code) => bound.has(code)));
+}
+
+/** The spec's figures this Device can answer, each with its reading. */
+function shownFigures(spec: EquipmentSpec, readings: DeviceReadings): { figure: FigureSpec; filled: Filled }[] {
+  return spec.figures
+    .map((figure) => ({ figure, filled: readings.fill(figure) }))
+    .filter(({ figure, filled }) => figureShown(figure, filled, readings.bound));
 }
 
 /**
@@ -104,10 +112,13 @@ export function FlagTile({
   filled,
   state,
   timezone,
+  size = "md",
 }: {
   filled: Filled;
   state: FlagState;
   timezone: string | undefined;
+  /** `sm` for a compact screen (`EquipmentSpec.compact`). */
+  size?: "sm" | "md";
 }): JSX.Element {
   const missing = filled.value === null;
   const title = [
@@ -119,10 +130,12 @@ export function FlagTile({
     .join("\n");
   return (
     <div
-      className={`surface-tile flex min-w-0 items-center justify-between gap-3 rounded-card border px-3.5 py-2.5 ${FRAME[state.tone]}`}
+      className={`surface-tile flex min-w-0 items-center justify-between gap-3 rounded-card border ${
+        size === "sm" ? "px-3 py-1.5" : "px-3.5 py-2.5"
+      } ${FRAME[state.tone]}`}
       title={title || undefined}
     >
-      <span className="min-w-0 truncate text-sm text-ink">{filled.label}</span>
+      <span className={`min-w-0 truncate text-ink ${size === "sm" ? "text-xs" : "text-sm"}`}>{filled.label}</span>
       <span className="flex shrink-0 items-center gap-1.5">
         {state.alarm ? <SeverityBadge severity={state.alarm.severity} /> : null}
         {missing && filled.reason ? <InfoHint text={filled.reason} /> : null}
@@ -180,9 +193,7 @@ function DeviceSection({
   );
   const alarmsFailed = active.isError || acknowledged.isError;
 
-  const figures = spec.figures
-    .map((figure) => ({ figure, filled: readings.fill(figure) }))
-    .filter(({ figure, filled }) => figureShown(figure, filled, readings.bound));
+  const figures = shownFigures(spec, readings);
   const flags = spec.flags.map((position: Position) => {
     const filled = readings.fill(position);
     return { filled, state: flagState(filled.value, filled.tag?.code, alarms) };
@@ -204,18 +215,35 @@ function DeviceSection({
       )
     ) : null;
 
+  // Compact only with one Device on screen; each panel of several keeps its size.
+  const compact = (spec.compact ?? false) && !headed;
+  const noteBeside = (spec.flagsNoteBeside ?? false) && !headed;
   const tiles = (
     <div className={spec.flagGrid}>
       {flags.map(({ filled, state }) => (
-        <FlagTile key={filled.label} filled={filled} state={state} timezone={timezone} />
+        <FlagTile key={filled.label} filled={filled} state={state} timezone={timezone} size={compact ? "sm" : "md"} />
       ))}
     </div>
   );
+  // Smaller figures only with one Device on screen; each panel of several keeps its size.
+  const figureSize = headed ? undefined : spec.figureSize;
   const figureRow =
     figures.length > 0 ? (
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5">
+      <div
+        className={
+          figureSize
+            ? "grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5"
+            : "grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5"
+        }
+      >
         {figures.map(({ figure, filled }) => (
-          <ReadingTile key={figure.label} icon={figure.icon} label={figure.label} filled={filled} />
+          <ReadingTile
+            key={figure.label}
+            icon={figure.icon}
+            label={figure.label}
+            filled={filled}
+            size={figureSize ?? "md"}
+          />
         ))}
       </div>
     ) : null;
@@ -275,10 +303,21 @@ function DeviceSection({
     <>
       {figureRow}
       <Panel
+        dense={compact}
         title={<span className="text-base">Status flags</span>}
-        subtitle={flagsSubtitle(alarmsFailed)}
-        actions={openAlarms}
-        padding="p-4"
+        // Where the spec asks, the note rides beside the title, right-aligned.
+        subtitle={noteBeside ? undefined : flagsSubtitle(alarmsFailed)}
+        actions={
+          noteBeside ? (
+            <>
+              <span className="text-xs leading-snug text-ink-muted">{flagsSubtitle(alarmsFailed)}</span>
+              {openAlarms}
+            </>
+          ) : (
+            openAlarms
+          )
+        }
+        padding={compact ? "p-3" : "p-4"}
       >
         {tiles}
       </Panel>
@@ -319,6 +358,7 @@ function Trends({
 
   return (
     <Panel
+      dense={spec.compact ?? false}
       title={<span className="text-base">Trends</span>}
       subtitle={
         <span className="text-sm">
@@ -486,7 +526,7 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
 
   const header = (
     <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-      <div className="min-w-0">
+      <div className="min-w-0 lg:min-w-[16rem]">
         <h1 className="page-title">{spec.title}</h1>
         <p className="mt-1.5 text-sm text-ink-muted">
           {chosen && !every ? (
@@ -501,8 +541,8 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
           )}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
-        {chosen && !every ? <CommStatusPill status={chosen.comm_status} /> : null}
+      <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+        {chosen && !every ? <CommStatusPill status={chosen.comm_status} size="sm" /> : null}
         {devices.length > 1 && chosen && !every ? (
           <SelectBox
             label={spec.noun}
@@ -518,7 +558,8 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
             ))}
           </SelectBox>
         ) : null}
-        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+        <ClientFilter size="md" />
+        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
       </div>
     </header>
   );
@@ -550,9 +591,12 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
     );
   }
 
+  // A compact screen's body is one close column, set off from the header by
+  // the extra margin.
+  const compactBody = (spec.compact ?? false) && !every;
   return (
-    <div className="flex flex-col gap-6">
-      {header}
+    <div className={`flex flex-col ${compactBody ? "gap-3" : "gap-6"}`}>
+      {compactBody ? <div className="mb-3">{header}</div> : header}
       {every ? (
         devices.map((device) => <HeadedDevice key={device.id} spec={spec} device={device} timezone={timezone} />)
       ) : (

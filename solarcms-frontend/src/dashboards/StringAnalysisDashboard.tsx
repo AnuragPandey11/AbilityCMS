@@ -39,6 +39,7 @@ import type {
 } from "@/api/schemas";
 import { Badge, Drawer, Panel, SelectBox, type BadgeTone } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonPanel } from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { InverterHeadline, InverterView } from "@/components/devices/InverterView";
@@ -569,7 +570,7 @@ export function StringAnalysisDashboard(): JSX.Element {
 
   const header = (
     <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-      <div className="min-w-0">
+      <div className="min-w-0 lg:min-w-[16rem]">
         <h1 className="page-title">String Analysis</h1>
         <p className="mt-1.5 text-sm text-ink-muted">
           {data && inverters.length > 0 ? (
@@ -584,7 +585,7 @@ export function StringAnalysisDashboard(): JSX.Element {
           )}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
+      <div className="flex flex-wrap items-center gap-3 lg:justify-end">
         {summary && inverters.length > 0 ? (
           <span title={summary.title} data-testid="string-summary">
             <Badge tone={summary.tone}>
@@ -592,7 +593,8 @@ export function StringAnalysisDashboard(): JSX.Element {
             </Badge>
           </span>
         ) : null}
-        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+        <ClientFilter size="md" />
+        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
       </div>
     </header>
   );

@@ -8,3 +8,7 @@ deploy/terraform/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfplan
+
+
+# Salesforce CLI local state (org metadata cache), machine-specific.
+.sf/

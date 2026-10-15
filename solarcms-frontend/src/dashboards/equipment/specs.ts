@@ -55,6 +55,15 @@ export interface EquipmentSpec {
   /** Names one Device in a reason — "this Transformer". */
   subject: string;
   figures: FigureSpec[];
+  /**
+   * Smaller contact tiles, closer together, and the page's blocks closer —
+   * more of the screen above the fold. One Device on screen only.
+   */
+  compact?: boolean;
+  /** Smaller figure tiles, closer together. One Device on screen only. */
+  figureSize?: "sm" | "xs";
+  /** The contacts panel's note beside its title, right-aligned, not under it. */
+  flagsNoteBeside?: boolean;
   flags: Position[];
   /** Full Tailwind class names, never assembled (Tailwind emits only literals). */
   flagGrid: string;
@@ -98,6 +107,8 @@ export const TRANSFORMER: EquipmentSpec = {
   noun: "Transformer",
   subject: "this Transformer",
   figures: [OIL_TEMPERATURE, WINDING_1_TEMPERATURE, WINDING_2_TEMPERATURE],
+  compact: true,
+  figureSize: "xs",
   flags: [
     { label: "Oil temp. alarm", codes: ["OIL_TEMP_ALARM"] },
     { label: "Oil temp. trip", codes: ["OIL_TEMP_TRIP"] },
@@ -109,7 +120,7 @@ export const TRANSFORMER: EquipmentSpec = {
     { label: "Buchholz relay trip", codes: ["BUCHHOLZ_RELAY_TRIP"] },
     { label: "Magnetic oil gauge alarm", codes: ["MOG_ALARM"] },
   ],
-  flagGrid: "grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4",
+  flagGrid: "grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5",
   trends: [
     { key: "oil", title: "Oil temperature", lines: [OIL_TEMPERATURE], markPeak: true },
     {
@@ -170,7 +181,10 @@ export const PPC: EquipmentSpec = {
     { label: "Power factor control", codes: ["POWER_FACTOR_CONTROL_ENABLE"] },
     { label: "Frequency control", codes: ["FREQUENCY_CONTROL_ENABLE"] },
   ],
-  flagGrid: "grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5",
+  flagGrid: "grid gap-2 sm:grid-cols-2 lg:grid-cols-5",
+  compact: true,
+  figureSize: "sm",
+  flagsNoteBeside: true,
   trends: [
     // The highest setpoint of the day is not a fact anyone acts on; when it
     // changed is, and the line shows that.

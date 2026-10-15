@@ -73,7 +73,7 @@ import type {
   SldStage,
 } from "@/api/schemas";
 import { Panel, SegmentedControl, Drawer } from "@/components/ui";
-import { FilterRowContent } from "@/components/layout/FilterRowSlot";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { useScrollPager } from "@/components/ui/Carousel";
 import { TrendChart, SmallMultiples } from "@/components/charts/TrendChart";
 import { CheckboxMenu } from "@/components/ui/CheckboxMenu";
@@ -954,25 +954,22 @@ export function SinglePlantDashboard(): JSX.Element {
         the panel it scopes (see `ChartWindow`). "Today" and "the last 24
         hours" are not the same range and must not share a control.
 
-        For a platform administrator the route already draws a filter row
-        (Client and search), and the pickers join the end of it rather than
-        start a second line (`FilterRowContent`); for everyone else they stand
-        here.
+        A platform administrator's Client filter leads it, beside the Plant it
+        narrows; their Plant search is in the application header.
       */}
-      <FilterRowContent>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
-          <div className="flex items-center gap-2">
-            <span
-              className="text-xs font-medium text-ink-muted"
-              title="Scopes the derived figures — PR, CUF, availability — which are computed over a calendar period."
-            >
-              Period
-            </span>
-            <PeriodPicker value={period} onChange={setPeriod} />
-          </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <ClientFilter size="md" />
+        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
+        <div className="flex items-center gap-2">
+          <span
+            className="text-xs font-medium text-ink-muted"
+            title="Scopes the derived figures — PR, CUF, availability — which are computed over a calendar period."
+          >
+            Period
+          </span>
+          <PeriodPicker value={period} onChange={setPeriod} />
         </div>
-      </FilterRowContent>
+      </div>
       {/* What the header had no room for at this width. */}
       <div className="flex flex-wrap items-center gap-3 xl:hidden">
         <div className="sm:hidden">

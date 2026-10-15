@@ -37,6 +37,7 @@ import { useSeries, type Series } from "@/api/useSeries";
 import { windowRange } from "@/api/trendWindow";
 import { Button, Panel, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
@@ -129,10 +130,10 @@ function PhasePanel({
   fill: (position: Position) => Filled;
 }): JSX.Element {
   return (
-    <Panel title={<span className="text-base">{title}</span>} padding="p-3">
+    <Panel title={title} padding="p-2.5">
       <div className="grid grid-cols-3 gap-2">
         {positions.map((position) => (
-          <FigureTile key={position.label} filled={fill(position)} />
+          <FigureTile key={position.label} filled={fill(position)} size="sm" />
         ))}
       </div>
     </Panel>
@@ -296,7 +297,7 @@ export function GridMonitoringDashboard(): JSX.Element {
   const name = headline ? meterName(headline) : null;
   const header = (
     <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-      <div className="min-w-0">
+      <div className="min-w-0 lg:min-w-[16rem]">
         <h1 className="page-title">MFM / Grid Monitoring</h1>
         <p className="mt-1.5 text-sm text-ink-muted">
           {headline ? (
@@ -314,24 +315,32 @@ export function GridMonitoringDashboard(): JSX.Element {
           )}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
-        {headline ? <CommStatusPill status={headline.comm_status} /> : null}
-        {meters.length > 1 && headline ? (
-          <SelectBox
-            label="Meter"
-            value={String(headline.id)}
-            onChange={(next) => setChosenId(Number(next))}
-            display={<span className="font-mono">{headline.code}</span>}
-          >
-            {meters.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.code}
-                {meterName(device) ? ` — ${meterName(device)}` : ""} ({device.type_code})
-              </option>
-            ))}
-          </SelectBox>
-        ) : null}
-        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+      {/* Two lines on purpose, not wherever the width happens to wrap: the
+          meter picker above (only where there is a choice), and the meter's
+          status beside the Client and Plant below. */}
+      <div className="flex flex-col gap-3 lg:items-end">
+        <div className="flex flex-wrap items-center gap-3 empty:hidden lg:justify-end">
+          {meters.length > 1 && headline ? (
+            <SelectBox
+              label="Meter"
+              value={String(headline.id)}
+              onChange={(next) => setChosenId(Number(next))}
+              display={<span className="font-mono">{headline.code}</span>}
+            >
+              {meters.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.code}
+                  {meterName(device) ? ` — ${meterName(device)}` : ""} ({device.type_code})
+                </option>
+              ))}
+            </SelectBox>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+          {headline ? <CommStatusPill status={headline.comm_status} size="sm" /> : null}
+          <ClientFilter size="md" />
+          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
+        </div>
       </div>
     </header>
   );
@@ -369,25 +378,25 @@ export function GridMonitoringDashboard(): JSX.Element {
   const day = range?.day ?? null;
 
   return (
-    <div className="flex flex-col gap-6">
-      {header}
+    // The body is one close column — figures, other meters, trends — set off
+    // from the header by the extra margin.
+    <div className="flex flex-col gap-3">
+      <div className="mb-3">{header}</div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <PhasePanel title="Voltage" positions={LINE_VOLTAGE} fill={readings.fill} />
-        <PhasePanel title="Current" positions={PHASE_CURRENT} fill={readings.fill} />
-        <PhasePanel title="Power factor" positions={PHASE_PF} fill={readings.fill} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <ReadingTile icon={IconPower} label="Active power" filled={readings.fill(ACTIVE_POWER)} />
-        <ReadingTile icon={IconPower} label="Reactive power" filled={readings.fill(REACTIVE_POWER)} />
-        <ReadingTile icon={IconFrequency} label="Frequency" filled={readings.fill(FREQUENCY)} />
-        <ReadingTile icon={IconGauge} label="Overall PF" filled={readings.fill(OVERALL_PF)} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <ReadingTile icon={IconEnergy} label="Export energy" filled={readings.fill(EXPORT_ENERGY)} />
-        <ReadingTile icon={IconEnergy} label="Import energy" filled={readings.fill(IMPORT_ENERGY)} />
+      <div className="flex flex-col gap-3">
+        <div className="grid gap-3 lg:grid-cols-3">
+          <PhasePanel title="Voltage" positions={LINE_VOLTAGE} fill={readings.fill} />
+          <PhasePanel title="Current" positions={PHASE_CURRENT} fill={readings.fill} />
+          <PhasePanel title="Power factor" positions={PHASE_PF} fill={readings.fill} />
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          <ReadingTile icon={IconPower} label="Active power" filled={readings.fill(ACTIVE_POWER)} size="sm" />
+          <ReadingTile icon={IconPower} label="Reactive power" filled={readings.fill(REACTIVE_POWER)} size="sm" />
+          <ReadingTile icon={IconFrequency} label="Frequency" filled={readings.fill(FREQUENCY)} size="sm" />
+          <ReadingTile icon={IconGauge} label="Overall PF" filled={readings.fill(OVERALL_PF)} size="sm" />
+          <ReadingTile icon={IconEnergy} label="Export energy" filled={readings.fill(EXPORT_ENERGY)} size="sm" />
+          <ReadingTile icon={IconEnergy} label="Import energy" filled={readings.fill(IMPORT_ENERGY)} size="sm" />
+        </div>
       </div>
 
       {others.map((device) => (

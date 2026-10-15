@@ -123,13 +123,22 @@ const COMM_WORD: Record<CommStatus, string> = {
  * Communication, never equipment: an offline Device has stopped reporting,
  * which alone never proves it stopped working (Guardrail 16).
  */
-export function CommStatusPill({ status }: { status: CommStatus | null | undefined }): JSX.Element {
+export function CommStatusPill({
+  status,
+  size = "md",
+}: {
+  status: CommStatus | null | undefined;
+  /** `sm` beside the compact Client and Plant pickers, level with them. */
+  size?: "sm" | "md";
+}): JSX.Element {
   const value = status ?? "unknown";
   const style = STATUS_PILL[COMM_TONE[value]];
   return (
     <span
       title={COMM_TITLE[value]}
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-semibold ${style.frame}`}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border font-semibold ${
+        size === "sm" ? "px-2.5 py-1 text-xs" : "px-3 py-1 text-sm"
+      } ${style.frame}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
       {COMM_WORD[value]}

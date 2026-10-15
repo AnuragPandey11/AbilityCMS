@@ -475,6 +475,7 @@ export function PlantHierarchyEditor(): JSX.Element {
               value={plantId}
               onChange={setPlantId}
               label="Plant"
+              size="md"
             />
           </div>
           <button

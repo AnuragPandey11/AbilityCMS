@@ -511,6 +511,7 @@ export function PlantEditor(): JSX.Element {
                 value={plantId}
                 onChange={(id) => { setPlantId(id); setExpanded(null); }}
                 label="Plant"
+                size="md"
               />
             }
           >

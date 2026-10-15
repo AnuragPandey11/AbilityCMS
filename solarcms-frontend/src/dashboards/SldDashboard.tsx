@@ -25,6 +25,7 @@ import { SldTree, type SldOverlay } from "@/components/sld/SldTree";
 import { PlantFlow } from "@/components/sld/PlantFlow";
 import { Panel, Badge } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonPanel } from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { CommStatusBadge, PlantPicker } from "@/components/domain";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { Drawer } from "@/components/ui";
@@ -142,7 +143,10 @@ export function SldDashboard(): JSX.Element {
             .
           </p>
         </div>
-        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" />
+        <div className="flex flex-wrap items-center gap-3">
+          <ClientFilter size="md" />
+          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
+        </div>
       </div>
 
       {sparse ? (

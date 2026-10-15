@@ -32,6 +32,7 @@ import type { DeviceListItem, Tag } from "@/api/schemas";
 import type { TrendWindow } from "@/api/trendWindow";
 import { Panel, SegmentedControl, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { OverlayTrendChart } from "@/components/charts/OverlayTrendChart";
@@ -160,7 +161,7 @@ export function MeteorologicalDashboard(): JSX.Element {
 
   const header = (
     <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-      <div className="min-w-0">
+      <div className="min-w-0 lg:min-w-[16rem]">
         <h1 className="page-title">Meteorological / Weather Station</h1>
         <p className="mt-1.5 text-sm text-ink-muted">
           {station ? (
@@ -176,8 +177,8 @@ export function MeteorologicalDashboard(): JSX.Element {
           )}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
-        {station ? <CommStatusPill status={station.comm_status} /> : null}
+      <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+        {station ? <CommStatusPill status={station.comm_status} size="sm" /> : null}
         {stations.length > 1 && station ? (
           <SelectBox
             label="Station"
@@ -193,7 +194,8 @@ export function MeteorologicalDashboard(): JSX.Element {
             ))}
           </SelectBox>
         ) : null}
-        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+        <ClientFilter size="md" />
+        <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
       </div>
     </header>
   );

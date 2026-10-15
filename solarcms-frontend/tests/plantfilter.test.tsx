@@ -54,7 +54,7 @@ vi.mock("@/api/hooks", () => ({
 const { useSelection } = await import("@/state/selection");
 const { matchPlants, usePlantFilter } = await import("@/state/usePlantFilter");
 const { usePlantScope, useFilteredPlantScope } = await import("@/state/usePlantScope");
-const { PlantFilterBar, PLANT_SEARCH_DEBOUNCE_MS } = await import(
+const { ClientFilter, PlantSearch, PLANT_SEARCH_DEBOUNCE_MS } = await import(
   "@/components/layout/PlantFilterBar"
 );
 
@@ -176,16 +176,37 @@ describe("useFilteredPlantScope()", () => {
   });
 });
 
-describe("PlantFilterBar", () => {
+describe("ClientFilter", () => {
   it("renders nothing for a Client user", () => {
     me = meFor(false);
-    const { container } = render(<PlantFilterBar />);
+    const { container } = render(<ClientFilter />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("writes the chosen Client to the store at once, and back to All", () => {
+    render(<ClientFilter />);
+    const select = screen.getByRole("combobox", { name: /client/i });
+    expect(within(select).getByRole("option", { name: "ROOFCO — Roofco Rooftops (2)" })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: "20" } });
+    expect(useSelection.getState().clientId).toBe(20);
+    expect(screen.getByText("Roofco Rooftops")).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: "" } });
+    expect(useSelection.getState().clientId).toBeNull();
+  });
+});
+
+describe("PlantSearch", () => {
+  it("renders nothing for a Client user", () => {
+    me = meFor(false);
+    const { container } = render(<PlantSearch />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("writes the search only once typing pauses", () => {
     vi.useFakeTimers();
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     const input = screen.getByRole("combobox", { name: /search plants/i });
 
     fireEvent.change(input, { target: { value: "r" } });
@@ -201,7 +222,7 @@ describe("PlantFilterBar", () => {
 
   it("clears at once, and a stale pending value does not come back", () => {
     vi.useFakeTimers();
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     const input = screen.getByRole("combobox", { name: /search plants/i });
     fireEvent.change(input, { target: { value: "roofco" } });
     act(() => vi.advanceTimersByTime(PLANT_SEARCH_DEBOUNCE_MS));
@@ -216,7 +237,7 @@ describe("PlantFilterBar", () => {
 
   it("says so when nothing matches — in the list at once, on the page once typing pauses", () => {
     vi.useFakeTimers();
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     fireEvent.change(screen.getByRole("combobox", { name: /search plants/i }), {
       target: { value: "atlantis" },
     });
@@ -226,7 +247,7 @@ describe("PlantFilterBar", () => {
   });
 });
 
-describe("PlantFilterBar suggestions", () => {
+describe("PlantSearch suggestions", () => {
   const input = () => screen.getByRole("combobox", { name: /search plants/i });
   // Scoped to the list: the Client <select>'s own <option>s share the role.
   const suggestions = () => within(screen.getByRole("listbox")).getAllByRole("option");
@@ -238,7 +259,7 @@ describe("PlantFilterBar suggestions", () => {
   });
 
   it("suggests on the first letter, and on each letter after, with no wait", () => {
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     fireEvent.change(input(), { target: { value: "s" } });
     // Both SUNFIELD Plants, and not the ROOFCO ones that merely contain an s.
     expect(options()).toEqual([
@@ -252,7 +273,7 @@ describe("PlantFilterBar suggestions", () => {
   });
 
   it("takes the best match on Enter, typo and all, and commits at once", () => {
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     fireEvent.change(input(), { target: { value: "sf-norht" } });
     expect(input()).toHaveAttribute("aria-expanded", "true");
     fireEvent.keyDown(input(), { key: "Enter" });
@@ -264,7 +285,7 @@ describe("PlantFilterBar suggestions", () => {
   });
 
   it("moves through the list with the arrow keys", () => {
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     fireEvent.change(input(), { target: { value: "s" } });
     const [first, second] = suggestions();
     expect(input()).toHaveAttribute("aria-activedescendant", first.id);
@@ -276,7 +297,7 @@ describe("PlantFilterBar suggestions", () => {
   });
 
   it("chooses a suggestion on click", () => {
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     fireEvent.change(input(), { target: { value: "warehouse" } });
     fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: /WH2/ }));
     expect(input()).toHaveValue("WH2");
@@ -284,7 +305,7 @@ describe("PlantFilterBar suggestions", () => {
   });
 
   it("closes on the first Escape and clears on the second", () => {
-    render(<PlantFilterBar />);
+    render(<PlantSearch />);
     fireEvent.change(input(), { target: { value: "roofco" } });
     fireEvent.keyDown(input(), { key: "Escape" });
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();

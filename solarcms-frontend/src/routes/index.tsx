@@ -9,15 +9,12 @@
  * The map is keyed by dashboard `code`, never by Plant (F-14, Guardrail 1).
  */
 
-import { useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/components/layout/LoginPage";
 import { useAuth } from "@/auth/AuthProvider";
 import { useDashboards } from "@/auth/useDashboard";
 import { EmptyState, LoadingState } from "@/components/state";
-import { PlantFilterBar } from "@/components/layout/PlantFilterBar";
-import { FilterRowSlotProvider } from "@/components/layout/FilterRowSlot";
 
 import { PortfolioDashboard } from "@/dashboards/PortfolioDashboard";
 import { PlantsDashboard } from "@/dashboards/PlantsDashboard";
@@ -72,47 +69,9 @@ const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
   reports: ReportsDashboard,
 };
 
-/**
- * The screens about one Plant at a time (and Alarms, filtered by Plant), which
- * a platform administrator narrows by Client and search. The bar is rendered
- * here, outside the page, so it survives the page's own loading states.
- */
-const PLANT_FILTERED_DASHBOARDS = new Set([
-  "single_plant",
-  "sld",
-  "inverter_monitoring",
-  "string_analysis",
-  "meteorological",
-  "energy_analytics",
-  "grid_monitoring",
-  "transformer_monitoring",
-  "ppc_monitoring",
-  "vcb_monitoring",
-  "alarms",
-]);
-
-/**
- * The route's filter row, with a slot at its end that the page may fill with
- * its own pickers (`FilterRowContent`), so Client, search, Plant and Period
- * read as one line of filters.
- */
-function PlantFilteredPage({ children }: { children: ReactNode }): JSX.Element {
-  const [slot, setSlot] = useState<HTMLDivElement | null>(null);
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <PlantFilterBar />
-        <div ref={setSlot} className="flex flex-wrap items-center gap-x-4 gap-y-2 empty:hidden" />
-      </div>
-      <FilterRowSlotProvider value={slot}>{children}</FilterRowSlotProvider>
-    </div>
-  );
-}
-
 function DashboardRoute(): JSX.Element {
   const { code = "" } = useParams();
   const dashboards = useDashboards();
-  const { me } = useAuth();
 
   // A-3 is checked here as well as in the navigation: a pasted URL must not
   // reach a dashboard the User was not granted. The server enforces the data
@@ -135,13 +94,8 @@ function DashboardRoute(): JSX.Element {
       />
     );
   }
-  if (me?.platform_admin && PLANT_FILTERED_DASHBOARDS.has(code)) {
-    return (
-      <PlantFilteredPage>
-        <Component />
-      </PlantFilteredPage>
-    );
-  }
+  // A platform administrator's Client filter is in each Plant screen's header,
+  // and the Plant search in the application header (`PlantFilterBar`).
   return <Component />;
 }
 

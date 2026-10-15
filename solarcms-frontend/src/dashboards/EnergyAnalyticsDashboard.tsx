@@ -34,6 +34,7 @@ import type { TrendPoint } from "@/api/useSlotTrend";
 import { customRange, windowRange, type TrendWindow, type WindowRange } from "@/api/trendWindow";
 import { Panel, SegmentedControl, SelectBox, inputClass } from "@/components/ui";
 import { EmptyState, ErrorState } from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { PlantPicker } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { NOT_A_UNIT } from "@/components/devices/InverterView";
@@ -50,6 +51,11 @@ const WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
   { value: "7d", label: "Last 7 days", hint: "The last seven days, ending now." },
   { value: "30d", label: "Last 30 days", hint: "The last thirty days, ending now." },
 ];
+
+const WINDOW_HINT = "Type a start and an end to show any other window.";
+
+/** The shared input at the size of the compact selects and presets beside it. */
+const compactInputClass = inputClass.replace("w-full", "w-auto").replace("text-sm", "text-xs");
 
 type Applied = { kind: "preset"; window: TrendWindow } | { kind: "custom"; from: number; to: number };
 
@@ -241,60 +247,73 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
+        <div className="min-w-0 lg:min-w-[16rem]">
           <h1 className="page-title">Energy Analytics</h1>
           <p className="mt-1.5 text-sm text-ink-muted">
             Historical trends over a window you choose
             {timezone ? `, in the Plant's time (${timezoneLabel(timezone)})` : ""}.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
-          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+        {/*
+          Two lines on purpose, not wherever the width happens to wrap: the
+          Client and Plant above, the window (typed, or a preset) they are read
+          over below. Compact controls, so both lines sit beside the title.
+
+          One window for all four trends: a per-chart control would let two
+          charts sit side by side on different spans and still look aligned.
+        */}
+        <div className="flex flex-col gap-2 lg:items-end">
+          <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+            <ClientFilter size="md" />
+            <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
+          </div>
+          <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+            {/* Only what needs reading is on screen: a window that will not
+                apply, or a typed one in force. The standing hint is the From
+                and To tooltip, and stays here for a screen reader. */}
+            <p
+              id="analytics-window-note"
+              className={`text-xs ${draftError ? "text-bad" : "text-ink-faint"} ${
+                draftError || applied.kind === "custom" ? "" : "sr-only"
+              }`}
+            >
+              {draftError ??
+                (applied.kind === "custom" ? "Showing the window typed. Pick a preset to go back." : WINDOW_HINT)}
+            </p>
+            <label className="flex items-center gap-2" title={WINDOW_HINT}>
+              <span className="text-xs font-medium text-ink-muted">From</span>
+              <input
+                type="datetime-local"
+                value={fromInput}
+                max={latestInput}
+                onChange={(event) => onFrom(event.target.value)}
+                className={compactInputClass}
+                aria-describedby="analytics-window-note"
+              />
+            </label>
+            <label className="flex items-center gap-2" title={WINDOW_HINT}>
+              <span className="text-xs font-medium text-ink-muted">To</span>
+              <input
+                type="datetime-local"
+                value={toInput}
+                max={latestInput}
+                onChange={(event) => onTo(event.target.value)}
+                className={compactInputClass}
+                aria-describedby="analytics-window-note"
+              />
+            </label>
+            <SegmentedControl<TrendWindow | "custom">
+              label="Analytics window"
+              // A custom window highlights no preset — none of them is on screen.
+              value={applied.kind === "preset" ? applied.window : "custom"}
+              onChange={(value) => {
+                if (value !== "custom") onPreset(value);
+              }}
+              options={WINDOWS}
+            />
+          </div>
         </div>
       </header>
-
-      {/* One window for all four trends: a per-chart control would let two
-          charts sit side by side on different spans and still look aligned. */}
-      <div className="flex flex-wrap items-end gap-3">
-        <SegmentedControl<TrendWindow | "custom">
-          label="Analytics window"
-          size="lg"
-          // A custom window highlights no preset — none of them is on screen.
-          value={applied.kind === "preset" ? applied.window : "custom"}
-          onChange={(value) => {
-            if (value !== "custom") onPreset(value);
-          }}
-          options={WINDOWS}
-        />
-        <label className="flex flex-col gap-1">
-          <span className="field-label">From</span>
-          <input
-            type="datetime-local"
-            value={fromInput}
-            max={latestInput}
-            onChange={(event) => onFrom(event.target.value)}
-            className={`${inputClass} w-auto`}
-            aria-describedby="analytics-window-note"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="field-label">To</span>
-          <input
-            type="datetime-local"
-            value={toInput}
-            max={latestInput}
-            onChange={(event) => onTo(event.target.value)}
-            className={`${inputClass} w-auto`}
-            aria-describedby="analytics-window-note"
-          />
-        </label>
-        <p id="analytics-window-note" className={`pb-2 text-xs ${draftError ? "text-bad" : "text-ink-faint"}`}>
-          {draftError ??
-            (applied.kind === "custom"
-              ? "Showing the window typed. Pick a preset to go back."
-              : "Type a start and an end to show any other window.")}
-        </p>
-      </div>
 
       {plantQuery.isError ? (
         <ErrorState error={plantQuery.error} retry={() => void plantQuery.refetch()} />

@@ -311,13 +311,13 @@ export function PlantsDashboard(): JSX.Element {
         <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
           {clients.length > 1 ? (
             <label className="flex items-center gap-2.5">
-              <span className="whitespace-nowrap text-sm font-medium text-ink-muted">Client</span>
+              <span className="whitespace-nowrap text-xs font-medium text-ink-muted">Client</span>
               <select
                 value={clientFilter === "all" ? "" : String(clientFilter)}
                 onChange={(event) =>
                   setClientFilter(event.target.value === "" ? "all" : Number(event.target.value))
                 }
-                className="surface-tile min-w-[12rem] rounded-control border border-line px-3 py-2 text-sm font-semibold text-ink"
+                className="surface-tile min-w-[12rem] rounded-control border border-line px-2.5 py-1.5 text-xs font-semibold text-ink"
               >
                 <option value="">All Clients</option>
                 {clients.map(([id, name]) => (

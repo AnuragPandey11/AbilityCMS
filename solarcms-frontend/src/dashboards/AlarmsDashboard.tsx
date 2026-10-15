@@ -13,8 +13,9 @@
  * - Acknowledging is gated on `alarm.acknowledge`, and `escalation_level` is
  *   shown: an Alarm at L2 has already woken somebody.
  *
- * A platform administrator also narrows by Client and search (`PlantFilterBar`,
- * mounted by the route). The Client is sent to the server; the search is
+ * A platform administrator also narrows by Client (beside the Plant picker)
+ * and search (in the application header; see `PlantFilterBar`). The Client is
+ * sent to the server; the search is
  * applied here, by Plant — which leaves out Alarms attached to no Plant while
  * a search is in force, since there is nothing of theirs to match.
  */
@@ -27,6 +28,7 @@ import type { Alarm, AlarmSeverity, AlarmState } from "@/api/schemas";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { Button, Panel, Badge, inputClass } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonTable } from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import {
   AlarmStateBadge,
   ClassificationBadge,
@@ -298,12 +300,14 @@ export function AlarmsDashboard(): JSX.Element {
               ))}
             </select>
           </label>
+          <ClientFilter size="md" />
           <PlantPicker
             plants={plants}
             value={plantId}
             onChange={setPlantId}
             allowAll
             label="Plant"
+            size="md"
           />
         </div>
       </Panel>

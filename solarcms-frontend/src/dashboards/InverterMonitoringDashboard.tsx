@@ -50,6 +50,7 @@ import * as devicesApi from "@/api/endpoints/devices";
 import type { DeviceDetail, DeviceListItem } from "@/api/schemas";
 import { Button, Panel, InfoHint, SelectBox } from "@/components/ui";
 import {AwaitingDeviceDataState, EmptyState, ErrorState, SkeletonKpiRow, SkeletonTable} from "@/components/state";
+import { ClientFilter } from "@/components/layout/PlantFilterBar";
 import { CommStatusBadge, LastSeen, PlantPicker } from "@/components/domain";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { useScrollPager } from "@/components/ui/Carousel";
@@ -481,13 +482,13 @@ export function InverterMonitoringDashboard(): JSX.Element {
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
+        <div className="min-w-0 lg:min-w-[16rem]">
           <h1 className="page-title">Inverter Monitoring</h1>
           <p className="mt-1.5 text-sm text-ink-muted">
             Comparison and ranking, within each Inverter variant.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3 lg:shrink-0 lg:justify-end">
+        <div className="flex flex-wrap items-center gap-3 lg:justify-end">
           {/*
             One filter row, above everything it scopes. The measure applies to
             every comparison chart on the screen at once — a per-chart picker
@@ -496,6 +497,7 @@ export function InverterMonitoringDashboard(): JSX.Element {
           */}
           {inverterColumns.length > 1 ? (
             <SelectBox
+              size="sm"
               label="Compare on"
               value={String(metric?.tag_id ?? "")}
               onChange={(next) => setMetricTagId(Number(next))}
@@ -519,7 +521,8 @@ export function InverterMonitoringDashboard(): JSX.Element {
               Status meanings
             </Button>
           ) : null}
-          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="lg" />
+          <ClientFilter size="md" />
+          <PlantPicker plants={plants} value={plantId} onChange={setPlantId} label="Plant" size="md" />
         </div>
       </header>
 

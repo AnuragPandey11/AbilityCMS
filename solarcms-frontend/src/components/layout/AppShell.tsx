@@ -40,7 +40,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useAuth } from "@/auth/AuthProvider";
 import { usePermissions } from "@/auth/usePermission";
 import { useDashboards, dashboardLabel } from "@/auth/useDashboard";
@@ -49,6 +49,7 @@ import { LiveIndicator } from "@/live/LiveIndicator";
 import { SystemHealthPill } from "@/components/layout/SystemHealthPill";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { HeaderSlotProvider } from "@/components/layout/HeaderSlot";
+import { PLANT_FILTERED_DASHBOARDS, PlantSearch } from "@/components/layout/PlantFilterBar";
 import { ThemeToggle } from "@/theme/ThemeToggle";
 import { IconLogout, IconMenu, IconSidebar } from "@/components/icons";
 import { useSidebarCollapsed } from "@/state/useSidebarCollapsed";
@@ -111,6 +112,14 @@ export function AppShell(): JSX.Element {
   // exists. See `HeaderSlot` for why the first frame renders nothing.
   const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null);
   const location = useLocation();
+  // The Plant search rides in this header on the Plant screens, not in the
+  // page, so it outlives the page's loading states (see `PlantFilterBar`).
+  // Granted dashboards only: an ungranted code renders "not available".
+  const dashboardCode = useMatch("/d/:code")?.params.code ?? "";
+  const showPlantSearch =
+    (me?.platform_admin ?? false) &&
+    PLANT_FILTERED_DASHBOARDS.has(dashboardCode) &&
+    dashboards.includes(dashboardCode);
 
   // Only `active`. An acknowledged Alarm has already reached somebody, and a
   // badge that stays lit after that teaches people to stop looking at it.
@@ -274,13 +283,25 @@ export function AppShell(): JSX.Element {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-line bg-surface/85 px-4 py-2.5 backdrop-blur sm:px-6">
+        {/*
+          A grid so the Plant search can be one element in two places: beside
+          the sidebar toggle from `sm` up, and on a line of its own on a phone,
+          where the live state and theme toggle leave it no width. One element,
+          so the text being typed survives the width changing.
+        */}
+        <header
+          className={`sticky top-0 z-20 grid items-center gap-x-3 gap-y-2 border-b border-line bg-surface/85 px-4 py-2.5 backdrop-blur sm:px-6 ${
+            showPlantSearch
+              ? "grid-cols-[auto_minmax(0,1fr)_auto] [grid-template-areas:'nav_slot_end'_'search_search_search'] sm:grid-cols-[auto_auto_minmax(0,1fr)_auto] sm:[grid-template-areas:'nav_search_slot_end']"
+              : "grid-cols-[auto_minmax(0,1fr)_auto] [grid-template-areas:'nav_slot_end']"
+          }`}
+        >
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
             aria-label="Menu"
             aria-expanded={menuOpen}
-            className="rounded-control border border-line p-1.5 text-ink-muted hover:text-ink lg:hidden"
+            className="rounded-control border border-line p-1.5 text-ink-muted [grid-area:nav] hover:text-ink lg:hidden"
           >
             <IconMenu size={16} />
           </button>
@@ -292,13 +313,18 @@ export function AppShell(): JSX.Element {
             title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
             aria-expanded={!collapsed}
             aria-controls="app-sidebar"
-            className="hidden rounded-control border border-line p-1.5 text-ink-muted hover:text-ink lg:inline-flex"
+            className="hidden rounded-control border border-line p-1.5 text-ink-muted [grid-area:nav] hover:text-ink lg:inline-flex"
           >
             <IconSidebar size={16} />
           </button>
+          {showPlantSearch ? (
+            <div className="min-w-0 [grid-area:search]">
+              <PlantSearch />
+            </div>
+          ) : null}
           {/* Filled by the page, if it has an identity worth pinning. */}
-          <div ref={setHeaderSlot} className="flex min-w-0 flex-1 items-center" />
-          <div className="ml-auto flex shrink-0 items-center gap-3">
+          <div ref={setHeaderSlot} className="flex min-w-0 items-center [grid-area:slot]" />
+          <div className="ml-auto flex shrink-0 items-center gap-3 [grid-area:end]">
             {/* Only for a Super Admin, and only when something is wrong. */}
             <SystemHealthPill />
             <LiveIndicator />

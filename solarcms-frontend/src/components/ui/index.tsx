@@ -12,6 +12,7 @@ export function Panel({
   fill = false,
   padding = "p-4",
   tray = false,
+  dense = false,
 }: {
   title?: ReactNode;
   subtitle?: ReactNode;
@@ -38,6 +39,8 @@ export function Panel({
    * tray the inner cards sit on something and read as objects you can pick up.
    */
   tray?: boolean;
+  /** Less space above and below the title, for a screen kept compact. */
+  dense?: boolean;
 }): JSX.Element {
   return (
     <section
@@ -46,7 +49,11 @@ export function Panel({
       } ${className}`}
     >
       {(title || actions) && (
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <header
+          className={`flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 ${
+            dense ? "py-2" : "py-3"
+          }`}
+        >
           <div className="min-w-0">
             {title ? <h2 className="text-sm font-semibold text-ink">{title}</h2> : null}
             {subtitle ? (

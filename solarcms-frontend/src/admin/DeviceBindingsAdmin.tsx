@@ -262,6 +262,7 @@ export function DeviceBindingsAdmin(): JSX.Element {
             value={plantId}
             onChange={setPlantId}
             label="Plant"
+            size="md"
           />
           <label className="text-xs text-ink-muted">
             Device

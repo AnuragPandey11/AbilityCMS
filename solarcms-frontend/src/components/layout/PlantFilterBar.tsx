@@ -1,14 +1,22 @@
 /**
- * Client filter and Plant search, above the Plant screens, for a platform
- * administrator.
+ * Client filter and Plant search on the Plant screens, for a platform
+ * administrator. Two controls with two different homes, and the reason is the
+ * state each holds.
  *
- * Mounted by the route, not by the page, because the pages replace themselves
+ * The Client filter holds none — it reads and writes the selection store — so
+ * a page renders it in its own header, directly before its Plant picker
+ * (status, Client, Plant), and losing it for a frame while the page reloads
+ * loses nothing.
+ *
+ * The search holds the text as typed, and it is mounted by the application
+ * header (`AppShell`), never by the page, because the pages replace themselves
  * with a skeleton while a newly chosen Plant loads — and a search box inside
  * that page would unmount mid-word, taking the caret and the rest of the query
- * with it. Here it survives the Plant changing underneath it, and moving
- * between the Plant screens.
+ * with it. There it survives the Plant changing underneath it, and moving
+ * between the Plant screens. Neither takes a row of its own (15 Oct 2026, at
+ * the user's request: the filter row cost a band of every Plant screen).
  *
- * It narrows; the page's own Plant picker still chooses (see
+ * They narrow; the page's own Plant picker still chooses (see
  * `useFilteredPlantScope`, and the Alarms screen, whose picker also offers
  * "All").
  *
@@ -58,10 +66,74 @@ function Highlighted({ text, query }: { text: string; query: string }): JSX.Elem
   return <>{parts}</>;
 }
 
-export function PlantFilterBar(): JSX.Element | null {
+/**
+ * The screens about one Plant at a time (and Alarms, filtered by Plant), which
+ * a platform administrator narrows by Client and search.
+ */
+export const PLANT_FILTERED_DASHBOARDS: ReadonlySet<string> = new Set([
+  "single_plant",
+  "sld",
+  "inverter_monitoring",
+  "string_analysis",
+  "meteorological",
+  "energy_analytics",
+  "grid_monitoring",
+  "transformer_monitoring",
+  "ppc_monitoring",
+  "vcb_monitoring",
+  "alarms",
+]);
+
+/**
+ * The Client filter, for a page's header, directly before its Plant picker.
+ * `size` is the adjacent `PlantPicker`'s, so the two read as one pair.
+ */
+export function ClientFilter({ size = "lg" }: { size?: "sm" | "md" | "lg" }): JSX.Element | null {
   const { me } = useAuth();
   const filter = usePlantFilter();
-  const { plantSearch, setPlantSearch, setClientId, setPlantId } = useSelection();
+  const { setClientId } = useSelection();
+
+  if (!me?.platform_admin) return null;
+
+  const current = filter.clients.find((client) => client.id === filter.clientId);
+  return (
+    <SelectBox
+      size={size === "lg" ? "md" : "sm"}
+      label="Client"
+      value={filter.clientId === null ? "" : String(filter.clientId)}
+      onChange={(next) => setClientId(next === "" ? null : Number(next))}
+      display={
+        current ? (
+          <>
+            {current.code ? (
+              <>
+                <span className="font-mono font-semibold text-accent">{current.code}</span>
+                <span className="text-ink-muted"> — </span>
+              </>
+            ) : null}
+            {current.name ?? current.label}
+          </>
+        ) : (
+          <span className="text-ink-muted">All Clients</span>
+        )
+      }
+    >
+      <option value="">All Clients</option>
+      {filter.clients.map((client) => (
+        <option key={client.id} value={client.id}>
+          {client.code && client.name ? `${client.code} — ${client.name}` : client.label} (
+          {client.plantCount})
+        </option>
+      ))}
+    </SelectBox>
+  );
+}
+
+/** The Plant search, for the application header. */
+export function PlantSearch(): JSX.Element | null {
+  const { me } = useAuth();
+  const filter = usePlantFilter();
+  const { plantSearch, setPlantSearch, setPlantId } = useSelection();
   const [text, setText] = useState(plantSearch);
   const settled = useDebouncedValue(text, PLANT_SEARCH_DEBOUNCE_MS);
   const [open, setOpen] = useState(false);
@@ -100,41 +172,10 @@ export function PlantFilterBar(): JSX.Element | null {
     setPlantId(plant.id);
     setOpen(false);
   };
-  const current = filter.clients.find((client) => client.id === filter.clientId);
   const total = me.plants.length;
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      <SelectBox
-        size="sm"
-        label="Client"
-        value={filter.clientId === null ? "" : String(filter.clientId)}
-        onChange={(next) => setClientId(next === "" ? null : Number(next))}
-        display={
-          current ? (
-            <>
-              {current.code ? (
-                <>
-                  <span className="font-mono font-semibold text-accent">{current.code}</span>
-                  <span className="text-ink-muted"> — </span>
-                </>
-              ) : null}
-              {current.name ?? current.label}
-            </>
-          ) : (
-            <span className="text-ink-muted">All Clients</span>
-          )
-        }
-      >
-        <option value="">All Clients</option>
-        {filter.clients.map((client) => (
-          <option key={client.id} value={client.id}>
-            {client.code && client.name ? `${client.code} — ${client.name}` : client.label} (
-            {client.plantCount})
-          </option>
-        ))}
-      </SelectBox>
-
+    <div className="flex min-w-0 items-center gap-3">
       <div className="relative w-full min-w-0 sm:w-60">
         <label className="surface-tile flex w-full min-w-0 items-center gap-2 rounded-control border border-line px-2.5 py-1.5 text-xs transition focus-within:ring-2 focus-within:ring-accent/40 hover:border-line-strong">
           <IconSearch size={12} className="shrink-0 text-ink-muted" />
@@ -257,7 +298,9 @@ export function PlantFilterBar(): JSX.Element | null {
       </div>
 
       {filter.active ? (
-        <span className="text-xs text-ink-muted" aria-live="polite">
+        // One line in the header, and out of it on a phone, where the list
+        // under the box already says what matches.
+        <span className="hidden truncate whitespace-nowrap text-xs text-ink-muted md:inline" aria-live="polite">
           {filter.matches.length === 0
             ? filter.search
               ? `No Plant or Client matches “${filter.search}”.`

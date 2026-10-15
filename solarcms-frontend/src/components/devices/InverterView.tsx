@@ -215,12 +215,22 @@ export function valueText(filled: Filled): { text: string; unit: string | null; 
   };
 }
 
-export function FigureTile({ filled, emphasis = false }: { filled: Filled; emphasis?: boolean }): JSX.Element {
+export function FigureTile({
+  filled,
+  emphasis = false,
+  size = "md",
+}: {
+  filled: Filled;
+  emphasis?: boolean;
+  /** `sm` for a screen that wants more of its figures above the fold. */
+  size?: "sm" | "md";
+}): JSX.Element {
   const { text, unit, title } = valueText(filled);
   const missing = filled.value === null;
+  const small = size === "sm";
   return (
     <div
-      className="surface-tile min-w-0 rounded-card border border-line px-3.5 py-2.5"
+      className={`surface-tile min-w-0 rounded-card border border-line ${small ? "px-3 py-2" : "px-3.5 py-2.5"}`}
       title={
         missing
           ? (filled.reason ?? undefined)
@@ -233,7 +243,7 @@ export function FigureTile({ filled, emphasis = false }: { filled: Filled; empha
         <FittedFigure
           value={text}
           unit={unit}
-          className={`figure font-semibold ${emphasis ? "text-[1.6rem]" : "text-xl"} ${
+          className={`figure font-semibold ${emphasis ? "text-[1.6rem]" : small ? "text-lg" : "text-xl"} ${
             missing ? "text-ink-faint" : "text-ink"
           }`}
           unitClassName="ml-0.5 text-xs font-medium text-ink-muted"
