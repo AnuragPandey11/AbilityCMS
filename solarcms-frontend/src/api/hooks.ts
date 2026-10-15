@@ -1,7 +1,8 @@
 /**
  * React Query hooks.
  *
- * Cache policy follows §9: `/catalog/*` for the session, `/plants` for ~60s,
+ * Cache policy follows §9: `/catalog/*` for the session, `/plants` for ~60s
+ * (re-asked once a minute, `CONFIGURATION`),
  * `/readings` for a few seconds. The catalogue is cached hardest because every
  * unit and every Tag name in the UI comes from it and it changes monthly.
  */
@@ -19,6 +20,7 @@ import * as alarmsApi from "./endpoints/alarms";
 import * as healthApi from "./endpoints/health";
 import * as reportsApi from "./endpoints/reports";
 import * as usersApi from "./endpoints/users";
+import { CONFIGURATION_REFRESH_MS } from "./afterWrite";
 import { qk } from "./queryKeys";
 import { useLiveSocket } from "@/live/LiveSocket";
 import type { KpiPeriod, PlantDashboard, PlantKpis, Tag } from "./schemas";
@@ -27,7 +29,20 @@ const SESSION = {
   staleTime: Number.POSITIVE_INFINITY,
   gcTime: Number.POSITIVE_INFINITY,
 };
-const SIXTY_SECONDS = { staleTime: 60_000 };
+/**
+ * Configuration — Plants, Devices, bindings, rules, Users: what an
+ * administrator edits. An edit made in this tab refreshes it at once
+ * (`api/afterWrite`); this is for one made somewhere else, by somebody else,
+ * which nothing here hears about. So it is re-asked once a minute while the
+ * tab is shown (React Query pauses the interval in a hidden tab) and on coming
+ * back to the tab if older than that — the screen in front of you is at most a
+ * minute behind another person's edit, and never a session behind.
+ */
+const CONFIGURATION = {
+  staleTime: CONFIGURATION_REFRESH_MS,
+  refetchInterval: CONFIGURATION_REFRESH_MS,
+  refetchOnWindowFocus: true,
+} as const;
 const FEW_SECONDS = { staleTime: 5_000 };
 
 /**
@@ -90,7 +105,7 @@ const ON_RETURN = { refetchOnWindowFocus: true } as const;
 // ── Catalogue ───────────────────────────────────────────────────────────────
 
 /** The Tag registry: the only source of units in the application (§4.1). */
-export { LIVE_KPI, LIVE_SOCKET_FALLBACK, ON_RETURN };
+export { CONFIGURATION, LIVE_KPI, LIVE_SOCKET_FALLBACK, ON_RETURN };
 
 /**
  * KPIs for a set of Plants, on the live cadence — from one request.
@@ -226,7 +241,7 @@ export function usePlants(params: plantsApi.ListPlantsParams = {}) {
   return useQuery({
     queryKey: qk.plants(params),
     queryFn: () => plantsApi.listPlants(params),
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -238,7 +253,7 @@ export function useAllPlants(enabled = true) {
     // which `listAllPlants` would read as filter parameters.
     queryFn: () => plantsApi.listAllPlants(),
     enabled,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -247,7 +262,7 @@ export function usePlant(plantId: number | null) {
     queryKey: qk.plant(plantId ?? 0),
     queryFn: () => plantsApi.getPlant(plantId as number),
     enabled: plantId !== null,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -278,7 +293,7 @@ export function usePlantBlocks(plantId: number | null) {
     queryKey: qk.plantBlocks(plantId ?? 0),
     queryFn: () => plantsApi.listBlocks(plantId as number),
     enabled: plantId !== null,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -290,7 +305,7 @@ export function usePlantDevices(
     queryKey: qk.plantDevices(plantId ?? 0, blockId),
     queryFn: () => devicesApi.listDevices(plantId as number, blockId),
     enabled: plantId !== null,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -393,7 +408,7 @@ export function usePlantSld(plantId: number | null) {
     queryKey: qk.plantSld(plantId ?? 0),
     queryFn: () => plantsApi.plantSld(plantId as number),
     enabled: plantId !== null,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -414,7 +429,7 @@ export function useDevice(deviceId: number | null) {
     queryKey: qk.device(deviceId ?? 0),
     queryFn: () => devicesApi.getDevice(deviceId as number),
     enabled: deviceId !== null,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -440,7 +455,7 @@ export function useBindings(deviceId: number | null, enabled = true) {
     queryFn: () => devicesApi.getBindings(deviceId as number),
     enabled: deviceId !== null && enabled,
     retry: false,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -510,7 +525,7 @@ export function useStatusCodes(plantId: number | null | undefined) {
     queryKey: qk.statusCodes(plantId ?? 0),
     queryFn: () => statusCodesApi.plantStatusCodes(plantId as number),
     enabled: plantId != null,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
     // A missing meaning shows the code as sent; it must never blank a card.
     retry: false,
   });
@@ -569,7 +584,7 @@ export function useAlarmRules(enabled = true) {
     queryFn: alarmsApi.listAlarmRules,
     enabled,
     retry: false,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -621,7 +636,7 @@ export function useReportDefinitions(enabled = true) {
     queryFn: reportsApi.listDefinitions,
     enabled,
     retry: false,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }
 
@@ -679,6 +694,6 @@ export function useUsers(enabled = true) {
     queryFn: usersApi.listUsers,
     enabled,
     retry: false,
-    ...SIXTY_SECONDS,
+    ...CONFIGURATION,
   });
 }

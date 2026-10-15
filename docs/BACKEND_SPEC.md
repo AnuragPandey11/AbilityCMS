@@ -694,11 +694,12 @@ def specific_yield(energy_kwh: float, dc_capacity_kwp: float) -> float:
     """kWh/kWp"""
     return energy_kwh / dc_capacity_kwp
 
-def performance_ratio(energy_kwh: float, poa_irradiation_wh_m2: float,
+def performance_ratio(energy_kwh: float, irradiation_wh_m2: float,
                       dc_capacity_kwp: float) -> float:
     """PR = actual yield / reference yield. Dimensionless, 0-1.
-    ⚠ ASSUMED: uses POA irradiance, NOT temperature-corrected."""
-    reference_yield = poa_irradiation_wh_m2 / G_REF
+    ⚠ ASSUMED: NOT temperature-corrected. Divides by the horizontal GHI
+    sensor (PLANT_IRRADIATION_SOURCE), not plane-of-array — MASTER v4.3."""
+    reference_yield = irradiation_wh_m2 / G_REF
     return (energy_kwh / dc_capacity_kwp) / reference_yield
 
 def cuf(energy_kwh: float, ac_capacity_kw: float, hours: float) -> float:
@@ -810,7 +811,7 @@ never throttled, so a trip contact is evaluated the moment it arrives.
 | Publish interval | 60 s | Tender §14 caps acquisition at 1 minute |
 | `min_interval_s`, performance/electrical Tags | 60 s | |
 | `min_interval_s`, diagnostic Tags | 300 s | |
-| `min_interval_s`, cumulative counters | 300 s | Monotonic; loses nothing |
+| `min_interval_s`, cumulative counters | 60 s | Was 300 s ("monotonic; loses nothing" — true of a total). A "today" figure is a counter's latest stored value, so at 300 s the Inverters' sum and the meter's advance since midnight were each up to five minutes old on their own schedules and swapped places on screen. Changed 14 Oct 2026 (MASTER v4.3); BUILT |
 | Live rollup heartbeat | 5 s | |
 | Health sweep | 60 s | |
 

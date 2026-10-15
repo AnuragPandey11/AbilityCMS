@@ -59,7 +59,7 @@ export interface WmsIrradiance {
   isError: boolean;
 }
 
-/** Plane-of-array first (what PR divides by), then horizontal, then the rest. */
+/** Plane-of-array first, then horizontal, then the rest. */
 const ORDER = ["GTI", "GHI", "DIFFUSE_RADIATION"];
 
 function rank(code: string): number {

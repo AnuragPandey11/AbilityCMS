@@ -9,6 +9,11 @@
  * 2. **Every error becomes an `ApiError`.** Callers never see a bare Response,
  *    so the problem+json contract is honoured in one place instead of at every
  *    call site.
+ * 3. **Every successful write is announced** (`setWriteHandler`), so what is on
+ *    screen is re-read after a change wherever the change was made. It is here
+ *    rather than at each button because half the application's writes are not
+ *    `useMutation`s, and each that was refreshed only the list it belonged to:
+ *    the rest of the screen, and the Plant picker, waited for a page reload.
  */
 
 import { ApiError, toProblem } from "./problem";
@@ -20,6 +25,25 @@ const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
 let onSessionLost: () => void = () => {};
 export function setSessionLostHandler(fn: () => void): void {
   onSessionLost = fn;
+}
+
+/** Called after every write the server accepted; `api/afterWrite` refreshes. */
+let onWrite: (path: string) => void = () => {};
+export function setWriteHandler(fn: (path: string) => void): void {
+  onWrite = fn;
+}
+
+/**
+ * Whether a request changed something on the server.
+ *
+ * `/auth/*` is excluded: signing in, refreshing a token and switching Client
+ * already clear the whole cache (`AuthProvider.resetEverything`), and the
+ * token refresh happens *inside* other requests.
+ */
+function isWrite(path: string, options: RequestOptions): boolean {
+  const method = (options.method ?? "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD" || options.read) return false;
+  return !path.startsWith("/auth/");
 }
 
 export type QueryValue = string | number | boolean | null | undefined;
@@ -53,6 +77,12 @@ interface RequestOptions {
   /** Set for the refresh call itself, which must not recurse. */
   skipRefresh?: boolean;
   signal?: AbortSignal;
+  /**
+   * A POST that only reads — a body too long for a query string. ⚠ Required on
+   * one used as a query: announced as a write, it would refresh every query on
+   * screen, itself included, which would POST again, for ever.
+   */
+  read?: boolean;
 }
 
 let refreshInFlight: Promise<TokenPair | null> | null = null;
@@ -111,6 +141,8 @@ export async function request<T = unknown>(
       response = await send(path, options);
     }
   }
+
+  if (response.ok && isWrite(path, options)) onWrite(path);
 
   if (response.status === 204) return undefined as T;
 

@@ -26,6 +26,7 @@ from sqlalchemy import text
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.domain.absence import classify_topic_liveness
 from solarcms.domain.decoding import TopicPattern, parse_topic
+from solarcms.services import snapshots
 from solarcms.services.backfill import estimate
 
 router = APIRouter(prefix="/operations", tags=["operations"])
@@ -95,6 +96,8 @@ async def open_maintenance(
     })).first()
     if row is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "could not open that window")
+    # Planned work is left out of coverage, so the Plant's figures change.
+    snapshots.plant_edited(session, body.plant_id)
 
     await session.execute(text("""
         INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
@@ -124,6 +127,7 @@ async def close_maintenance(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "no such open maintenance window")
+    snapshots.plant_edited(session, row.plant_id)
     await session.execute(text("""
         INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id, after)
         VALUES (:client_id, :user_id, 'maintenance.close', 'maintenance_window',

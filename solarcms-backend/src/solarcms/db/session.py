@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
+import structlog
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -14,6 +15,8 @@ from sqlalchemy.ext.asyncio import (
 
 from solarcms.config import get_settings
 from solarcms.db.rls import API_ROLE, SecurityContext, apply_context
+
+log = structlog.get_logger(__name__)
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -74,6 +77,11 @@ async def dispose_engine() -> None:
     _engine, _sessionmaker = None, None
 
 
+#: A follow-up to a committed transaction, given that transaction's context and role.
+AfterCommit = Callable[[SecurityContext, str | None], Awaitable[None]]
+_AFTER_COMMIT = "solarcms.after_commit"
+
+
 @asynccontextmanager
 async def scoped_session(
     context: SecurityContext, *, role: str | None = API_ROLE
@@ -84,7 +92,33 @@ async def scoped_session(
     `SET LOCAL` outside a transaction is silently a no-op — which would leave
     every policy seeing an unconfigured session. Commit on success, roll back on
     any exception, so a failed mutation cannot leave a partial audit trail.
+    After a commit, run whatever `after_commit` registered.
     """
-    async with get_sessionmaker()() as session, session.begin():
-        await apply_context(session, context, role=role)
-        yield session
+    async with get_sessionmaker()() as session:
+        async with session.begin():
+            await apply_context(session, context, role=role)
+            yield session
+        steps: dict[str, AfterCommit] = session.info.pop(_AFTER_COMMIT, {})
+    for key, step in steps.items():
+        try:
+            await step(context, role)
+        except Exception as exc:
+            log.error("after-commit step failed", step=key, error=repr(exc))
+
+
+def after_commit(session: AsyncSession, key: str, step: AfterCommit) -> None:
+    """Run `step` once this session's transaction has committed — never if it rolls back.
+
+    For follow-ups that must come *after* the change is visible: one run between
+    a statement and the commit can be overtaken by a reader that sees the old
+    rows and records them as current. Once per `key` per transaction, so a route
+    that edits several rows registers once. Each step opens its own transaction
+    under the same context and role. A failure is logged, never raised: the
+    change it follows is already committed, and an error now would report a
+    saved edit as a failed one.
+
+    A request's session comes from here (`api/deps.get_rls_session`), and on
+    FastAPI 0.115 a dependency closes before the response is sent — so a step
+    has run by the time the browser hears the edit succeeded.
+    """
+    session.info.setdefault(_AFTER_COMMIT, {}).setdefault(key, step)

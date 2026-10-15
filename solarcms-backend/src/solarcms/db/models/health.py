@@ -102,3 +102,5 @@ class PlantSnapshot(Base):
         ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # 0042: when an edit last changed what this copy was worked out from.
+    plant_edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
