@@ -434,6 +434,14 @@ DERIVED_TAG_FORMULAS: Final[dict[str, tuple[str, str]]] = {
     "HV_VOLTAGE_AVG": (
         "(HV_VOLTAGE_RY + HV_VOLTAGE_YB + HV_VOLTAGE_BR) / 3", "device",
     ),
+    # ── ⚠ PROPOSED (19 Oct 2026): the same average on the LT side, in V. The
+    # client supplied it for the kV Tags only, and a meter on an LT line — the
+    # SPINNING_AND_GENERAL_MILLS solar MFM at ~427 V — reports its three line
+    # voltages as AC_VOLTAGE_* (`docs/binding_corrections/`), so it had no
+    # Grid Voltage. Theirs, applied to the other three Tags.
+    "AC_VOLTAGE_AVG": (
+        "(AC_VOLTAGE_RY + AC_VOLTAGE_YB + AC_VOLTAGE_BR) / 3", "device",
+    ),
     # ── SUPPLIED: ( R PHASE CURRENT + Y PHASE CURRENT + B PHASE CURRENT )
     "AC_CURRENT_TOTAL": (
         "AC_CURRENT_R + AC_CURRENT_Y + AC_CURRENT_B", "device",

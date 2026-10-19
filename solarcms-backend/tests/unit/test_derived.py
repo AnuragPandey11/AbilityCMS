@@ -14,6 +14,7 @@ import pytest
 
 from solarcms.domain.assumptions import (
     DERIVED_TAG_FORMULAS,
+    FORMULA_CONSTANTS,
     PLANT_START_ABOVE_KW,
     QUALITY_OUT_OF_RANGE,
     TAG_SPECS,
@@ -28,6 +29,7 @@ from solarcms.domain.derived import (
     DerivedTag,
     InvalidFormula,
     compile_formula,
+    derivable,
     evaluate,
     evaluate_all,
     referenced_names,
@@ -454,3 +456,41 @@ def test_a_derived_tag_observes_its_own_throttle() -> None:
         last_written={13: now - timedelta(seconds=5)},
     )
     assert "HV_VOLTAGE_AVG" not in {r.tag_code for r in result.readings}
+
+
+# ── Which calculated Tags a Device answers — what a dashboard slot may plan on ──
+
+_FORMULAS = {code: expression for code, (expression, scope) in DERIVED_TAG_FORMULAS.items()
+             if scope == "device"}
+
+
+def _derivable(bound: set[str], constants: set[str] | None = None) -> frozenset[str]:
+    return derivable(_FORMULAS, bound, constant_names=FORMULA_CONSTANTS,
+                     available_constants=constants or set())
+
+
+class TestDerivable:
+    def test_three_lt_phases_answer_the_lt_average(self) -> None:
+        found = _derivable({"AC_VOLTAGE_RY", "AC_VOLTAGE_YB", "AC_VOLTAGE_BR"})
+        assert "AC_VOLTAGE_AVG" in found
+        assert "HV_VOLTAGE_AVG" not in found
+
+    def test_a_missing_phase_answers_nothing(self) -> None:
+        assert "AC_VOLTAGE_AVG" not in _derivable({"AC_VOLTAGE_RY", "AC_VOLTAGE_YB"})
+
+    def test_a_published_value_is_not_also_derived(self) -> None:
+        bound = {"AC_VOLTAGE_RY", "AC_VOLTAGE_YB", "AC_VOLTAGE_BR", "AC_VOLTAGE_AVG"}
+        assert "AC_VOLTAGE_AVG" not in _derivable(bound)
+
+    def test_dc_power_from_power_and_efficiency(self) -> None:
+        assert "DC_POWER" in _derivable({"AC_ACTIVE_POWER", "INVERTER_EFFICIENCY"})
+
+    def test_a_constant_must_be_on_record(self) -> None:
+        # SPECIFIC_YIELD divides by the Inverter's rated capacity.
+        assert "SPECIFIC_YIELD" not in _derivable({"ENERGY_TODAY"})
+        assert "SPECIFIC_YIELD" in _derivable({"ENERGY_TODAY"}, {"INV_CAPACITY"})
+
+    def test_a_malformed_formula_derives_nothing(self) -> None:
+        found = derivable({"X": "AC_VOLTAGE_RY +"}, {"AC_VOLTAGE_RY"},
+                          constant_names=FORMULA_CONSTANTS, available_constants=set())
+        assert found == frozenset()

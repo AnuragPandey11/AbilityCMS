@@ -48,6 +48,14 @@ STAGE_LABELS: Final[dict[str, str]] = {
     "GRID": "Grid",
 }
 
+# The one stage whose figures may come from another stage's Devices. An
+# Inverter's DC input is the array's output at the other end of the same cable,
+# so on a Plant with no string box the PV Array box reads it there (the user's
+# decision, 19 Oct 2026) — and its candidates name the Inverter, so provenance
+# says so. Nothing comparable holds anywhere else: an Inverter's AC output is
+# not the Grid's export, which is why the Grid box may never read it.
+STAGE_ALSO_READS: Final[dict[str, tuple[str, ...]]] = {"PV_ARRAY": ("INVERTERS",)}
+
 # The stage each Device Type folds into. Seeded to `device_types.sld_stage`;
 # a Type absent here carries no current and is not drawn (MASTER §2.3).
 DEFAULT_STAGE_BY_DEVICE_TYPE: Final[dict[str, str]] = {
@@ -170,7 +178,9 @@ def build_stages(
     `stage_slots` maps a stage code to the slots drawn inside its box. Each stage
     resolves against **only its own Devices** — a narrowed `PlantFacts` — so a
     candidate written as "SUM of INVERTER.AC_ACTIVE_POWER" inside the Inverters
-    stage cannot accidentally pick up a meter sitting in the Grid stage.
+    stage cannot accidentally pick up a meter sitting in the Grid stage. The one
+    exception is `STAGE_ALSO_READS`; a stage's Devices, counts and health stay
+    its own either way.
     """
     stage_slots = stage_slots or {}
     result = SldStages()
@@ -191,8 +201,10 @@ def build_stages(
 
     for position, code in enumerate(SLD_STAGES):
         devices = tuple(buckets[code])
+        readable = devices + tuple(
+            device for other in STAGE_ALSO_READS.get(code, ()) for device in buckets[other])
         scoped = PlantFacts(
-            plant_id=facts.plant_id, devices=devices, attributes=facts.attributes
+            plant_id=facts.plant_id, devices=readable, attributes=facts.attributes
         )
         specs = list(stage_slots.get(code, ()))
         readouts = tuple(

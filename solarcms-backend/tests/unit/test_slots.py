@@ -21,6 +21,7 @@ from solarcms.domain.dashboard_spec import validate as validate_spec
 from solarcms.domain.sld_stages import (
     DEFAULT_STAGE_BY_DEVICE_TYPE,
     SLD_STAGES,
+    SldStage,
     build_stages,
 )
 from solarcms.domain.slots import (
@@ -33,6 +34,7 @@ from solarcms.domain.slots import (
     UNDEFINED_NO_VALUE,
     DeviceFacts,
     PlantFacts,
+    ResolvedSlot,
     SlotCandidate,
     SlotSpec,
     resolve_all,
@@ -526,3 +528,161 @@ class TestMeterOnAnotherLine:
         assert resolved.source.device_type_code == "INVERTER"
         # Planned on the Inverters: the meter is not a silent source to fall from.
         assert resolved.source.degraded is False
+
+
+# ── A Plant's solar MFMs are added (19 Oct 2026) ─────────────────────────────
+#
+# One MFM per MCR: the Plant's power and energy are their sum, as PR and the
+# reports already took it; voltage, frequency and power factor are not sums.
+
+_BY_CODE = {spec.code: spec for spec in DEFAULT_SLOTS}
+
+
+def _meter_reading(device_id: int, code: str, *, generation: bool = True,
+                   **values: float) -> DeviceFacts:
+    return DeviceFacts(
+        device_id=device_id, code=code, device_type_code="MFM",
+        bound_tag_codes=frozenset(values), values=values, online=True, in_power_path=True,
+        measures_generation=generation,
+    )
+
+
+def _one_mfm_per_mcr(*, with_main: bool = False) -> PlantFacts:
+    devices = [
+        _meter_reading(1, "MCR1_MFM", AC_ACTIVE_POWER=120.0, ENERGY_EXPORT_TODAY=600.0,
+                       HV_VOLTAGE_AVG=11.02, FREQUENCY=50.01),
+        _meter_reading(2, "MCR2_MFM", AC_ACTIVE_POWER=80.0, ENERGY_EXPORT_TODAY=400.0,
+                       HV_VOLTAGE_AVG=11.05, FREQUENCY=50.02),
+    ]
+    if with_main:
+        # A main meter repeating the two rooms' total, marked as not the solar
+        # output so it is not counted twice.
+        devices.append(_meter_reading(3, "MAIN_MFM", generation=False,
+                                      AC_ACTIVE_POWER=200.0, ENERGY_EXPORT_TODAY=1000.0,
+                                      HV_VOLTAGE_AVG=11.04, FREQUENCY=50.01))
+    return PlantFacts(plant_id=12, devices=tuple(devices))
+
+
+class TestSolarMetersAreAdded:
+    @pytest.mark.parametrize("with_main", [False, True])
+    @pytest.mark.parametrize(("slot", "expected"), [
+        ("kpi.current_power", 200.0),
+        ("status.active_power", 200.0),
+        ("power.export_power", 200.0),
+        ("sld.grid.export_power", 200.0),
+        ("kpi.energy_today", 1000.0),
+        ("energy.exported_today", 1000.0),
+    ])
+    def test_power_and_energy_are_the_sum_of_the_solar_meters(
+        self, slot: str, expected: float, with_main: bool,
+    ) -> None:
+        resolved = resolve_slot(_BY_CODE[slot], _one_mfm_per_mcr(with_main=with_main))
+        assert resolved.value == expected
+        assert resolved.source is not None
+        assert resolved.source.device_ids == (1, 2)
+        assert resolved.source.is_aggregated
+
+    @pytest.mark.parametrize(("slot", "expected"), [
+        ("power.ac_voltage", 11.02),
+        ("sld.grid.voltage", 11.02),
+        ("status.frequency", 50.01),
+        ("sld.grid.frequency", 50.01),
+    ])
+    def test_voltage_and_frequency_are_one_meters_never_a_sum(
+        self, slot: str, expected: float,
+    ) -> None:
+        resolved = resolve_slot(_BY_CODE[slot], _one_mfm_per_mcr(with_main=True))
+        assert resolved.value == expected
+        assert resolved.source is not None and resolved.source.device_count == 1
+
+    def test_the_settlement_meter_is_still_read_alone(self) -> None:
+        abt = DeviceFacts(
+            device_id=9, code="ABT", device_type_code="ABT_METER",
+            bound_tag_codes=frozenset({"AC_ACTIVE_POWER"}),
+            values={"AC_ACTIVE_POWER": 199.0}, online=True, in_power_path=True,
+        )
+        facts = PlantFacts(plant_id=12, devices=(*_one_mfm_per_mcr().devices, abt))
+        resolved = resolve_slot(_BY_CODE["kpi.current_power"], facts)
+        assert resolved.value == 199.0
+        assert resolved.source is not None
+        assert resolved.source.device_type_code == "ABT_METER"
+
+
+
+# ── The schematic's PV Array and Grid on a Plant without string boxes or an HV
+# meter (19 Oct 2026): the PV Array reads the Inverters' DC side, the Grid the
+# meter's LT average. Every Device's own stage is unchanged.
+
+def _dc_inverter(device_id: int, code: str, *, volts: float, amps: float,
+                 dc_kw: float) -> DeviceFacts:
+    values = {"DC_VOLTAGE": volts, "DC_CURRENT": amps, "DC_POWER": dc_kw,
+              "AC_ACTIVE_POWER": dc_kw * 0.98}
+    return DeviceFacts(
+        device_id=device_id, code=code, device_type_code="INVERTER",
+        bound_tag_codes=frozenset(values), values=values, online=True, in_power_path=True,
+    )
+
+
+def _lt_meter(device_id: int = 50) -> DeviceFacts:
+    values = {"AC_VOLTAGE_AVG": 427.4, "AC_ACTIVE_POWER": 199.2}
+    return DeviceFacts(
+        device_id=device_id, code="MFM", device_type_code="MFM",
+        bound_tag_codes=frozenset(values), values=values, online=True, in_power_path=True,
+    )
+
+
+def _schematic(*devices: DeviceFacts) -> dict[str, SldStage]:
+    stages = build_stages(PlantFacts(plant_id=31, devices=devices), SLD_STAGE_SLOTS,
+                          DEFAULT_STAGE_BY_DEVICE_TYPE)
+    return {stage.code: stage for stage in stages.stages}
+
+
+def _figure(stage: SldStage, slot_code: str) -> ResolvedSlot:
+    return next(slot for slot in stage.slots if slot.slot_code == slot_code)
+
+
+class TestSchematicFallbacks:
+    def test_the_pv_array_reads_the_inverters_dc_side(self) -> None:
+        boxes = _schematic(
+            _dc_inverter(1, "INVERTER_1", volts=880.0, amps=60.0, dc_kw=52.8),
+            _dc_inverter(2, "INVERTER_2", volts=900.0, amps=70.0, dc_kw=63.0),
+            _lt_meter(),
+        )
+        pv = boxes["PV_ARRAY"]
+        assert _figure(pv, "sld.pv.dc_voltage").value == 890.0
+        assert _figure(pv, "sld.pv.dc_current").value == 130.0
+        power = _figure(pv, "sld.pv.dc_power")
+        assert power.value == pytest.approx(115.8)
+        assert power.source is not None and power.source.device_type_code == "INVERTER"
+        # The Inverters are still drawn, counted and judged in their own box.
+        assert pv.device_count == 0
+        assert boxes["INVERTERS"].device_count == 2
+
+    def test_a_string_box_still_answers_first(self) -> None:
+        smb = DeviceFacts(
+            device_id=9, code="SMB1", device_type_code="SMB",
+            bound_tag_codes=frozenset({"DC_VOLTAGE"}), values={"DC_VOLTAGE": 905.0},
+            online=True, in_power_path=True,
+        )
+        boxes = _schematic(smb, _dc_inverter(1, "INVERTER_1", volts=880.0, amps=60.0,
+                                             dc_kw=52.8))
+        voltage = _figure(boxes["PV_ARRAY"], "sld.pv.dc_voltage")
+        assert voltage.value == 905.0
+        assert voltage.source is not None and voltage.source.device_type_code == "SMB"
+
+    def test_the_grid_reads_an_lt_meter_in_volts(self) -> None:
+        boxes = _schematic(_lt_meter(), _dc_inverter(1, "INVERTER_1", volts=880.0,
+                                                     amps=60.0, dc_kw=52.8))
+        voltage = _figure(boxes["GRID"], "sld.grid.voltage")
+        assert voltage.value == 427.4
+        assert voltage.source is not None and voltage.source.tag_code == "AC_VOLTAGE_AVG"
+
+    def test_an_hv_reading_still_answers_first(self) -> None:
+        values = {"HV_VOLTAGE_AVG": 11.03, "AC_VOLTAGE_AVG": 427.4}
+        meter = DeviceFacts(
+            device_id=51, code="MFM", device_type_code="MFM",
+            bound_tag_codes=frozenset(values), values=values, online=True, in_power_path=True,
+        )
+        voltage = _figure(_schematic(meter)["GRID"], "sld.grid.voltage")
+        assert voltage.value == 11.03
+        assert voltage.source is not None and voltage.source.tag_code == "HV_VOLTAGE_AVG"

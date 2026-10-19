@@ -38,7 +38,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache import live
+from solarcms.domain.assumptions import FORMULA_CONSTANTS
 from solarcms.domain.counters import device_advances
+from solarcms.domain.derived import derivable
 from solarcms.domain.irradiation import StationValues, not_measuring
 from solarcms.domain.periods import period_start
 from solarcms.domain.sld_stages import SLD_STAGES, SldStages, build_stages
@@ -211,6 +213,7 @@ async def gather(
 
     device_rows = (await session.execute(text("""
         SELECT d.id, d.code, dt.code AS device_type_code, dt.in_power_path,
+               d.rated_capacity_kw,
                d.sld_stage_override, d.measures_generation,
                COALESCE(h.comm_status, 'unknown') AS comm_status
           FROM devices d
@@ -247,6 +250,31 @@ async def gather(
         tag_code_by_id[row.tag_id] = row.tag_code
         if row.unit is not None:
             units[row.tag_code] = row.unit
+
+    # A Tag computed by formula (`domain/derived`) is never bound, but ingest
+    # writes it beside the bound ones for every Device that reports its inputs:
+    # Grid Voltage from a meter's three phases, DC Power from an Inverter's
+    # efficiency. Counted as answerable on the same rule, or no slot could read it.
+    formula_rows = (await session.execute(text("""
+        SELECT id, code, formula, unit FROM tags
+         WHERE formula IS NOT NULL AND derived_scope = 'device'
+    """))).all()
+    formulas = {row.code: row.formula for row in formula_rows}
+    for row in formula_rows:
+        tag_code_by_id[row.id] = row.code
+        if row.unit is not None:
+            units.setdefault(row.code, row.unit)
+    plant_constants = {
+        name for name, column in (("DC_CAPACITY", "dc_capacity_kwp"),
+                                  ("AC_CAPACITY", "ac_capacity_kw"))
+        if attributes.get(column) is not None
+    }
+    for row in device_rows:
+        constants = plant_constants | (
+            {"INV_CAPACITY"} if row.rated_capacity_kw is not None else set())
+        bound.setdefault(row.id, set()).update(derivable(
+            formulas, bound.get(row.id, set()),
+            constant_names=FORMULA_CONSTANTS, available_constants=constants))
 
     values_by_device: dict[int, dict[str, float]] = {}
     for row in device_rows:
