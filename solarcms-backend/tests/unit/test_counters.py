@@ -20,7 +20,6 @@ from solarcms.domain.counters import (
     device_advances,
     integrate_counter,
     plant_energy,
-    plant_irradiation,
     samples_from_buckets,
 )
 
@@ -179,26 +178,6 @@ class TestDeviceAdvances:
         report = plant_energy([series], [("MFM", "ENERGY_EXPORT_TOTAL")],
                               plant_ac_capacity_kw=2_000.0)
         assert found[(series.device_id, "ENERGY_EXPORT_TOTAL")] == report.value == 10.0
-
-
-class TestPlantIrradiation:
-    def test_two_stations_are_averaged_not_summed(self) -> None:
-        series = [
-            _series("WMS_1", "WMS", "GHI_CUMULATIVE", 1.0, 1.02, every_min=5),
-            _series("WMS_2", "WMS", "GHI_CUMULATIVE", 2.0, 2.04, every_min=5),
-        ]
-        result = plant_irradiation(series)
-        assert result.value is not None and abs(result.value - 0.03) < 1e-9
-
-    def test_a_register_climbing_faster_than_the_sun_is_refused(self) -> None:
-        # 0.04 kWh/m2 in one minute is 2.4 kWh/m2 per hour: no sky does that.
-        result = plant_irradiation([_series("WMS", "WMS", "GHI_CUMULATIVE", 2.0, 2.04,
-                                            every_min=1)])
-        assert result.value == 0.0
-        assert [x.kind for x in result.stations[0].integral.anomalies] == ["implausible_jump"]
-
-    def test_no_station_is_undefined(self) -> None:
-        assert plant_irradiation([]).value is None
 
 
 class TestBucketing:

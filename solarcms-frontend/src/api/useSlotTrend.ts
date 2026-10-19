@@ -33,7 +33,7 @@ import { useQuery } from "@tanstack/react-query";
 import { qk } from "./queryKeys";
 import * as readingsApi from "./endpoints/readings";
 import { usePlant, usePlantDashboard, usePlantDevices, useTags } from "./hooks";
-import type { ReadingPoint, ResolvedSlot, Tag, Tier } from "./schemas";
+import type { DeviceListItem, ReadingPoint, ResolvedSlot, Tag, Tier } from "./schemas";
 import { dayInZone } from "@/format/datetime";
 
 /**
@@ -197,6 +197,16 @@ export function withGaps(
   return out;
 }
 
+/**
+ * Whether a Device may answer a Plant figure: every Device but a meter on a
+ * line other than the Plant's solar output (`measures_generation`, migration
+ * 0043). The server's slots pass such a meter over, so a chart under a tile
+ * must too.
+ */
+export function measuresGeneration(device: Pick<DeviceListItem, "measures_generation">): boolean {
+  return device.measures_generation !== false;
+}
+
 /** Combine one bucket's Devices the way the slot says to. */
 function combine(values: number[], aggregate: string): number | null {
   if (values.length === 0) return null;
@@ -325,11 +335,12 @@ export function useSlotSource(plantId: number | null, slotCode: string): SlotSou
 
   // Every Device of the type the slot resolved to. Not "every Device that has
   // the Tag": the slot named a *type*, and widening it here would make the
-  // curve include equipment the tile excluded.
+  // curve include equipment the tile excluded — as would a meter on another
+  // line than the solar output, which the server passes over too.
   const deviceIds = useMemo(() => {
     if (!source?.device_type_code) return [];
     return (devicesQuery.data ?? [])
-      .filter((device) => device.type_code === source.device_type_code)
+      .filter((device) => device.type_code === source.device_type_code && measuresGeneration(device))
       .map((device) => device.id)
       .sort((a, b) => a - b);
   }, [devicesQuery.data, source?.device_type_code]);

@@ -40,6 +40,7 @@ import { Skeleton } from "@/components/state";
 import { IconChevronRight } from "@/components/icons";
 import { UNDEFINED_DISPLAY, formatNumber } from "@/format/value";
 import { formatDateTime, formatTime } from "@/format/datetime";
+import { withheldWords } from "@/format/sunlight";
 
 /** The weather rows, in the reference's order. Slot codes, never Tags. */
 const WEATHER_ROWS: { code: string; label: string }[] = [
@@ -179,6 +180,14 @@ function slotRow(label: string, slot: ResolvedSlot | undefined): Row {
     return { label, value: UNDEFINED_DISPLAY, tone: "faint", title: undefinedExplanation(slot) };
   }
   const source = sourceLabel(slot.source);
+  // A fallback the server chose because the preferred sensor reads nothing
+  // (GTI at 0 W/m² beside GHI at 653) says which sensor and why.
+  const held = withheldWords(slot.withheld);
+  const provenance = source
+    ? `${source}${slot.source?.tag_code ? ` · ${slot.source.tag_code}` : ""}${
+        slot.source?.degraded ? " (fallback source)" : ""
+      }`
+    : null;
   return {
     label,
     value: (
@@ -188,11 +197,7 @@ function slotRow(label: string, slot: ResolvedSlot | undefined): Row {
       </>
     ),
     tone: "ink",
-    title: source
-      ? `${source}${slot.source?.tag_code ? ` · ${slot.source.tag_code}` : ""}${
-          slot.source?.degraded ? " (fallback source)" : ""
-        }`
-      : undefined,
+    title: [provenance, held].filter(Boolean).join(". ") || undefined,
   };
 }
 

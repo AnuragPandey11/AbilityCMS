@@ -31,7 +31,7 @@ truth, and the anomaly list says by how much it could not know.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import pairwise
 from typing import Literal
@@ -40,7 +40,6 @@ from solarcms.domain.assumptions import (
     COUNTER_JUMP_CAPACITY_MARGIN,
     COUNTER_ROLLOVER_MAXIMUM,
     COUNTER_STEP_MIN_ELAPSED_S,
-    MAX_IRRADIATION_KWH_PER_M2_PER_HOUR,
 )
 
 AnomalyKind = Literal["backwards", "implausible_jump"]
@@ -334,35 +333,8 @@ def plant_energy(
     )
 
 
-# ── A Plant's irradiation: the mean of its weather stations ────────────────
-
-@dataclass(frozen=True, slots=True)
-class PlantIrradiation:
-    """kWh/m² over the period; None when no station reported twice."""
-
-    value: float | None
-    stations: tuple[DeviceEnergy, ...] = field(default_factory=tuple)
-    undefined_reason: str | None = None
-
-
-def plant_irradiation(series: Sequence[DeviceSeries]) -> PlantIrradiation:
-    """Mean across stations of each one's integrated daily register.
-
-    A mean, as the client's own PR formula uses (`AVG.GHI_CUMULATIVE`): two
-    stations on one Plant measure the same sky, and summing them would double it.
-    Integrated rather than maxed, because the register resets every midnight — the
-    maximum over a month is one day's sun, not thirty.
-    """
-    stations = [
-        DeviceEnergy(item, integrate_counter(
-            item.samples, max_rate_per_hour=MAX_IRRADIATION_KWH_PER_M2_PER_HOUR,
-            resets_expected=True))
-        for item in series if len(item.samples) >= 2
-    ]
-    if not stations:
-        return PlantIrradiation(None, (), "no weather station reported twice in the period")
-    return PlantIrradiation(
-        sum(station.integral.total for station in stations) / len(stations), tuple(stations))
+# A Plant's irradiation — the mean of its weather stations, and which of them
+# are measuring — is `domain/irradiation`, built on `integrate_counter` above.
 
 
 def bucket_steps(

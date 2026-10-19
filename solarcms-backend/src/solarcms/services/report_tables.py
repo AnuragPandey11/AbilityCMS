@@ -65,12 +65,9 @@ from solarcms.domain.assumptions import (
 )
 from solarcms.domain.counters import (
     CounterStep,
-    DeviceEnergy,
     DeviceSeries,
     PlantEnergy,
-    bucket_steps,
     plant_energy,
-    plant_irradiation,
 )
 from solarcms.domain.formulas import (
     FormulaResult,
@@ -80,10 +77,17 @@ from solarcms.domain.formulas import (
     specific_yield,
 )
 from solarcms.domain.health_logic import uptime_seconds_from_events
+from solarcms.domain.irradiation import (
+    LiveIrradiance,
+    PlantIrradiation,
+    irradiation_by_label,
+    irradiation_notes,
+    plant_irradiation,
+)
 from solarcms.domain.periods import ReportWindow, local_midnight
 from solarcms.domain.tiering import TIERS, Tier, bucket_start, select_tier
 from solarcms.services import scope
-from solarcms.services.energy import read_counter_series
+from solarcms.services.energy import read_counter_series, read_live_irradiance
 from solarcms.services.reporting import BOLD, HEADER_FILL, MUTED
 
 log = structlog.get_logger(__name__)
@@ -317,7 +321,8 @@ async def fetch_day_stats(
     # The Plant's ids first, so the view is read for this Plant's Devices and
     # these Tags only — not the fleet's (`services/scope.py`, §4.9).
     devices = await scope.device_ids(
-        session, plant_ids=[plant.id], type_codes=[type_code for type_code, _ in pairs])
+        session, plant_ids=[plant.id], type_codes=[type_code for type_code, _ in pairs],
+        generation_only=True)
     tag_ids = await scope.tag_ids(session, [tag_code for _, tag_code in pairs])
     if not devices or not tag_ids:
         return {}
@@ -567,7 +572,10 @@ async def _compose(
             pairs=[PLANT_IRRADIATION_SOURCE, ("WMS", "GTI_CUMULATIVE")],
             start=window.start, end=window.end, plant_ids=[plant.id],
         )).get(plant.id, [])
-        return build_weather(plant, window, series, stats,
+        live = (await read_live_irradiance(
+            session, tier=day_tier, start=window.start, end=window.end, plant_ids=[plant.id],
+        )).get(plant.id, [])
+        return build_weather(plant, window, series, stats, live=live,
                              counter_tier=day_tier, stats_tier=stats_tier), [
             ("irradiation registers", day_tier), (_STATS_READ, stats_tier)]
 
@@ -582,11 +590,16 @@ async def _compose(
     stats = await fetch_day_stats(
         session, plant, window, stats_tier,
         [*PLANT_POWER_SOURCE_PRECEDENCE, *PLANT_FREQUENCY_SOURCE_PRECEDENCE])
-    builder = build_daily_plant if kind == "daily_plant" else build_monthly_plant
-    registers = "energy and irradiation registers" if sun else "energy registers"
-    return builder(plant, window, series, stats,
-                   counter_tier=day_tier, stats_tier=stats_tier), [
-        (registers, day_tier), (_STATS_READ, stats_tier)]
+    if kind == "daily_plant":
+        return build_daily_plant(plant, window, series, stats,
+                                 counter_tier=day_tier, stats_tier=stats_tier), [
+            ("energy registers", day_tier), (_STATS_READ, stats_tier)]
+    live = (await read_live_irradiance(
+        session, tier=day_tier, start=window.start, end=window.end, plant_ids=[plant.id],
+    )).get(plant.id, [])
+    return build_monthly_plant(plant, window, series, stats, live=live,
+                               counter_tier=day_tier, stats_tier=stats_tier), [
+        ("energy and irradiation registers", day_tier), (_STATS_READ, stats_tier)]
 
 
 # ── A period cut inside a day ────────────────────────────────────────────────
@@ -797,23 +810,18 @@ def _month_key(zone: ZoneInfo) -> Callable[[datetime], str]:
 
 
 def _station_means(
-    stations: Sequence[DeviceEnergy], label: Callable[[datetime], str],
+    irradiation: PlantIrradiation, label: Callable[[datetime], str],
 ) -> dict[str, float]:
-    """Irradiation per label, the mean across the stations that read it.
+    """Irradiation per label, the mean across the stations measuring under it.
 
     A mean, as `plant_irradiation` takes one — two stations see one sky — and
-    over the stations *with* that label, so a station that was down on
-    Tuesday does not halve Tuesday's sun.
+    judged afresh for each label (`irradiation_by_label`): a station that was
+    down on Tuesday does not halve Tuesday's sun, one that read nothing beside
+    one that read the sun is left out of that day, and a register that stuck
+    on Tuesday gives way to its live GHI for Tuesday alone.
     """
     # `(since, at]`, as in `split_steps`: a reading at midnight is the day before's.
-    per_station = [bucket_steps(s.integral.steps, lambda at: label(at - _INSTANT))
-                   for s in stations]
-    labels = {name for totals in per_station for name in totals}
-    return {
-        name: sum(t[name] for t in per_station if name in t)
-        / sum(1 for t in per_station if name in t)
-        for name in labels
-    }
+    return irradiation_by_label(irradiation, lambda at: label(at - _INSTANT))
 
 
 def _refused_note(energy: PlantEnergy, label: Callable[[datetime], str]) -> str | None:
@@ -927,7 +935,7 @@ def _months(window: ReportWindow) -> list[tuple[str, list[date]]]:
 def build_monthly_plant(
     plant: PlantInfo, window: ReportWindow, series: Sequence[DeviceSeries],
     stats: dict[tuple[str, str], dict[date, Stat]], *,
-    counter_tier: Tier, stats_tier: Tier,
+    counter_tier: Tier, stats_tier: Tier, live: Sequence[LiveIrradiance] = (),
 ) -> ReportTable:
     zone = plant.zone
     ac = plant.ac_kw or None
@@ -935,11 +943,11 @@ def build_monthly_plant(
     energy = plant_energy(series, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac)
     imports = plant_energy(series, PLANT_IMPORT_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac)
     stations = [s for s in series if (s.device_type_code, s.tag_code) == PLANT_IRRADIATION_SOURCE]
-    irradiation = plant_irradiation(stations)
+    irradiation = plant_irradiation(stations, live)
     made_by_month = split_steps(energy.steps, _month_key(zone))
     imported_by_month = split_steps(imports.steps, _month_key(zone))
     by_month, import_by_month = made_by_month.totals, imported_by_month.totals
-    irr_by_month = _station_means(irradiation.stations, _month_key(zone))
+    irr_by_month = _station_means(irradiation, _month_key(zone))
     power_pair, power = pick_source(stats, PLANT_POWER_SOURCE_PRECEDENCE)
 
     # CUF divides by the hours the Plant could be measured in: a Plant first
@@ -1008,10 +1016,11 @@ def build_monthly_plant(
         (f"Peak power is the highest {_resolution_phrase(stats_tier)} average of "
          f"{_source_phrase(power_pair[0], _device_count(power))}."
          if power_pair else "Peak power is not known: nothing reported active power."),
-        ("Irradiation is the mean of the Weather Stations' daily GHI registers."
+        ("Irradiation is the mean of the Weather Stations measuring: each one's daily GHI "
+         "register, or its live GHI integrated where the register read nothing."
          if irradiation.value is not None else
-         "Irradiation is not known — no Weather Station reported twice — so PR is not "
-         "either."),
+         "Irradiation is not known — no Weather Station reported — so PR is not either."),
+        *irradiation_notes(irradiation),
         "PR is energy over DC capacity, over irradiation in kWh/m²; CUF is energy over AC "
         "capacity times the hours the Plant could be measured in. Both are provisional pending "
         "the client's formulas (OPEN-16).",
@@ -1101,13 +1110,15 @@ def build_inverter(
 def build_weather(
     plant: PlantInfo, window: ReportWindow, series: Sequence[DeviceSeries],
     stats: dict[tuple[str, str], dict[date, Stat]], *,
-    counter_tier: Tier, stats_tier: Tier,
+    counter_tier: Tier, stats_tier: Tier, live: Sequence[LiveIrradiance] = (),
 ) -> ReportTable:
     zone = plant.zone
-    ghi = plant_irradiation([s for s in series if s.tag_code == "GHI_CUMULATIVE"])
+    # The live GHI stands in for a GHI register only — it is the same sensor
+    # (`PLANT_IRRADIANCE_LIVE_SOURCE`); a GTI register has no stand-in here.
+    ghi = plant_irradiation([s for s in series if s.tag_code == "GHI_CUMULATIVE"], live)
     gti = plant_irradiation([s for s in series if s.tag_code == "GTI_CUMULATIVE"])
-    ghi_by_day = _station_means(ghi.stations, _day_key(zone))
-    gti_by_day = _station_means(gti.stations, _day_key(zone))
+    ghi_by_day = _station_means(ghi, _day_key(zone))
+    gti_by_day = _station_means(gti, _day_key(zone))
 
     def of(tag: str) -> dict[date, Stat]:
         return stats.get(("WMS", tag), {})
@@ -1144,12 +1155,13 @@ def build_weather(
         Column("avg_humidity", "Avg humidity", unit="%", digits=0),
         Column("coverage", "Coverage", "percent", unit="%", digits=0),
     ]
-    stations = {s.device_id for s in series}
+    stations = {s.device_id for s in series} | {item.device_id for item in live}
     notes = [
         ("Irradiation is each Weather Station's daily register (restarting at local "
-         "midnight), integrated per day and averaged across stations."
-         if stations else "No Weather Station reported an irradiation register in the "
-                          "period."),
+         "midnight), integrated per day and averaged across the stations measuring; for GHI, "
+         "a station's live GHI integrated stands in where its register read nothing."
+         if stations else "No Weather Station reported irradiation in the period."),
+        *irradiation_notes(ghi),
         f"Peaks are the highest {_resolution_phrase(stats_tier)} maximum; averages are "
         "over every good reading of the day.",
         _coverage_note(stats_tier, "the Weather Station's irradiance (GHI)", "day"),

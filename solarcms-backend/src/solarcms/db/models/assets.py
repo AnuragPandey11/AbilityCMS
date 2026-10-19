@@ -32,6 +32,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -187,6 +188,11 @@ class Device(Base):
     # Client. Set only by a human accepting a reported contradiction between the
     # wiring and the Type default — never by inference.
     sld_stage_override: Mapped[str | None] = mapped_column(String(16))
+    # FALSE on a meter on a line other than the Plant's solar output — the
+    # site's own supply, say — so no Plant figure adds or picks it, while its
+    # own readings are kept and shown (migration 0043). TRUE otherwise.
+    measures_generation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=true())
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     installed_on: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = created_at()

@@ -187,6 +187,9 @@ class DeviceUpdate(BaseModel):
     # its Type, which is the normal state.
     sld_stage_override: str | None = Field(
         default=None, pattern="^(PV_ARRAY|INVERTERS|TRANSFORMER|GRID)$")
+    # False on a meter on a line other than the Plant's solar output, so no
+    # Plant figure adds or picks it (migration 0043). Meters only.
+    measures_generation: bool | None = None
     # Clearing a grouping needs a way to say "none", which an omitted field
     # cannot: `null` and "unchanged" are the same JSON without it.
     clear: list[str] | None = Field(

@@ -281,6 +281,41 @@ export const KpiCoverageSchema = z.object({
 export type KpiCoverage = z.infer<typeof KpiCoverageSchema>;
 
 /**
+ * One weather station's part in the Plant's sunlight over a period
+ * (`domain/irradiation`, ⚠ PROPOSED 15 Oct 2026).
+ */
+export const IrradiationStationSchema = z.object({
+  device_id: z.number(),
+  device_code: z.string(),
+  /** Its own daily register, or its live GHI integrated over the period where
+   *  the register read next to nothing while the live sensor saw the sun. */
+  source: z.enum(["register", "live_ghi"]).nullable().catch(null),
+  kwh_m2: nullableNumeric(),
+  register_kwh_m2: nullableNumeric(),
+  live_kwh_m2: nullableNumeric(),
+  /** Set when it read no sun beside a station that did: left out, not averaged. */
+  excluded_reason: z.string().nullable(),
+});
+export type IrradiationStation = z.infer<typeof IrradiationStationSchema>;
+
+/**
+ * The denominator of PR — the mean of the stations measuring — and where it
+ * came from. `from_live_ghi` means PR divides by this platform's integration
+ * of the stations' live sensor, not by a total any station sent, and a screen
+ * showing PR must say so. `spread` is set only when the stations used differ by
+ * more than they should; it is never acted on.
+ */
+export const IrradiationSchema = z.object({
+  value: nullableNumeric(),
+  station_count: z.number(),
+  undefined_reason: z.string().nullable(),
+  from_live_ghi: z.boolean().optional().default(false),
+  spread: nullableNumeric().optional(),
+  stations: z.array(IrradiationStationSchema).optional().default([]),
+});
+export type Irradiation = z.infer<typeof IrradiationSchema>;
+
+/**
  * PR and CUF over the previous period up to the same point — yesterday to
  * this time of day, last month to this date — computed exactly as the current
  * figures are. Only present with `compare=true`, and null for lifetime or a
@@ -301,6 +336,7 @@ export const KpiComparisonSchema = z.object({
   source_tier: z.string().nullable().optional().catch(null),
   performance_ratio: KpiFigureSchema,
   cuf: KpiFigureSchema,
+  irradiation_kwh_m2: IrradiationSchema.nullable().optional().catch(null),
   coverage: KpiCoverageSchema.nullable().catch(null),
 });
 export type KpiComparison = z.infer<typeof KpiComparisonSchema>;
@@ -333,6 +369,8 @@ export const PlantKpisSchema = z.object({
   /** The period's energy over DC capacity. Optional so an API that predates
    *  it degrades to "—" rather than failing the whole response. */
   specific_yield: KpiFigureSchema.nullable().optional().catch(null),
+  /** PR's denominator, station by station; see `IrradiationSchema`. */
+  irradiation_kwh_m2: IrradiationSchema.nullable().optional().catch(null),
   coverage: KpiCoverageSchema.nullable().catch(null),
   /** Where the period began, in the Plant's calendar: its midnight, the 1st,
    *  1 January — or its first reading, for lifetime. */
@@ -577,6 +615,8 @@ export const InverterRankingSchema = z.object({
   tariff_inr_per_kwh: nullableNumeric(),
   irradiation_kwh_m2: nullableNumeric(),
   irradiation_reason: z.string().nullable(),
+  /** Where that sunlight came from, as `GET /plants/{id}/kpis` says it. */
+  irradiation_detail: IrradiationSchema.nullable().optional().catch(null),
   energy_tier: z.string(),
   coverage: z.object({
     period_hours: numeric(),
@@ -690,6 +730,12 @@ export const DeviceListItemSchema = z.object({
    * read these as well as the primary, or the strings show as unregistered.
    */
   extra_topics: z.array(z.string()).optional().catch(undefined),
+  /**
+   * False on a meter on a line other than the Plant's solar output — the
+   * site's own supply — so no Plant figure adds or picks it (migration 0043).
+   * Absent from an older server, which means true.
+   */
+  measures_generation: z.boolean().optional().catch(undefined),
 });
 export type DeviceListItem = z.infer<typeof DeviceListItemSchema>;
 
@@ -732,6 +778,7 @@ export const DeviceUpdateResultSchema = z.object({
   string_count: z.number().nullable(),
   sld_stage_override: z.string().nullable(),
   device_model_id: z.number().optional(),
+  measures_generation: z.boolean().optional(),
 });
 export type DeviceUpdateResult = z.infer<typeof DeviceUpdateResultSchema>;
 
@@ -1347,6 +1394,21 @@ export const SlotSourceSchema = z.object({
 });
 export type SlotSource = z.infer<typeof SlotSourceSchema>;
 
+/**
+ * A current value the server left out of every slot because it cannot be a
+ * measurement — a sun sensor reading 0 W/m² beside one reading the sun. Its
+ * binding stays, so the slot falls back (`source.degraded`) only while it
+ * reads nothing.
+ */
+export const WithheldReadingSchema = z.object({
+  device_id: z.number(),
+  device_code: z.string(),
+  tag_code: z.string(),
+  value: numeric(),
+  reason: z.string(),
+});
+export type WithheldReading = z.infer<typeof WithheldReadingSchema>;
+
 export const ResolvedSlotSchema = z.object({
   slot_code: z.string(),
   label: z.string(),
@@ -1363,6 +1425,9 @@ export const ResolvedSlotSchema = z.object({
   undefined_reason: z.enum(["no_source", "no_value", "unconfigured"]).nullable(),
   source: SlotSourceSchema.nullable(),
   override_note: z.string().nullable().optional(),
+  /** Readings of this slot's Tags left out as not measuring — why a tile fell
+   *  back from GTI to GHI. Optional: an older server does not send it. */
+  withheld: z.array(WithheldReadingSchema).optional(),
 });
 export type ResolvedSlot = z.infer<typeof ResolvedSlotSchema>;
 
@@ -1414,6 +1479,8 @@ export const PlantDashboardSchema = z.object({
   panels: z.record(z.string(), z.array(ResolvedSlotSchema)),
   sld: SldStagesSchema,
   device_count: z.number(),
+  /** Optional: an older server does not send it. */
+  withheld_readings: z.array(WithheldReadingSchema).optional(),
   assumptions_note: z.string(),
 });
 export type PlantDashboard = z.infer<typeof PlantDashboardSchema>;

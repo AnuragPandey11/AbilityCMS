@@ -239,6 +239,12 @@ export type DeviceUpdate = Partial<Omit<DeviceCreate, "device_model_id">> & {
    */
   device_model_id?: number;
   /**
+   * False on a meter on a line other than the Plant's solar output, so no
+   * Plant figure adds or picks it. The server refuses false on anything but a
+   * meter.
+   */
+  measures_generation?: boolean;
+  /**
    * Fields to set to NULL. Needed because `null` and "unchanged" are the same
    * JSON in a PATCH body — without it a Collector can be assigned but never
    * unassigned.

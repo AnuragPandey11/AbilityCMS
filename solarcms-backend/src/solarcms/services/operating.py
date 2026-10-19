@@ -92,6 +92,8 @@ async def _devices(
           LEFT JOIN device_health h ON h.device_id = d.id
          WHERE d.plant_id = :plant_id AND d.status <> 'decommissioned'
            AND dt.code = :type_code
+           -- A meter on another line answers no Plant figure (migration 0043).
+           AND d.measures_generation
          ORDER BY d.code
     """), {"plant_id": plant_id, "type_code": type_code, "tag_code": tag_code})).all())
 

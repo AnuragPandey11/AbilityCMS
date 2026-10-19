@@ -74,6 +74,11 @@ CANDIDATE_KINDS: Final[tuple[str, ...]] = (
 # meters' exports is not a quantity anything measured.
 COUNTER_TODAY_AGGREGATES: Final[tuple[str, ...]] = ("sum", "first")
 
+# The Device Types a Plant figure reads as meters (`PLANT_*_PRECEDENCE` in
+# `assumptions.py`). Only these may be marked as on a line other than the
+# Plant's solar output (`DeviceFacts.measures_generation`, migration 0043).
+METER_TYPES: Final[tuple[str, ...]] = ("ABT_METER", "MFM")
+
 # Why a slot has no value. Carried rather than collapsed to null because these
 # three mean entirely different things to whoever is looking at the screen: the
 # first is a commissioning gap, the second a fault, the third a configuration
@@ -183,6 +188,28 @@ class DeviceFacts:
     # by Tag code — `counter_today` candidates read this, never `values`. A Tag
     # absent here had fewer than two readings today: undefined, never 0.0.
     counter_today: Mapping[str, float] = field(default_factory=dict)
+    # False on a meter on a line other than the Plant's solar output — the
+    # site's own supply. Such a Device answers no slot: summed, it would add
+    # that line to the Plant's generation, and as `first` it can win on its
+    # code alone (`MAIN_MFM` sorts before `MFM`). It stays in the SLD stages.
+    measures_generation: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class WithheldReading:
+    """A current value left out of `DeviceFacts.values` because it cannot be a
+    measurement — a sun sensor reading 0 W/m² beside one reading 600.
+
+    Withheld, never rewritten: its binding stays, so the slot still *plans* on
+    it and only falls back for as long as it reads nothing (`degraded`), and the
+    reading itself is listed beside the dashboard rather than hidden.
+    """
+
+    device_id: int
+    device_code: str
+    tag_code: str
+    value: float
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,9 +220,16 @@ class PlantFacts:
     # Kept as a mapping rather than a Plant object so this module stays pure of
     # the ORM as well as of I/O.
     attributes: Mapping[str, float | None] = field(default_factory=dict)
+    # Values already left out of `devices[].values`, and why.
+    withheld: tuple[WithheldReading, ...] = ()
 
     def of_type(self, device_type_code: str) -> tuple[DeviceFacts, ...]:
         return tuple(d for d in self.devices if d.device_type_code == device_type_code)
+
+    def answering(self, device_type_code: str) -> tuple[DeviceFacts, ...]:
+        """The Devices of a Type that may answer a Plant figure — all of them
+        but a meter on another line (`measures_generation`)."""
+        return tuple(d for d in self.of_type(device_type_code) if d.measures_generation)
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,7 +297,7 @@ def _candidate_is_bound(candidate: SlotCandidate, facts: PlantFacts) -> bool:
     if candidate.kind == KIND_PLANT_ATTRIBUTE:
         assert candidate.plant_attribute is not None
         return facts.attributes.get(candidate.plant_attribute) is not None
-    devices = facts.of_type(candidate.device_type_code or "")
+    devices = facts.answering(candidate.device_type_code or "")
     if not devices:
         return False
     if candidate.kind == KIND_DEVICE_COUNT:
@@ -284,7 +318,7 @@ def _evaluate(candidate: SlotCandidate, facts: PlantFacts) -> tuple[float | None
 
     # Stable ordering: a slot whose value jumps between two Devices between
     # refreshes is unreadable, and `first` depends on it entirely.
-    devices = sorted(facts.of_type(candidate.device_type_code or ""), key=lambda d: d.code)
+    devices = sorted(facts.answering(candidate.device_type_code or ""), key=lambda d: d.code)
 
     if candidate.kind == KIND_DEVICE_COUNT:
         counted = [d for d in devices if d.online] if candidate.online_only else list(devices)

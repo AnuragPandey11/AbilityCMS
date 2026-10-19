@@ -30,7 +30,7 @@ from solarcms.domain.assumptions import (
     PLANT_ENERGY_COUNTER_PRECEDENCE,
     PLANT_IRRADIATION_SOURCE,
 )
-from solarcms.domain.counters import DeviceSeries, plant_energy, plant_irradiation
+from solarcms.domain.counters import DeviceSeries, plant_energy
 from solarcms.domain.formulas import (
     FormulaResult,
     availability,
@@ -40,6 +40,7 @@ from solarcms.domain.formulas import (
     specific_yield,
 )
 from solarcms.domain.health_logic import uptime_seconds_from_events
+from solarcms.domain.irradiation import LiveIrradiance, PlantIrradiation, plant_irradiation
 from solarcms.domain.periods import (
     ComparisonWindow,
     measured_since,
@@ -52,6 +53,7 @@ from solarcms.services.energy import (
     counter_anomalies_payload,
     energy_source_payload,
     read_counter_series,
+    read_live_irradiance,
     split_by_pair,
 )
 
@@ -125,11 +127,14 @@ async def counter_series(
 async def meters_and_stations(
     session: AsyncSession, plant_id: int, tier: Tier, start: datetime, lifetime: bool,
     end: datetime | None = None,
-) -> tuple[list[DeviceSeries], list[DeviceSeries]]:
-    """The energy meters' and weather stations' register series over a window.
+) -> tuple[list[DeviceSeries], list[DeviceSeries], list[LiveIrradiance]]:
+    """The energy meters' and weather stations' register series over a window,
+    and each station's live GHI integrated over it.
 
     Energy from each meter's own counter, and irradiation from the weather
-    stations — aggregates, never raw readings (MASTER §6.6).
+    stations — aggregates, never raw readings (MASTER §6.6). The live GHI
+    stands in for a station whose daily register is missing or stuck
+    (`domain/irradiation`); it is read from the same tier as the registers.
 
     ⚠ Irradiation is never read coarser than hourly. Its register restarts
     at the Plant's midnight, and a daily bucket is cut at UTC midnight — for
@@ -138,18 +143,22 @@ async def meters_and_stations(
     selects the daily tier, which is why this never showed on a young fleet.
     """
     irradiation_tier = Tier.AGG_1H if tier == Tier.AGG_1D else tier
+    live = (await read_live_irradiance(
+        session, tier=irradiation_tier,
+        start=bucket_start(start, irradiation_tier) if lifetime else start, end=end,
+        plant_ids=[plant_id])).get(plant_id, [])
     if irradiation_tier == tier:
         series = await counter_series(
             session, plant_id, tier, start, lifetime,
             [*PLANT_ENERGY_COUNTER_PRECEDENCE, PLANT_IRRADIATION_SOURCE], end=end)
         stations, meters = split_by_pair(series, PLANT_IRRADIATION_SOURCE)
-        return meters, stations
+        return meters, stations, live
     meters = await counter_series(
         session, plant_id, tier, start, lifetime, PLANT_ENERGY_COUNTER_PRECEDENCE, end=end)
     stations = await counter_series(
         session, plant_id, irradiation_tier, start, lifetime, [PLANT_IRRADIATION_SOURCE],
         end=end)
-    return meters, stations
+    return meters, stations, live
 
 
 async def plant_coverage(
@@ -277,6 +286,35 @@ def coverage_payload(coverage: Coverage) -> dict[str, Any]:
     }
 
 
+def irradiation_payload(irradiation: PlantIrradiation) -> dict[str, Any]:
+    """The Plant's sunlight over the period, station by station.
+
+    `from_live_ghi` is the line a PR screen must print: the figure divides by
+    our integration of the stations' live sensor, not by a total any station
+    reported. `spread` is set only when the stations used disagree by more than
+    they should, and is never acted on — which sensor is right is a site visit.
+    """
+    return {
+        "value": irradiation.value,
+        "station_count": len(irradiation.used),
+        "undefined_reason": irradiation.undefined_reason,
+        "from_live_ghi": irradiation.from_live,
+        "spread": irradiation.spread,
+        "stations": [
+            {
+                "device_id": station.device_id,
+                "device_code": station.device_code,
+                "source": station.source,
+                "kwh_m2": station.total,
+                "register_kwh_m2": None if station.register is None else station.register.total,
+                "live_kwh_m2": None if station.live is None else station.live.total,
+                "excluded_reason": station.excluded_reason,
+            }
+            for station in irradiation.stations
+        ],
+    }
+
+
 def render_formula(result: FormulaResult) -> dict[str, Any]:
     return {"value": result.value, "variant": result.variant,
             "undefined_reason": result.undefined_reason}
@@ -297,11 +335,11 @@ async def previous_figures(
     Plant.
     """
     tier = select_tier(window.start, window.end, now, finest=Tier.AGG_1M)
-    meters, stations = await meters_and_stations(
+    meters, stations, live = await meters_and_stations(
         session, plant_id, tier, window.start, False, end=window.end)
     energy_result = plant_energy(
         meters, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac_kw or None)
-    irradiation = plant_irradiation(stations)
+    irradiation = plant_irradiation(stations, live)
     if energy_result.value is None:
         reason = energy_result.undefined_reason
         pr = FormulaResult(None, performance_ratio(0.0, 0.0, 0.0).variant, reason)
@@ -319,6 +357,7 @@ async def previous_figures(
         "source_tier": tier.value,
         "performance_ratio": render_formula(pr),
         "cuf": render_formula(cuf_result),
+        "irradiation_kwh_m2": irradiation_payload(irradiation),
         "counter_anomalies": counter_anomalies_payload(energy_result),
         "coverage": coverage_payload(coverage),
     }
@@ -429,7 +468,8 @@ async def compute_plant_kpis(
     # step that goes backwards or exceeds what the Plant could produce is
     # refused and reported in `counter_anomalies` — see `domain/counters`.
     lifetime = period == "lifetime"
-    meters, stations = await meters_and_stations(session, plant_id, tier, start, lifetime)
+    meters, stations, live = await meters_and_stations(
+        session, plant_id, tier, start, lifetime)
 
     dc_kwp = float(plant.dc_capacity_kwp or 0.0)
     ac_kw = float(plant.ac_capacity_kw or 0.0)
@@ -440,7 +480,7 @@ async def compute_plant_kpis(
 
     energy_result = plant_energy(
         meters, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac_kw or None)
-    irradiation = plant_irradiation(stations)
+    irradiation = plant_irradiation(stations, live)
     # GHI_CUMULATIVE is kWh/m2; performance_ratio wants Wh/m2 over the period.
     irradiation_wh = (irradiation.value or 0.0) * 1000.0
 
@@ -494,11 +534,10 @@ async def compute_plant_kpis(
         # and PR, CUF and CO2 with it — is short by an amount nobody can know.
         "energy_source": energy_source_payload(energy_result),
         "counter_anomalies": counter_anomalies_payload(energy_result),
-        "irradiation_kwh_m2": {
-            "value": irradiation.value,
-            "station_count": len(irradiation.stations),
-            "undefined_reason": irradiation.undefined_reason,
-        },
+        # The denominator of PR, and which stations it came from: their own
+        # daily register, or their live GHI integrated where the register is
+        # missing or stuck; and any left out as not measuring (`domain/irradiation`).
+        "irradiation_kwh_m2": irradiation_payload(irradiation),
         "performance_ratio": render_formula(pr),
         "cuf": render_formula(cuf_result),
         "availability": render_formula(avail),

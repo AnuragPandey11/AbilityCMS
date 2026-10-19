@@ -1,6 +1,6 @@
 # Broker Observations — Client Test Broker
 
-**Version:** 1.3 · **Date:** 6 October 2026 · **Status:** Evidence, not decisions
+**Version:** 1.4 · **Date:** 19 October 2026 · **Status:** Evidence, not decisions
 
 > ⚠ **The broker changed again by 6 October 2026** — a 30 s cycle, per-string
 > topics, and two more Clients. **§8 records it; read §8 first.**
@@ -260,9 +260,10 @@ durations, or counters? And are the weather sensors known to be unserviceable?
 | B-13 | At ~2.78 s, is per-Reading fidelity wanted, or is one Reading per minute sufficient? Throttling at 60 s discards ~95% and adds 60 s to alarm detection latency. | Retention volume, alarm latency (BACKEND_SPEC §12.4) |
 | B-14 | Payload keys on `KULAR_GREEN/DATA` changed wholesale between 10 and 16 Sep, and the weather topic was renamed `MMS`→`WMS`. **Is there a change process for either?** Every Plant is one silent rename away from decoding nothing. | §7, commissioning |
 | B-15 | Is `{device}_STRING{n}` a stable convention — always the owning Device's code plus `_STRING`, `n` the last string in the message? Are `In`/`Pn` string current (A) and string power (kW)? Why does KULAR_GREEN publish every `Pn` as 0? | §8.2, OPEN-24 |
-| B-16 | VARDHMAN_GROUP `MAIN_MFM`: `P` ≈ 772 kW is ~10× √3·V·I·PF (≈ 76 kW). Which is wrong — a CT ratio on the currents, or the power? And is this meter generation or the mill's own load? | §8.4, OPEN-14/15 |
+| B-16 | VARDHMAN_GROUP `MAIN_MFM`: `P` ≈ 772 kW is ~10× √3·V·I·PF (≈ 76 kW). Which is wrong — a CT ratio on the currents, or the power? And is this meter generation or the mill's own load? **Half answered (the user, 19 Oct 2026): `MFM` is the solar output and `MAIN_MFM` the plant's own; PR uses `MFM` (MASTER v4.6).** Still open: on 19 Oct 2026 12:05 IST `P` was exactly 10.11× √3·V·I·PF in all three messages (662.6 kW against 65.5), and its `EXP`/`IMP` registers did not move in 59 s. `MFM` agreed with itself within 3% and with the Inverters' 202 kW. | §8.4, OPEN-14/15 |
 | B-17 | ISPL `INVERTER1` sends `EFF` −1 and `CE`/`DE`/`ME`/`PVV`/`PVI` 0 while producing ~390 kW. Is −1 a "not available" sentinel, and will the energy and DC registers be populated? | §8.4 |
 | B-18 | The same key carries different units on different Clients (`VRY` kV vs V; `AGHI` kWh/m² vs Wh/m²). Please supply a per-Client unit sheet — every one so far has been inferred from arithmetic (OPEN-15). | §8.4 |
+| B-19 | VARDHMAN_GROUP `WMS` and `WMS_WEST` send `AGHI`, `AGTI`, `GTI`, ambient temperature, wind and the diffuse/direct keys as 0 while `GHI` reads the sun. Are those sensors not wired, or not mapped in the datalogger? Until `AGHI` is populated PR there divides by our integration of `GHI`. | §8.5, OPEN-16 |
 
 ---
 
@@ -384,12 +385,41 @@ evidence, audited. All ⚠ ASSUMED (OPEN-15). Also observed and left as data, no
 corrected: ISPL `INVERTER1` `EFF` −1 (its derived DC power is stored *flagged*,
 B-17); `WMS_WEST` and VARDHMAN_GROUP `WMS` send 0 for most fields.
 
+### 8.5 VARDHMAN_GROUP's weather stations, 15 October 2026
+
+Observed on the live broker at 15:13 IST, 75 s, three messages per station
+(`tools/probe_broker.py`, read-only):
+
+| Key | `WMS` | `WMS_WEST` |
+|---|---|---|
+| `GHI` (W/m²) | 93.4 – 95.2 | 95.5 – 96.4 |
+| `MT` (module °C) | 28.8 | 28.9 – 29.0 |
+| `AGHI`, `AGTI`, `GTI`, `AT`, `WS`, `WD`, `DIF`, `DIFA`, `DIR`, `DA`, `CC` | 0 | 0 |
+
+Only live GHI and module temperature carry a value; the two stations agree on
+both to within 2%. The daily total PR divides by (`AGHI` → `GHI_CUMULATIVE`)
+is 0 on both, so the Plant showed "No irradiation in period" and no PR — not
+because there are two stations, which are averaged as the client's formula
+does (`AVG.GHI_CUMULATIVE`). A 0 is indistinguishable from a sensor that is
+not wired or not mapped in the datalogger; this records the shape, not which.
+
+Re-observed 19 Oct 2026 at 12:05 IST (read-only, 95 s): `GHI` 653.0 at `WMS` and
+658.1 at `WMS_WEST`, `MT` 47.5 and 41.5, every other key 0 as before.
+
+Built in response (MASTER v4.5, ⚠ PROPOSED): a station whose daily total reads
+next to nothing while its live GHI sees the sun has that live GHI integrated
+over the period instead, and every screen using it says so; a station reading
+no sun beside one that does is left out of the mean rather than halving it; a
+live sun reading of ~0 beside a lit one (both stations' `GTI` here) is withheld
+from the dashboard, which falls back to GHI. See `domain/irradiation.py`. B-19.
+
 ---
 
 ## 6. Change log
 
 | Version | Date | Change |
 |---|---|---|
+| 1.4 | 19 Oct 2026 | **§8.5: VARDHMAN_GROUP's two weather stations send only live GHI and module temperature** (observed 15 Oct, again 19 Oct); their daily totals, GTI, air temperature and wind are 0 — the reason the Plant had no PR. Added B-19. **B-16 half answered**: `MFM` is the solar output and `MAIN_MFM` the plant's own; `MAIN_MFM`'s 10× power and still registers re-observed. |
 | 1.3 | 6 Oct 2026 | **§8: a 30 s cycle, per-string topics, two new Clients.** KULAR_GREEN's 22 Devices unchanged in content, now every ~30 s (registered at 86). Each Inverter's PV strings published on `…_STRINGnn` topics, proven to be its own inputs (string currents sum exactly to its `PVI`/`DC_CURRENT`) and recorded as extra topics of that Device (migration 0030). Clients `ISPL` and `VARDHMAN_GROUP` publishing unregistered. Four meters/WMS publish units that contradict their Type's alias; corrected per Device with evidence. Added B-15 to B-18. |
 | 1.2 | 16 Sep 2026 | **§7: the broker changed.** `KULAR_GREEN/DATA` replaced all eight payload keys with short codes, so `MFM-01` decodes nothing while still reading as online. The weather topic moved from `MMS` to `WMS` and is being quarantined, leaving the Plant with no irradiance and therefore no computable PR. Both key families added to `SOURCE_KEY_ALIASES`; bindings and topics deliberately **not** rewritten automatically. Added B-14. |
 | 1.1 | 10 Sep 2026 | Cross-referenced against the client's signal schedule (`TAG_CATALOGUE.md`). Hypotheses §4.1 (irradiance is daily kWh/m²) and §4.2 (power in kW) corroborated by the client's own units; neither confirmed. Noted that the published `PerformanceRatio` corresponds to no signal on any Device Type and is therefore pipeline-computed. Added B-11 and B-12. |

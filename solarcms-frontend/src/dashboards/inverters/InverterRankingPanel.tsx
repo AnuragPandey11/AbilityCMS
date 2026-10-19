@@ -24,6 +24,7 @@ import { ErrorState, SkeletonTable } from "@/components/state";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { IconWarning } from "@/components/icons";
 import { formatDateTime, formatTime, toDateTimeInput } from "@/format/datetime";
+import { sunlightNote } from "@/format/sunlight";
 import {
   UNDEFINED_DISPLAY,
   formatHours,
@@ -104,6 +105,9 @@ export function InverterRankingPanel({
   const measure: RankMeasure = chosen ?? defaultMeasure(rows);
   const groups = useMemo(() => rankWithinVariants(rows, measure), [rows, measure]);
   const sums = useMemo(() => totals(rows), [rows]);
+  // PR divides by the Plant's sunlight; when that was not simply each weather
+  // station's own total, the panel says so, as the Plant's PR card does.
+  const sunlight = sunlightNote(data?.irradiation_detail);
   const tariff = data?.tariff_inr_per_kwh ?? null;
   const zone = data?.timezone ?? timezone;
 
@@ -227,6 +231,14 @@ export function InverterRankingPanel({
             />
           ))}
 
+          {sunlight ? (
+            <p
+              className={`text-xs leading-snug ${sunlight.warn ? "text-warn" : "text-ink-faint"}`}
+              title={sunlight.title}
+            >
+              PR · {sunlight.text}
+            </p>
+          ) : null}
           <Coverage
             periodHours={data.coverage.period_hours}
             heardHours={data.coverage.heard_hours}

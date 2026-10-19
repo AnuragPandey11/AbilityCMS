@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.cache import live
 from solarcms.domain.counters import device_advances
+from solarcms.domain.irradiation import StationValues, not_measuring
 from solarcms.domain.periods import period_start
 from solarcms.domain.sld_stages import SLD_STAGES, SldStages, build_stages
 from solarcms.domain.slots import (
@@ -48,6 +49,7 @@ from solarcms.domain.slots import (
     ResolvedSlot,
     SlotCandidate,
     SlotSpec,
+    WithheldReading,
     resolve_all,
 )
 from solarcms.domain.tiering import Tier, select_tier
@@ -209,7 +211,7 @@ async def gather(
 
     device_rows = (await session.execute(text("""
         SELECT d.id, d.code, dt.code AS device_type_code, dt.in_power_path,
-               d.sld_stage_override,
+               d.sld_stage_override, d.measures_generation,
                COALESCE(h.comm_status, 'unknown') AS comm_status
           FROM devices d
           JOIN device_models dm ON dm.id = d.device_model_id
@@ -246,7 +248,7 @@ async def gather(
         if row.unit is not None:
             units[row.tag_code] = row.unit
 
-    devices: list[DeviceFacts] = []
+    values_by_device: dict[int, dict[str, float]] = {}
     for row in device_rows:
         values: dict[str, float] = {}
         for key, raw in (await live.read_current_values(row.id)).items():
@@ -262,6 +264,23 @@ async def gather(
             code = tag_code_by_id.get(tag_id)
             if code is not None:
                 values[code] = value
+        values_by_device[row.id] = values
+
+    # A sun sensor reading 0 W/m² beside one reading the sun is not measuring
+    # (`domain/irradiation`). Its value is withheld — never its binding — so
+    # the Irradiance tile still plans on GTI and falls back to GHI, marked
+    # `degraded`, only while GTI reads nothing; and one dead station of two no
+    # longer halves the average. What was withheld is listed with the panels.
+    withheld = not_measuring([
+        StationValues(row.id, row.code, values_by_device[row.id])
+        for row in device_rows if row.device_type_code == "WMS"
+    ])
+    for reading in withheld:
+        values_by_device[reading.device_id].pop(reading.tag_code, None)
+
+    devices: list[DeviceFacts] = []
+    for row in device_rows:
+        values = values_by_device[row.id]
         devices.append(
             DeviceFacts(
                 device_id=row.id, code=row.code,
@@ -271,6 +290,7 @@ async def gather(
                 online=row.comm_status == "online",
                 in_power_path=row.in_power_path,
                 sld_stage_override=row.sld_stage_override,
+                measures_generation=row.measures_generation,
                 counter_today={
                     tag_code: total
                     for (device_id, tag_code), total in advances.items()
@@ -283,7 +303,8 @@ async def gather(
     # is a pure-domain value and has no business holding a catalogue lookup, and
     # a module-level cache keyed by plant_id would be shared between concurrent
     # requests for the same Plant.
-    facts = PlantFacts(plant_id=plant_id, devices=tuple(devices), attributes=attributes)
+    facts = PlantFacts(plant_id=plant_id, devices=tuple(devices), attributes=attributes,
+                       withheld=withheld)
     return facts, units
 
 
@@ -310,17 +331,29 @@ async def render(session: AsyncSession, plant_id: int) -> dict[str, Any]:
     resolved = resolve_all(panel_specs, facts, units)
     stages = build_stages(facts, stage_specs, stage_by_type, units)
 
+    # Each slot carries the withheld readings of the Tags it could have read,
+    # so the tile that fell back from GTI to GHI can say why.
+    candidate_tags = {
+        spec.code: {c.tag_code for c in spec.candidates if c.tag_code is not None}
+        for spec in specs
+    }
     panels: dict[str, list[dict[str, Any]]] = {}
     for slot in resolved:
         if slot.hidden:
             continue
-        panels.setdefault(slot.panel, []).append(_slot_json(slot, notes.get(slot.slot_code)))
+        withheld = [r for r in facts.withheld
+                    if r.tag_code in candidate_tags.get(slot.slot_code, set())]
+        panels.setdefault(slot.panel, []).append(
+            _slot_json(slot, notes.get(slot.slot_code), withheld))
 
     return {
         "plant_id": plant_id,
         "panels": panels,
         "sld": _stages_json(stages),
         "device_count": len(facts.devices),
+        # Current values left out of every slot because they cannot be
+        # measurements — a dead sun sensor beside a live one — and why.
+        "withheld_readings": [_withheld_json(r) for r in facts.withheld],
         "assumptions_note": (
             "Slot resolution chooses a source; it does not define a unit or a "
             "formula. Units come from the Tag catalogue and every KPI definition "
@@ -329,7 +362,14 @@ async def render(session: AsyncSession, plant_id: int) -> dict[str, Any]:
     }
 
 
-def _slot_json(slot: ResolvedSlot, note: str | None = None) -> dict[str, Any]:
+def _withheld_json(reading: WithheldReading) -> dict[str, Any]:
+    return {"device_id": reading.device_id, "device_code": reading.device_code,
+            "tag_code": reading.tag_code, "value": reading.value, "reason": reading.reason}
+
+
+def _slot_json(
+    slot: ResolvedSlot, note: str | None = None, withheld: list[WithheldReading] | None = None,
+) -> dict[str, Any]:
     source = slot.source
     return {
         "slot_code": slot.slot_code,
@@ -351,6 +391,8 @@ def _slot_json(slot: ResolvedSlot, note: str | None = None) -> dict[str, Any]:
             "degraded": source.degraded,
         },
         "override_note": note,
+        # Readings of this slot's Tags left out as not measuring (`facts.withheld`).
+        "withheld": [_withheld_json(r) for r in withheld or []],
     }
 
 
