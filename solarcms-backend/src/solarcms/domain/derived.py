@@ -32,7 +32,7 @@ things to an operator (the same reason `FormulaResult` exists in `formulas.py`).
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -235,3 +235,39 @@ def evaluate_all(
         if not pending or not progressed:
             break
     return computed
+
+
+def derivable(
+    formulas: Mapping[str, str],
+    bound: Collection[str],
+    *,
+    constant_names: Collection[str],
+    available_constants: Collection[str],
+) -> frozenset[str]:
+    """The device-scope Tags one Device produces by formula rather than receives.
+
+    The rule ingest applies (`workers/resolver._load_derived`): a Tag is derived
+    for a Device bound to every Tag its formula reads, unless the Device is
+    bound to that Tag itself — a published value beats a computed one. Here a
+    constant the formula divides by must also be on record: an Inverter with no
+    rated capacity has no specific yield, and a tile planned on one would read
+    as a source gone quiet rather than one that was never there.
+
+    A derived Tag is never bound (`services/onboarding.bind_tags`), so this is
+    how a dashboard slot learns that a Device answers one — without it, Grid
+    Voltage from a meter's three phases and DC Power from an Inverter's
+    efficiency could never fill a tile. A malformed formula derives nothing.
+    """
+    found: set[str] = set()
+    for tag_code, expression in formulas.items():
+        if tag_code in bound:
+            continue
+        try:
+            names = referenced_names(expression, scope="device")
+        except InvalidFormula:
+            continue
+        needed = {name for name in names if name not in constant_names}
+        constants = names - needed
+        if needed and needed.issubset(bound) and constants.issubset(available_constants):
+            found.add(tag_code)
+    return frozenset(found)

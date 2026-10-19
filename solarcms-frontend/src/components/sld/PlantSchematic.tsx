@@ -37,7 +37,7 @@
 
 import type { ReactNode } from "react";
 import type { SldStage, SldStages } from "@/api/schemas";
-import { slotText } from "@/components/dashboard/SlotValue";
+import { slotText, sourceLabel } from "@/components/dashboard/SlotValue";
 import { DeviceArt } from "@/components/devices/DeviceArt";
 import { UNDEFINED_DISPLAY } from "@/format/value";
 
@@ -201,11 +201,9 @@ function StageBox({
               className={`shrink-0 font-mono text-[11px] tabular-nums ${
                 slot.value === null ? "text-ink-faint" : "text-ink"
               }`}
-              title={
-                slot.source?.is_aggregated
-                  ? `${slot.source.aggregate} of ${slot.source.device_count} Devices`
-                  : undefined
-              }
+              // Which equipment answered, by Type: the PV Array box reads the
+              // Inverters' DC side where no string box measures the array.
+              title={slot.source ? `From ${sourceLabel(slot.source)}` : undefined}
             >
               {slotText(slot)}
               {slot.unit && slot.value !== null ? (

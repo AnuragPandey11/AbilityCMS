@@ -56,25 +56,29 @@ PANELS: Final[tuple[str, ...]] = (
 # ════════════════════════════════════════════════════════════════════════════
 # How a metered quantity is combined across several Devices.
 #
-# ⚠ **OPEN.** A Plant with one ABT Meter is unambiguous; a Plant with four MFMs
-# is not, because the platform does not know from the Device Type alone whether
-# they sit on parallel feeders (in which case the Plant's export is their sum) or
-# one behind each Inverter bank plus one at the evacuation point (in which case
-# summing them counts the same electrons twice).
+# ⚠ PROPOSED (19 Oct 2026, the user's decision). A Plant's MFMs that measure
+# its solar output are **added** for every quantity that adds — power, energy,
+# current — and read one at a time for those that do not: voltage, frequency
+# and power factor, where two meters at 420 V are not 840 V.
 #
-# Defaulted to `first` for every meter Type, deliberately choosing the *visible*
-# error over the plausible one. Reading one of two parallel feeders shows roughly
-# half what the Inverters report, which somebody notices within a day.
-# Double-counting an inverter-side and a feeder-side meter shows a number that is
-# simply wrong and looks entirely reasonable — the error class that produced the
-# factor-of-1000 voltage warning in BACKEND_SPEC §12.
+# This was `first` for every meter Type, choosing the visible error (one of two
+# parallel feeders, half the Plant) over the plausible one (an inverter-side and
+# a feeder-side meter added, the same electrons twice). Two things changed: the
+# Plant's energy, PR, the reports and the Plant KPI panel already summed a
+# Type's meters (`domain/counters.plant_energy`, `services/plant_kpi`), so the
+# tiles disagreed with them on a Plant with one MFM per MCR; and a meter on
+# another line, or one that repeats the others' total, is now marked as not
+# measuring the solar output (`devices.measures_generation`, migration 0043)
+# and answers no slot at all. Adding is right once the duplicates are marked —
+# and marking them is the same act PR already needed.
 #
-# A Plant with genuinely parallel metering corrects this with one row in
-# `plant_dashboard_slot_overrides`. That is the mechanism working, not a workaround.
+# The ABT Meter stays `first`: there is one sealed settlement instrument (I-8).
+# A Plant that still needs something else takes one row in
+# `plant_dashboard_slot_overrides`.
 # ════════════════════════════════════════════════════════════════════════════
 _METERED_AGGREGATE: Final[dict[str, str]] = {
     "ABT_METER": "first",   # I-8: there is exactly one sealed settlement instrument
-    "MFM": "first",         # ⚠ see above
+    "MFM": "sum",           # its solar meters, for power and energy (see above)
     "INVERTER": "sum",      # unambiguous: each machine's output is its own
     "PLANT_KPI": "first",   # one per Plant, by construction
 }
@@ -136,7 +140,7 @@ def _meter_today(today_tag: str, lifetime_tag: str) -> tuple[SlotCandidate, ...]
     return (
         _tag(1, "ABT_METER", today_tag, "first"),
         _since_midnight(2, "ABT_METER", lifetime_tag),
-        _tag(3, "MFM", today_tag, "first"),
+        _tag(3, "MFM", today_tag, "sum"),
         _since_midnight(4, "MFM", lifetime_tag),
     )
 
@@ -191,7 +195,7 @@ _KPI_ROW: Final[tuple[SlotSpec, ...]] = (
         code="kpi.energy_month", label="Month Energy", panel=PANEL_KPI_ROW, position=4,
         unit_hint="kWh",
         candidates=(
-            _tag(1, "MFM", "ENERGY_MONTHLY", "first"),
+            _tag(1, "MFM", "ENERGY_MONTHLY", "sum"),
             _tag(2, "INVERTER", "ENERGY_MONTHLY", "sum"),
         ),
     ),
@@ -200,7 +204,7 @@ _KPI_ROW: Final[tuple[SlotSpec, ...]] = (
         unit_hint="kWh",
         candidates=(
             _tag(1, "ABT_METER", "ENERGY_EXPORT_TOTAL", "first"),
-            _tag(2, "MFM", "ENERGY_EXPORT_TOTAL", "first"),
+            _tag(2, "MFM", "ENERGY_EXPORT_TOTAL", "sum"),
             # ⚠ MWh, not kWh — the client's schedule changes unit for this one
             # Tag (T-5). The unit travels with the resolution, so the tile
             # relabels itself rather than showing a 1000x error.
@@ -254,7 +258,7 @@ _PLANT_STATUS: Final[tuple[SlotSpec, ...]] = (
         position=3, unit_hint="kW",
         candidates=(
             _tag(1, "ABT_METER", "AC_ACTIVE_POWER", "first"),
-            _tag(2, "MFM", "AC_ACTIVE_POWER", "first"),
+            _tag(2, "MFM", "AC_ACTIVE_POWER", "sum"),
             _tag(3, "INVERTER", "AC_ACTIVE_POWER", "sum"),
         ),
     ),
@@ -263,7 +267,7 @@ _PLANT_STATUS: Final[tuple[SlotSpec, ...]] = (
         position=4, unit_hint="kVAr",
         candidates=(
             _tag(1, "ABT_METER", "AC_REACTIVE_POWER", "first"),
-            _tag(2, "MFM", "AC_REACTIVE_POWER", "first"),
+            _tag(2, "MFM", "AC_REACTIVE_POWER", "sum"),
             _tag(3, "INVERTER", "AC_REACTIVE_POWER", "sum"),
         ),
     ),
@@ -331,7 +335,7 @@ _POWER_SUMMARY: Final[tuple[SlotSpec, ...]] = (
         # would make the import tile below meaningless.
         candidates=(
             _tag(1, "ABT_METER", "AC_ACTIVE_POWER", "first"),
-            _tag(2, "MFM", "AC_ACTIVE_POWER", "first"),
+            _tag(2, "MFM", "AC_ACTIVE_POWER", "sum"),
         ),
     ),
     SlotSpec(
@@ -355,8 +359,8 @@ _POWER_SUMMARY: Final[tuple[SlotSpec, ...]] = (
         code="power.ac_current", label="AC Current", panel=PANEL_POWER_SUMMARY,
         position=7, unit_hint="A",
         candidates=(
-            _tag(1, "MFM", "AC_CURRENT_AVG", "first"),
-            _tag(2, "MFM", "AC_CURRENT_TOTAL", "first"),
+            _tag(1, "MFM", "AC_CURRENT_AVG", "sum"),
+            _tag(2, "MFM", "AC_CURRENT_TOTAL", "sum"),
             _tag(3, "INVERTER", "AC_CURRENT_AVG", "sum"),
         ),
     ),
@@ -480,12 +484,14 @@ _SLD_PV_ARRAY: Final[tuple[SlotSpec, ...]] = (
     SlotSpec(
         code="sld.pv.dc_power", label="DC Power", panel="sld.PV_ARRAY", position=2,
         unit_hint="kW",
-        # An SMB measures the array's own output; without one the figure comes
-        # from the far side of the DC bus, at the Inverters stage, which is why
-        # this slot can legitimately resolve to nothing on a plain Plant.
+        # An SMB measures the array's own output. Without one, the Inverters'
+        # DC inputs are the far end of the same cables, and the box reads them
+        # (the user's decision, 19 Oct 2026; `sld_stages.STAGE_ALSO_READS`),
+        # named "sum of n INVERTER" so it is not taken for a string box's.
         candidates=(
             _tag(1, "SMB", "DC_POWER", "sum"),
             _tag(2, "DCDB", "DC_POWER", "sum"),
+            _tag(3, "INVERTER", "DC_POWER", "sum"),
         ),
     ),
     SlotSpec(
@@ -494,6 +500,7 @@ _SLD_PV_ARRAY: Final[tuple[SlotSpec, ...]] = (
         candidates=(
             _tag(1, "SMB", "DC_VOLTAGE", "avg"),
             _tag(2, "DCDB", "DC_VOLTAGE", "avg"),
+            _tag(3, "INVERTER", "DC_VOLTAGE", "avg"),
         ),
     ),
     SlotSpec(
@@ -502,6 +509,7 @@ _SLD_PV_ARRAY: Final[tuple[SlotSpec, ...]] = (
         candidates=(
             _tag(1, "SMB", "DC_CURRENT", "sum"),
             _tag(2, "DCDB", "DC_CURRENT", "sum"),
+            _tag(3, "INVERTER", "DC_CURRENT", "sum"),
         ),
     ),
 )
@@ -558,15 +566,19 @@ _SLD_GRID: Final[tuple[SlotSpec, ...]] = (
         unit_hint="kW", hide_when_unresolved=False,
         candidates=(
             _tag(1, "ABT_METER", "AC_ACTIVE_POWER", "first"),
-            _tag(2, "MFM", "AC_ACTIVE_POWER", "first"),
+            _tag(2, "MFM", "AC_ACTIVE_POWER", "sum"),
         ),
     ),
     SlotSpec(
         code="sld.grid.voltage", label="Grid Voltage", panel="sld.GRID", position=2,
         unit_hint="kV",
+        # HV first; a Plant metered on an LT line reads its meter's LT average
+        # instead, in V — the unit follows the Tag that answered.
         candidates=(
             _tag(1, "ABT_METER", "HV_VOLTAGE_AVG", "first"),
             _tag(2, "MFM", "HV_VOLTAGE_AVG", "first"),
+            _tag(3, "ABT_METER", "AC_VOLTAGE_AVG", "first"),
+            _tag(4, "MFM", "AC_VOLTAGE_AVG", "first"),
         ),
     ),
     SlotSpec(
