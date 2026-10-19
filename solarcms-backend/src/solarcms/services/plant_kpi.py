@@ -46,6 +46,7 @@ from solarcms.domain.assumptions import (
     QUALITY_GOOD,
 )
 from solarcms.domain.derived import DerivedTag, evaluate_all
+from solarcms.domain.irradiation import StationValues, not_measuring
 from solarcms.domain.operating import transition
 
 log = structlog.get_logger(__name__)
@@ -186,7 +187,8 @@ async def gather(session: AsyncSession, plant: Any, codes: dict[int, str]) -> Pl
     # ⚠ The plant_id predicate is this function's own isolation. The scheduler
     # holds platform privileges and the barrier views do not scope it.
     devices = (await session.execute(text("""
-        SELECT d.id, d.rated_capacity_kw, dt.code AS type_code,
+        SELECT d.id, d.code, d.rated_capacity_kw, dt.code AS type_code,
+               d.measures_generation,
                COALESCE(h.comm_status, 'unknown') AS comm_status
           FROM devices d
           JOIN device_models dm ON dm.id = d.device_model_id
@@ -199,13 +201,19 @@ async def gather(session: AsyncSession, plant: Any, codes: dict[int, str]) -> Pl
     everything: dict[str, list[float]] = defaultdict(list)
     inverters_online = 0
 
+    readings: dict[int, dict[str, float]] = {}
     for device in devices:
         if device.type_code == PLANT_KPI_TYPE:
             inputs.kpi_device_id = device.id
             continue
+        if not device.measures_generation:
+            # A meter on another line than the solar output (migration 0043):
+            # summed, its energy would be the Plant's.
+            continue
         if device.type_code == "INVERTER" and device.comm_status == "online":
             inverters_online += 1
         current = await live.read_current_values(device.id)
+        by_code: dict[str, float] = {}
         for key, raw in current.items():
             if key.startswith("_"):
                 continue  # `_ts`, the hash's own timestamp
@@ -214,8 +222,22 @@ async def gather(session: AsyncSession, plant: Any, codes: dict[int, str]) -> Pl
             except ValueError:
                 continue
             code = codes.get(tag_id)
-            if code is None:
-                continue
+            if code is not None:
+                by_code[code] = value
+        readings[device.id] = by_code
+
+    # A station whose daily total reads 0 beside one that reads the sun is not
+    # measuring, and averaged into `AVG.GHI_CUMULATIVE` it would halve the
+    # Plant's sun and double the PR the client's formula computes from it
+    # (`domain/irradiation`). Left out of every input, as the dashboard does.
+    for reading in not_measuring([
+        StationValues(device.id, device.code, readings[device.id])
+        for device in devices if device.type_code == "WMS" and device.id in readings
+    ]):
+        readings[reading.device_id].pop(reading.tag_code, None)
+
+    for device in devices:
+        for code, value in readings.get(device.id, {}).items():
             per_type[device.type_code][code].append(value)
             everything[code].append(value)
 

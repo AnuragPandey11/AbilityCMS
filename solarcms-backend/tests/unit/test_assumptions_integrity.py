@@ -142,6 +142,17 @@ class TestPerformanceRatio:
             a.PLANT_IRRADIATION_SOURCE[1]]
         assert a.PR_VARIANT.startswith(f"{plane}_")
 
+    def test_the_live_stand_in_is_the_same_sensor_as_the_register(self) -> None:
+        # A station whose daily register is stuck has its live irradiance
+        # integrated instead. Were that a different sensor — GTI behind a GHI
+        # register — PR would divide by a plane the variant does not name.
+        register_type, register_tag = a.PLANT_IRRADIATION_SOURCE
+        live_type, live_tag = a.PLANT_IRRADIANCE_LIVE_SOURCE
+        assert live_type == register_type
+        assert register_tag == f"{live_tag}_CUMULATIVE"
+        assert a.TAG_SPECS[live_tag].unit == "W/m2"
+        assert live_tag in a.IRRADIANCE_SUN_TAGS
+
 
 class TestThrottles:
     def test_counters_are_stored_as_often_as_power(self) -> None:

@@ -17,6 +17,7 @@ from openpyxl import load_workbook
 
 from solarcms.domain.counters import CounterSample, DeviceSeries
 from solarcms.domain.formulas import FormulaResult
+from solarcms.domain.irradiation import IrradianceBucket, LiveIrradiance, integrate_irradiance
 from solarcms.domain.periods import report_window
 from solarcms.domain.tiering import Tier
 from solarcms.services.report_tables import (
@@ -60,6 +61,13 @@ def _register(
         device_id=device_id, device_code=code, device_type_code=type_code, tag_code=tag,
         samples=tuple(CounterSample(at, value) for at, value in readings),
         rated_capacity_kw=rated)
+
+
+def _live_ghi(day: int, w_per_m2: float, *, device_id: int, code: str) -> LiveIrradiance:
+    """A station's live GHI at a constant `w_per_m2` from 06:00 to 18:00 local."""
+    buckets = [IrradianceBucket(_local(day, hour), w_per_m2) for hour in range(6, 18)]
+    return LiveIrradiance(device_id, code, integrate_irradiance(
+        buckets, timedelta(hours=1), NOW))
 
 
 def _meter(*days: tuple[int, float]) -> DeviceSeries:
@@ -258,6 +266,22 @@ class TestMonthlyPlant:
         assert row["performance_ratio"] == 200.0
         assert (0, "performance_ratio") in [(i, k) for i, k, _ in table.flags]
 
+    def test_a_dead_station_does_not_halve_the_sun_and_double_the_pr(self) -> None:
+        window = report_window("custom", NOW, IST, date(2026, 9, 24), date(2026, 9, 24))
+        working = _register("WMS", "GHI_CUMULATIVE",
+                            [(_local(24, 6), 0.0), (_local(24, 18), 5.0)],
+                            device_id=20, code="WMS")
+        dead = _register("WMS", "GHI_CUMULATIVE",
+                         [(_local(24, 6), 0.0), (_local(24, 18), 0.0)],
+                         device_id=21, code="WMS_WEST")
+        # 4,800 kWh from 1,200 kWp over 5.0 kWh/m²: PR 80%. Averaged with the
+        # dead station's 0 it would read 160%.
+        table = build_monthly_plant(PLANT, window, [_meter((24, 4_800.0)), working, dead], {},
+                                    **TIERS)
+        assert table.rows[0]["irradiation_kwh_m2"] == 5.0
+        assert table.rows[0]["performance_ratio"] == 80.0
+        assert any("WMS_WEST is left out" in note for note in table.notes)
+
     def test_cuf_counts_only_the_hours_since_the_plant_was_first_heard(self) -> None:
         window = report_window("custom", NOW, IST, date(2026, 9, 1), date(2026, 9, 24))
         table = build_monthly_plant(PLANT, window, [_meter((24, 2_400.0))], {}, **TIERS)
@@ -304,6 +328,17 @@ class TestWeather:
         assert table.rows[0]["ghi_kwh_m2"] == 5.5
         # W2 was down on the 25th: W1 alone, not W1 halved.
         assert table.rows[1]["ghi_kwh_m2"] == 4.0
+
+    def test_a_stuck_register_is_answered_by_the_live_sensor_and_says_so(self) -> None:
+        # VARDHMAN_GROUP: AGHI 0 all day, GHI reading the sun.
+        window = report_window("custom", NOW, IST, date(2026, 9, 24), date(2026, 9, 24))
+        stuck = _register("WMS", "GHI_CUMULATIVE",
+                          [(_local(24, 6), 0.0), (_local(24, 18), 0.0)],
+                          device_id=1, code="WMS")
+        table = build_weather(PLANT, window, [stuck], {},
+                              live=[_live_ghi(24, 400.0, device_id=1, code="WMS")], **TIERS)
+        assert abs(table.rows[0]["ghi_kwh_m2"] - 4.8) < 1e-9
+        assert any("integrated from the station's live GHI" in note for note in table.notes)
 
 
 class TestAlarm:

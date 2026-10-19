@@ -20,6 +20,7 @@ from solarcms.domain.assumptions import SOURCE_KEY_ALIASES
 from solarcms.domain.commissioning import own_topic_of, string_topic_owner
 from solarcms.domain.decoding import TopicPattern, collector_in_topic
 from solarcms.domain.sld import crosses_collector_boundary, would_create_cycle
+from solarcms.domain.slots import METER_TYPES
 from solarcms.schemas.assets import (
     BindingPatch,
     BindingsReplace,
@@ -201,6 +202,9 @@ async def list_devices(
                d.reports_via_device_id, d.collector_code, d.source_address,
                d.expected_interval_s, d.rated_capacity_kw, d.dc_capacity_kwp,
                d.string_count, d.serial_number, d.installed_on,
+               -- FALSE on a meter on another line than the solar output: the
+               -- trends and the meter screen pass it over (migration 0043).
+               d.measures_generation,
                dt.code AS type_code, dt.name AS type_name, dt.in_power_path,
                -- The stage this Device folds into, and the accepted correction
                -- where one exists. The schematic orders ties by stage rather
@@ -561,13 +565,31 @@ async def update_device(
     requires a developer is a platform where the SLD quietly stays wrong.
     """
     before = (await session.execute(text("""
-        SELECT client_id, plant_id, code, name, status, block_id, parent_device_id,
-               reports_via_device_id, collector_code, source_address,
-               expected_interval_s, string_count, dc_capacity_kwp, device_model_id
-          FROM devices WHERE id = :id
+        SELECT d.client_id, d.plant_id, d.code, d.name, d.status, d.block_id,
+               d.parent_device_id, d.reports_via_device_id, d.collector_code,
+               d.source_address, d.expected_interval_s, d.string_count,
+               d.dc_capacity_kwp, d.device_model_id, d.measures_generation
+          FROM devices d WHERE d.id = :id
     """), {"id": device_id})).first()
     if before is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+
+    # ── Only a meter can be on another line ─────────────────────────────────
+    # An Inverter or a weather station passed over by the Plant's figures would
+    # simply vanish from them, with nothing on its own screens to say why.
+    if body.measures_generation is False:
+        type_code = (await session.execute(text("""
+            SELECT dt.code FROM device_models dm
+              JOIN device_types dt ON dt.id = dm.device_type_id
+             WHERE dm.id = :model_id
+        """), {"model_id": body.device_model_id or before.device_model_id})).scalar()
+        if type_code not in METER_TYPES:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{before.code} is of Device Type {type_code}. Only a meter "
+                f"({', '.join(METER_TYPES)}) can be on a line other than the "
+                f"Plant's solar output.",
+            )
 
     # ── A Model of the same Type, or nothing ────────────────────────────────
     # String or Central is a Model fact (MASTER §2.3), and an Inverter
@@ -714,12 +736,15 @@ async def update_device(
                        CASE WHEN :clear_stage THEN NULL
                             ELSE coalesce(CAST(:stage_override AS varchar(16)),
                                           sld_stage_override) END,
+                   measures_generation =
+                       coalesce(CAST(:measures_generation AS boolean), measures_generation),
                    status = coalesce(:status, status)
              WHERE id = :id
             RETURNING id, code, name, status, block_id, parent_device_id,
                       reports_via_device_id, collector_code, source_address,
                       expected_interval_s, rated_capacity_kw, dc_capacity_kwp,
-                      string_count, sld_stage_override, device_model_id
+                      string_count, sld_stage_override, device_model_id,
+                      measures_generation
         """), {
             "id": device_id, "name": body.name, "serial": body.serial_number,
             "block_id": value("block_id", body.block_id),
@@ -737,6 +762,7 @@ async def update_device(
             "installed_on": body.installed_on, "status": body.status,
             "stage_override": value("sld_stage_override", body.sld_stage_override),
             "clear_stage": "sld_stage_override" in clear,
+            "measures_generation": body.measures_generation,
             "clear_block": "block_id" in clear,
             "clear_parent": "parent_device_id" in clear,
             "clear_collector": "reports_via_device_id" in clear,

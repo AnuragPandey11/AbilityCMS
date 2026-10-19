@@ -7,7 +7,7 @@ rupees — the stops cost, for the Inverter Monitoring screen. The rules:
   counted step by step on the tier `select_tier` picks — exactly as the
   Inverter Report counts it, so the two never disagree about the same day.
 * **PR** is that energy over the Plant's irradiation (the same stations and
-  rule as the Plant's own PR, `counters.plant_irradiation`) and this Inverter's
+  rule as the Plant's own PR, `irradiation.plant_irradiation`) and this Inverter's
   own DC size. No size, no PR — never estimated (the user's choice).
 * **Availability, downtime, no data and energy lost** are
   `domain/inverter_ranking.fold` over one-minute AC output (⚠ PROPOSED).
@@ -43,17 +43,23 @@ from solarcms.domain.assumptions import (
     PLANT_IRRADIATION_SOURCE,
     PLANT_OPERATING_SOURCE,
 )
-from solarcms.domain.counters import plant_energy, plant_irradiation
+from solarcms.domain.counters import plant_energy
 from solarcms.domain.formulas import performance_ratio
 from solarcms.domain.inverter_ranking import Folded, InverterMinutes, fold
+from solarcms.domain.irradiation import PlantIrradiation, plant_irradiation
 from solarcms.domain.periods import ReportWindow, report_window
 from solarcms.domain.tiering import Tier, select_tier
 from solarcms.services import scope
-from solarcms.services.energy import read_counter_series, split_by_pair
-from solarcms.services.kpis import plant_zone
+from solarcms.services.energy import (
+    read_counter_series,
+    read_live_irradiance,
+    split_by_pair,
+)
+from solarcms.services.kpis import irradiation_payload, plant_zone
 
 ENERGY_PAIR = ("INVERTER", "ENERGY_TOTAL")
-CACHE_KEY = "inverter_ranking:v1:{plant_id}:{digest}"
+# v2: the response names where the Plant's sunlight came from (15 Oct 2026).
+CACHE_KEY = "inverter_ranking:v2:{plant_id}:{digest}"
 #: While the period reaches now, the figures move each minute.
 LIVE_CACHE_S = 60
 #: A period wholly in the past changes only if history is replayed into it.
@@ -238,10 +244,9 @@ def _floor_minute(at: datetime) -> datetime:
 async def _energy(
     session: AsyncSession, plant_id: int, window: ReportWindow, now: datetime,
     ac_kw: float | None,
-) -> tuple[dict[int, tuple[float, int]], float | None, str | None, Tier]:
+) -> tuple[dict[int, tuple[float, int]], PlantIrradiation, Tier]:
     """Each Inverter's generation (kWh, refused steps) and the Plant's
-    irradiation (kWh/m²) or why there is none — the Inverter Report's and the
-    Plant PR's own rules."""
+    irradiation — the Inverter Report's and the Plant PR's own rules."""
     tier = select_tier(window.start, window.end, now, finest=Tier.AGG_1M)
     # Irradiation never from the daily tier: its register restarts at the
     # Plant's midnight and a daily bucket is cut at UTC's (services/kpis).
@@ -255,13 +260,15 @@ async def _energy(
         stations = (await read_counter_series(
             session, tier=sun_tier, pairs=[PLANT_IRRADIATION_SOURCE], start=window.start,
             end=window.end, plant_ids=[plant_id])).get(plant_id, [])
+    live = (await read_live_irradiance(
+        session, tier=sun_tier, start=window.start, end=window.end,
+        plant_ids=[plant_id])).get(plant_id, [])
     energy = plant_energy(registers, (ENERGY_PAIR,), plant_ac_capacity_kw=ac_kw or None)
     generation = {
         item.series.device_id: (item.integral.total, len(item.integral.anomalies))
         for item in energy.devices
     }
-    sun = plant_irradiation(stations)
-    return generation, sun.value, sun.undefined_reason, tier
+    return generation, plant_irradiation(stations, live), tier
 
 
 async def _compute(
@@ -272,8 +279,9 @@ async def _compute(
     span = max(0, math.ceil((window.end - first) / MINUTE))
     minutes, flagged = await _minutes(session, inverters, window)
     planned = await _planned(session, plant.id, window)
-    generation, irradiation, irradiation_reason, tier = await _energy(
+    generation, sun, tier = await _energy(
         session, plant.id, window, now, _float(plant.ac_capacity_kw))
+    irradiation, irradiation_reason = sun.value, sun.undefined_reason
 
     result: Folded = fold([
         InverterMinutes(
@@ -370,6 +378,10 @@ async def _compute(
         "tariff_inr_per_kwh": tariff,
         "irradiation_kwh_m2": irradiation,
         "irradiation_reason": irradiation_reason,
+        # The same account of the Plant's sunlight as `GET /plants/{id}/kpis`
+        # gives: live GHI integrated where a station's daily total is stuck,
+        # and the stations left out as not measuring.
+        "irradiation_detail": irradiation_payload(sun),
         "energy_tier": tier.value,
         # What every figure is read against (Guardrail 18): how much of the
         # period any Inverter was heard, and any was generating. A gap the

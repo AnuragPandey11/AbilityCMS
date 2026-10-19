@@ -31,7 +31,7 @@
  */
 
 import type { ReactNode } from "react";
-import type { KpiFigure, KpiPeriod, PlantKpis } from "@/api/schemas";
+import type { Irradiation, KpiFigure, KpiPeriod, PlantKpis } from "@/api/schemas";
 import { RatioDial, type DialComparison } from "@/components/charts/RatioDial";
 import { RatioMeter } from "@/components/charts/RatioMeter";
 import { RailTile } from "@/components/charts/RailTile";
@@ -53,6 +53,7 @@ import {
   variantWords,
 } from "@/format/value";
 import { formatDate, formatDateTime } from "@/format/datetime";
+import { stationSourceWords, sunlightNote } from "@/format/sunlight";
 
 /**
  * Where the figures begin, in the Plant's own calendar — so "month" reads as
@@ -167,6 +168,75 @@ function footnote(
 }
 
 /**
+ * PR's footnote, and — only when the sunlight was not simply each station's
+ * own daily total — one more line saying what it was instead. A PR divided by
+ * live GHI we added up, or by one station because the other read nothing, is a
+ * different claim from the one the dial normally makes.
+ */
+function prFootnote(
+  kpis: PlantKpis,
+  period: KpiPeriod,
+  measuredLater: boolean,
+): ReactNode {
+  const note = sunlightNote(kpis.irradiation_kwh_m2);
+  if (!note) return footnote(kpis.performance_ratio, period, measuredLater);
+  return (
+    <>
+      {footnote(kpis.performance_ratio, period, measuredLater)}
+      <span
+        className={`mt-0.5 block truncate ${note.warn ? "text-warn" : "text-ink-faint"}`}
+        title={note.title}
+      >
+        {note.text}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The drawer's account of PR's denominator: the Plant's sunlight and each
+ * station's part in it — its own total, its live GHI added up, or left out.
+ */
+function SunlightDetail({ irradiation }: { irradiation: Irradiation | null | undefined }): JSX.Element | null {
+  if (!irradiation || irradiation.stations.length === 0) return null;
+  const note = sunlightNote(irradiation);
+  return (
+    <div className="space-y-1 border-b border-line-soft py-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-xs text-ink">Sunlight (GHI)</span>
+        <span className="shrink-0 font-mono text-sm tabular-nums text-ink">
+          {irradiation.value === null ? UNDEFINED_DISPLAY : formatNumber(irradiation.value, { digits: 2 })}
+          <span className="ml-0.5 text-[10px] text-ink-muted">kWh/m²</span>
+        </span>
+      </div>
+      <ul className="space-y-0.5">
+        {irradiation.stations.map((station) => (
+          <li
+            key={station.device_id}
+            className={`flex items-baseline justify-between gap-3 text-[10px] leading-snug ${
+              station.excluded_reason !== null ? "text-warn" : "text-ink-faint"
+            }`}
+            title={station.excluded_reason ?? undefined}
+          >
+            <span className="min-w-0 truncate">
+              <span className="font-mono">{station.device_code}</span> · {stationSourceWords(station)}
+            </span>
+            <span className="shrink-0 font-mono tabular-nums">
+              {station.kwh_m2 === null ? UNDEFINED_DISPLAY : formatNumber(station.kwh_m2, { digits: 2 })}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {note ? (
+        <p className={`text-[10px] leading-snug ${note.warn ? "text-warn" : "text-ink-faint"}`}>
+          {note.title}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * The comparison one dial draws: the previous period's figure to the same
  * point, or — where the period has one but the Plant cannot answer it — an
  * empty comparison that says so, rather than a line that vanishes and leaves
@@ -263,7 +333,7 @@ export function PerformanceTiles({
             comparison={comparisonFor(kpis, "performance_ratio", period, timeZone)}
           />
         }
-        footnote={footnote(kpis.performance_ratio, period, measuredLater)}
+        footnote={prFootnote(kpis, period, measuredLater)}
       />
       <RailTile
         dense
@@ -371,6 +441,7 @@ export function PerformancePanel({
           note="The period's energy over the Plant's DC capacity."
         />
         <FigureRow label="Performance ratio" figure={kpis?.performance_ratio} kind="ratio" />
+        <SunlightDetail irradiation={kpis?.irradiation_kwh_m2} />
         <FigureRow label="CUF" figure={kpis?.cuf} kind="ratio" />
         <FigureRow
           label="Availability"

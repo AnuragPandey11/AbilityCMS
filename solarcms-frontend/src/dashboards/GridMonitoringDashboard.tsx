@@ -32,7 +32,7 @@
 import { useMemo, useState } from "react";
 import { usePlant, usePlantDevices, useTags } from "@/api/hooks";
 import type { DeviceListItem } from "@/api/schemas";
-import { useSlotSource } from "@/api/useSlotTrend";
+import { measuresGeneration, useSlotSource } from "@/api/useSlotTrend";
 import { useSeries, type Series } from "@/api/useSeries";
 import { windowRange } from "@/api/trendWindow";
 import { Button, Panel, SelectBox } from "@/components/ui";
@@ -91,18 +91,37 @@ const byTypeThenCode = (a: DeviceListItem, b: DeviceListItem) =>
 /**
  * The meter on top: the one somebody chose, else the Type the Grid stage
  * reads, else the first — ABT meter before MFM, the Grid stage's own order.
- * A chosen id not at this Plant (the Plant changed under it) is ignored.
+ * A chosen id not at this Plant (the Plant changed under it) is ignored. A
+ * meter on another line than the solar output is never the default: the Grid
+ * stage passes it over, and `MAIN_MFM` would otherwise win on its code.
  */
 export function headlineMeter(
   devices: DeviceListItem[],
   { chosenId, gridType }: { chosenId: number | null; gridType: string | null },
 ): DeviceListItem | null {
   const meters = devices.filter((device) => METER_TYPES.includes(device.type_code)).sort(byTypeThenCode);
+  const generation = meters.filter(measuresGeneration);
   return (
     meters.find((device) => device.id === chosenId) ??
-    meters.find((device) => device.type_code === gridType) ??
+    generation.find((device) => device.type_code === gridType) ??
+    generation[0] ??
     meters[0] ??
     null
+  );
+}
+
+/** Said beside a meter the Plant's figures pass over. */
+const NOT_COUNTED =
+  "This meter is on a line other than the Plant's solar output, so the Plant's " +
+  "figures (PR, energy, Current Power, the Grid stage, the reports) do not use it. " +
+  "Change it under Tag Mapping → Device settings.";
+
+function NotCountedChip({ device }: { device: DeviceListItem }): JSX.Element | null {
+  if (measuresGeneration(device)) return null;
+  return (
+    <span className="rounded border border-line px-1.5 py-0.5 text-xs font-normal text-ink-muted" title={NOT_COUNTED}>
+      Not in Plant figures
+    </span>
   );
 }
 
@@ -160,6 +179,7 @@ function MeterCard({
           {device.type_code !== device.code ? (
             <span className="text-xs font-normal text-ink-faint">{device.type_code}</span>
           ) : null}
+          <NotCountedChip device={device} />
         </span>
       }
       actions={
@@ -303,6 +323,11 @@ export function GridMonitoringDashboard(): JSX.Element {
             <>
               <span className={`font-medium text-ink ${name ? "" : "font-mono"}`}>{name ?? headline.code}</span>
               {name ? <span className="font-mono text-ink-faint"> {headline.code}</span> : null}
+              {measuresGeneration(headline) ? null : (
+                <span className="ml-2 align-middle">
+                  <NotCountedChip device={headline} />
+                </span>
+              )}
               {" · "}Last updated{" "}
               <span className="figure text-ink">
                 {readings.heard ? formatDateTime(readings.heard, timezone) : "never"}

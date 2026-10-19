@@ -54,10 +54,8 @@ from solarcms.domain.assumptions import (
 from solarcms.domain.counters import (
     DeviceSeries,
     PlantEnergy,
-    PlantIrradiation,
     bucket_steps,
     plant_energy,
-    plant_irradiation,
 )
 from solarcms.domain.formulas import (
     FormulaResult,
@@ -66,8 +64,14 @@ from solarcms.domain.formulas import (
     performance_ratio,
     specific_yield,
 )
+from solarcms.domain.irradiation import (
+    LiveIrradiance,
+    PlantIrradiation,
+    irradiation_notes,
+    plant_irradiation,
+)
 from solarcms.domain.tiering import TIERS, Tier, select_tier
-from solarcms.services.energy import read_counter_series, split_by_pair
+from solarcms.services.energy import read_counter_series, read_live_irradiance, split_by_pair
 
 log = structlog.get_logger(__name__)
 
@@ -228,12 +232,18 @@ async def gather(
         start=period_start, end=period_end, plant_ids=[p.id for p in plants],
         client_id=client_id,
     ) if plants else {}
+    # Each station's live GHI, for one whose daily register is stuck. Never
+    # coarser than hourly (`read_live_irradiance`), whatever `tier` is.
+    live_by_plant = await read_live_irradiance(
+        session, tier=tier, start=period_start, end=period_end,
+        plant_ids=[p.id for p in plants], client_id=client_id,
+    ) if plants else {}
 
     return assemble(
         code=definition.code, title=definition.name, query_spec=spec,
         is_financial=bool(definition.is_financial), client_name=client_name,
         period_start=period_start, period_end=period_end, tier=tier,
-        plants=plants, series_by_plant=series_by_plant,
+        plants=plants, series_by_plant=series_by_plant, live_by_plant=live_by_plant,
     )
 
 
@@ -249,6 +259,7 @@ def assemble(
     *, code: str, title: str, query_spec: dict[str, Any], is_financial: bool,
     client_name: str, period_start: datetime, period_end: datetime, tier: Tier,
     plants: Sequence[PlantRecord], series_by_plant: dict[int, list[DeviceSeries]],
+    live_by_plant: dict[int, list[LiveIrradiance]] | None = None,
 ) -> ReportData:
     """Everything a Report says, from Plant records and their counter series."""
     resolution = next(s.resolution for s in TIERS if s.tier == tier)
@@ -284,7 +295,8 @@ def assemble(
         dc = plant.dc_capacity_kwp or 0.0
         ac = plant.ac_capacity_kw or 0.0
         energy = plant_energy(meters, precedence, plant_ac_capacity_kw=ac or None)
-        irradiation = plant_irradiation(stations)
+        irradiation = plant_irradiation(stations, (live_by_plant or {}).get(plant.id, []))
+        notes.extend(irradiation_notes(irradiation, plant.code if len(plants) > 1 else None))
 
         if energy.value is None:
             reason = energy.undefined_reason

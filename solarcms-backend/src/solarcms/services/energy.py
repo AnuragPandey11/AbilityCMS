@@ -21,12 +21,14 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solarcms.domain.assumptions import PLANT_IRRADIANCE_LIVE_SOURCE, QUALITY_GOOD
 from solarcms.domain.counters import (
     CounterBucket,
     DeviceSeries,
     PlantEnergy,
     samples_from_buckets,
 )
+from solarcms.domain.irradiation import IrradianceBucket, LiveIrradiance, integrate_irradiance
 from solarcms.domain.tiering import TIERS, Tier
 from solarcms.services import scope
 
@@ -53,9 +55,10 @@ async def read_counter_series(
         raise ValueError("read_counter_series needs plant_ids or block_id")
     # The ids first, so the view is read for exactly these Devices and Tags
     # rather than for the whole fleet (`services/scope.py`, §4.9).
+    # A meter on another line than the solar output is never a Plant's energy.
     devices = await scope.device_ids(
         session, plant_ids=plant_ids, block_id=block_id, client_id=client_id,
-        type_codes=[type_code for type_code, _tag in pairs])
+        type_codes=[type_code for type_code, _tag in pairs], generation_only=True)
     tags = await scope.tag_ids(session, [tag_code for _type, tag_code in pairs])
     if not devices or not tags:
         return {}
@@ -126,6 +129,81 @@ async def read_counter_series(
         ))
     return result
 
+
+
+async def read_live_irradiance(
+    session: AsyncSession,
+    *,
+    tier: Tier,
+    start: datetime,
+    end: datetime | None = None,
+    plant_ids: Sequence[int] | None = None,
+    client_id: int | None = None,
+) -> dict[int, list[LiveIrradiance]]:
+    """Per Plant, each weather station's live GHI over the window, integrated.
+
+    The stand-in for a station whose daily register is missing or stuck
+    (`domain/irradiation`). Read no coarser than hourly, whatever `tier` says:
+    a daily bucket's mean covers only the hours the station reported, and
+    multiplied by twenty-four it credits a station silent at night with its
+    daytime sun all night long. The raw tier has no buckets, so the minute
+    tier stands in for it.
+
+    `client_id` is required from the scheduler, as for `read_counter_series`.
+    """
+    if plant_ids is None:
+        raise ValueError("read_live_irradiance needs plant_ids")
+    if tier == Tier.AGG_1D:
+        tier = Tier.AGG_1H
+    elif tier == Tier.READINGS:
+        tier = Tier.AGG_1M
+    type_code, tag_code = PLANT_IRRADIANCE_LIVE_SOURCE
+    # The ids first, as `read_counter_series` does (`services/scope.py`, §4.9).
+    devices = await scope.device_ids(
+        session, plant_ids=plant_ids, client_id=client_id, type_codes=[type_code])
+    tags = await scope.tag_ids(session, [tag_code])
+    if not devices or not tags:
+        return {}
+    scope_sql = ["a.device_id = ANY(:device_ids)", "a.tag_id = ANY(:tag_ids)",
+                 "d.plant_id = ANY(:plant_ids)"]
+    params: dict[str, Any] = {
+        "start": start, "end": end, "device_ids": devices, "tag_ids": tags,
+        "plant_ids": list(plant_ids),
+    }
+    if client_id is not None:
+        scope_sql.append("d.client_id = :client_id")
+        params["client_id"] = client_id
+
+    rows = (await session.execute(text(f"""
+        SELECT d.plant_id, d.id AS device_id, d.code AS device_code,
+               a.bucket, a.avg_value, a.worst_quality
+          FROM {tier.value}_v a
+          JOIN devices d ON d.id = a.device_id
+         WHERE {" AND ".join(scope_sql)}
+           AND a.bucket >= :start
+           AND (CAST(:end AS timestamptz) IS NULL OR a.bucket < CAST(:end AS timestamptz))
+         ORDER BY d.id, a.bucket
+    """), params)).all()
+
+    width = next(spec.resolution for spec in TIERS if spec.tier == tier)
+    now = datetime.now(UTC)
+    grouped: dict[tuple[int, int], tuple[str, list[IrradianceBucket]]] = {}
+    for row in rows:
+        _code, buckets = grouped.setdefault(
+            (row.plant_id, row.device_id), (row.device_code, []))
+        buckets.append(IrradianceBucket(
+            row.bucket,
+            float(row.avg_value) if row.avg_value is not None else None,
+            # A flagged reading in the bucket makes it not data (Guardrail 23).
+            good=(row.worst_quality or QUALITY_GOOD) == QUALITY_GOOD,
+        ))
+
+    result: dict[int, list[LiveIrradiance]] = {}
+    for (plant_id, device_id), (device_code, buckets) in grouped.items():
+        result.setdefault(plant_id, []).append(LiveIrradiance(
+            device_id=device_id, device_code=device_code,
+            integral=integrate_irradiance(buckets, width, now)))
+    return result
 
 def split_by_pair(
     series: Sequence[DeviceSeries], pair: tuple[str, str],

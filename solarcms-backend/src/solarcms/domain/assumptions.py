@@ -570,6 +570,43 @@ MAX_IRRADIATION_KWH_PER_M2_PER_HOUR: Final = 1.5
 # design — so a backwards step in them is expected, not suspect.
 PLANT_IRRADIATION_SOURCE: Final[tuple[str, str]] = ("WMS", "GHI_CUMULATIVE")
 
+# ── A weather station that is not measuring — ⚠ PROPOSED (15 and 19 Oct 2026).
+#
+# The client has supplied no rule. VARDHMAN_GROUP's two stations send their
+# daily total (`AGHI`) and `GTI` as 0 all day while their live `GHI` reads the
+# sun (653 and 658 W/m² at 12:05 IST, 19 Oct 2026). So the Plant had no PR at
+# all, and the Irradiance tile, which prefers GTI, read 0 at noon; and
+# averaging a station like that with a working one halves the Plant's sun and
+# doubles its PR, plausibly (`domain/irradiation`).
+#
+# The live counterpart of `PLANT_IRRADIATION_SOURCE`: the same sensor, as
+# W/m² now rather than kWh/m² so far today. Integrated over time it stands in
+# for a station whose own daily register is missing or stuck — and it must be
+# the *same* sensor, or the PR variant (`PR_VARIANT`) would name the wrong one
+# (`test_assumptions_integrity` holds the two together).
+PLANT_IRRADIANCE_LIVE_SOURCE: Final[tuple[str, str]] = ("WMS", "GHI")
+# The live irradiance Tags that should all read sun when any one does. GHI,
+# GTI and plane-of-array each include the diffuse sky, so in daylight none is
+# near zero. Direct and diffuse are left out: an overcast sky has no direct
+# beam, and a clear one very little diffuse — either can read ~0 honestly.
+IRRADIANCE_SUN_TAGS: Final[tuple[str, ...]] = ("GHI", "GTI", "POA_IRRADIANCE")
+# A sun reading this bright anywhere on the Plant is daylight, against which a
+# sensor reading next to nothing is not measuring.
+IRRADIANCE_DAYLIGHT_W_PER_M2: Final = 50.0
+# "Next to nothing": under this share of the brightest reading of the same
+# kind. Two sensors under one sky differ by percent, not by ninety percent; a
+# tilted sensor in morning light still reads ~40% of horizontal, from the
+# diffuse sky alone.
+IRRADIANCE_DEAD_SHARE: Final = 0.1
+# Daily totals (kWh/m²) are judged only once the brightest has reached this —
+# about an hour of morning sun — so a register one update behind at dawn
+# (0.00 beside 0.01) is not called dead.
+IRRADIATION_JUDGED_KWH_PER_M2: Final = 0.2
+# Working stations whose totals differ by more than this share of their mean
+# are flagged, never resolved: a dirty, shaded or misaligned sensor, or one
+# that stopped reporting for part of the period. Nobody can say which is right.
+IRRADIATION_STATION_SPREAD: Final = 0.10
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # Day-boundary rollover — SUPPLIED.

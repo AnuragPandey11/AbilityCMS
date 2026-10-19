@@ -44,6 +44,23 @@ describe("the meter on top", () => {
   it("is nothing at a Plant with no meter", () => {
     expect(headlineMeter([PLANT[0]!, PLANT[4]!], { chosenId: null, gridType: null })).toBeNull();
   });
+
+  // SPINNING_AND_GENERAL_MILLS: `MAIN_MFM` is on the mill's own line and sorts
+  // before `MFM`, the solar output (migration 0043).
+  const MILL = [
+    { ...device(7, "MAIN_MFM", "MFM"), measures_generation: false },
+    { ...device(8, "MFM", "MFM"), measures_generation: true },
+  ] as DeviceListItem[];
+
+  it("is never by default a meter on another line than the solar output", () => {
+    expect(headlineMeter(MILL, { chosenId: null, gridType: "MFM" })?.code).toBe("MFM");
+    expect(headlineMeter(MILL, { chosenId: null, gridType: null })?.code).toBe("MFM");
+  });
+
+  it("is still that meter when somebody chooses it, or it is the only one", () => {
+    expect(headlineMeter(MILL, { chosenId: 7, gridType: "MFM" })?.code).toBe("MAIN_MFM");
+    expect(headlineMeter([MILL[0]!], { chosenId: null, gridType: null })?.code).toBe("MAIN_MFM");
+  });
 });
 
 describe("a meter's name", () => {

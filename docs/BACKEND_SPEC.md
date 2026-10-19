@@ -723,6 +723,17 @@ def co2_avoided_kg(energy_kwh: float, grid_factor_kg_per_kwh: float = 0.82) -> f
 
 **Each formula must log which variant it used**, so that when the client's definition arrives, historical figures can be identified and recomputed.
 
+**PR's irradiation — which weather stations are measuring (⚠ PROPOSED, MASTER v4.5).** `domain/irradiation.py`, constants in `domain/assumptions.py`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `PLANT_IRRADIANCE_LIVE_SOURCE` | `("WMS", "GHI")` | The live sensor integrated where a station's `GHI_CUMULATIVE` reads next to nothing; must be the same sensor as `PLANT_IRRADIATION_SOURCE` |
+| `IRRADIANCE_SUN_TAGS` | GHI, GTI, POA_IRRADIANCE | Live readings that should all see the sun when one does |
+| `IRRADIANCE_DAYLIGHT_W_PER_M2` | 50 | A sun reading this bright is daylight |
+| `IRRADIANCE_DEAD_SHARE` | 0.1 | Under this share of the brightest reading of its kind: not measuring |
+| `IRRADIATION_JUDGED_KWH_PER_M2` | 0.2 | Daily totals are judged only once the brightest reaches this |
+| `IRRADIATION_STATION_SPREAD` | 0.10 | Stations used further apart than this share of their mean are flagged |
+
 ### 12.3 Alarm thresholds ⚠ ASSUMED
 
 OPEN-14 — the client has decades of domain knowledge here; anything invented is worse. Seed data only:

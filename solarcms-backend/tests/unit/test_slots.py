@@ -478,3 +478,51 @@ class TestCounterToday:
     def test_an_average_of_two_meters_exports_is_refused(self) -> None:
         with pytest.raises(ValueError):
             SlotCandidate(KIND_COUNTER_TODAY, 1, "MFM", "ENERGY_EXPORT_TOTAL", "avg")
+
+
+# ── A meter on another line than the solar output (migration 0043) ──────────
+#
+# VARDHMAN_GROUP's SPINNING_AND_GENERAL_MILLS: `MFM` on the solar output reads
+# ~200 kW, `MAIN_MFM` on the mill's own line ~660 kW, both Type MFM — and
+# `MAIN_MFM` sorts first, so `first` picked it.
+
+
+def _mfm(device_id: int, code: str, power: float, *, generation: bool = True) -> DeviceFacts:
+    return DeviceFacts(
+        device_id=device_id, code=code, device_type_code="MFM",
+        bound_tag_codes=frozenset({"AC_ACTIVE_POWER"}),
+        values={"AC_ACTIVE_POWER": power}, online=True, in_power_path=True,
+        measures_generation=generation,
+    )
+
+
+class TestMeterOnAnotherLine:
+    def test_it_no_longer_wins_on_its_code(self) -> None:
+        facts = PlantFacts(plant_id=9, devices=(
+            _mfm(1, "MAIN_MFM", 662.6, generation=False), _mfm(2, "MFM", 199.2),
+        ))
+        resolved = resolve_slot(CURRENT_POWER, facts)
+        assert resolved.value == 199.2
+        assert resolved.source is not None and resolved.source.device_ids == (2,)
+
+    def test_it_is_never_added_to_a_sum(self) -> None:
+        summed = SlotSpec(
+            code="x", label="x", panel="p", position=1,
+            candidates=(SlotCandidate(KIND_DEVICE_TAG, 1, "MFM", "AC_ACTIVE_POWER", "sum"),),
+        )
+        facts = PlantFacts(plant_id=9, devices=(
+            _mfm(1, "MAIN_MFM", 662.6, generation=False), _mfm(2, "MFM", 199.2),
+        ))
+        assert resolve_slot(summed, facts).value == 199.2
+
+    def test_alone_it_answers_nothing_and_the_inverters_do(self) -> None:
+        facts = PlantFacts(plant_id=9, devices=(
+            _mfm(1, "MAIN_MFM", 662.6, generation=False),
+            inverter("INV-01", 100.0), inverter("INV-02", 102.0),
+        ))
+        resolved = resolve_slot(CURRENT_POWER, facts)
+        assert resolved.value == 202.0
+        assert resolved.source is not None
+        assert resolved.source.device_type_code == "INVERTER"
+        # Planned on the Inverters: the meter is not a silent source to fall from.
+        assert resolved.source.degraded is False

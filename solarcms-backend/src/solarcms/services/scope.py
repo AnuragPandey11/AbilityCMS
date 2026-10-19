@@ -42,12 +42,14 @@ async def device_ids(
     client_id: int | None = None,
     type_codes: Iterable[str] | None = None,
     with_topic: bool = False,
+    generation_only: bool = False,
 ) -> list[int]:
     """The ids of the Devices in scope, optionally only of some Device Types.
 
     `with_topic` leaves out Devices that have never had a topic — the Plant KPI
     panel, whose rows the scheduler writes — for questions about when the
-    *equipment* reported.
+    *equipment* reported. `generation_only` leaves out a meter on a line other
+    than the Plant's solar output (migration 0043), for the Plant's figures.
     """
     if plant_ids is None and block_id is None and client_id is None:
         raise ValueError("device_ids needs plant_ids, block_id or client_id")
@@ -64,6 +66,8 @@ async def device_ids(
         params["client_id"] = client_id
     if with_topic:
         where.append("d.source_address IS NOT NULL")
+    if generation_only:
+        where.append("d.measures_generation")
     join = ""
     if type_codes is not None:
         codes = sorted(set(type_codes))

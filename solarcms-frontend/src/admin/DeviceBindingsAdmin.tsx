@@ -35,6 +35,7 @@ import {
 } from "@/api/hooks";
 import * as devicesApi from "@/api/endpoints/devices";
 import { isApiError } from "@/api/problem";
+import { measuresGeneration } from "@/api/useSlotTrend";
 import { Button, Field, Panel, Badge, inputClass } from "@/components/ui";
 import {
   EmptyState,
@@ -713,6 +714,9 @@ function DeviceSettings({
     (model) => !device || model.device_type_code === device.type_code,
   );
   const isInverter = device?.type_code === "INVERTER";
+  // Only a meter can be on a line other than the solar output; the server
+  // refuses the setting on anything else.
+  const isMeter = device?.type_code === "ABT_METER" || device?.type_code === "MFM";
 
   useEffect(() => {
     if (!device) return;
@@ -728,6 +732,7 @@ function DeviceSettings({
           ? ""
           : String(device.dc_capacity_kwp),
       string_count: device.string_count === null ? "" : String(device.string_count),
+      measures_generation: measuresGeneration(device) ? "true" : "false",
     });
   }, [device]);
 
@@ -745,6 +750,10 @@ function DeviceSettings({
         string_count: form.string_count ? Number(form.string_count) : undefined,
         dc_capacity_kwp: form.dc_capacity_kwp ? Number(form.dc_capacity_kwp) : undefined,
         // Sent only when it changed, so an unrelated edit never re-asserts it.
+        measures_generation:
+          isMeter && device && (form.measures_generation === "true") !== measuresGeneration(device)
+            ? form.measures_generation === "true"
+            : undefined,
         device_model_id:
           form.device_model_id && Number(form.device_model_id) !== device?.device_model_id
             ? Number(form.device_model_id)
@@ -857,6 +866,12 @@ function DeviceSettings({
               PV strings{" "}
               <span className="text-ink">{device.string_count ?? "not set"}</span>{" "}
               of {stringMax}
+            </span>
+          ) : null}
+          {isMeter ? (
+            <span>
+              Solar output meter{" "}
+              <span className="text-ink">{measuresGeneration(device) ? "yes" : "no"}</span>
             </span>
           ) : null}
         </div>
@@ -976,6 +991,24 @@ function DeviceSettings({
                   }
                   className={inputClass}
                 />
+              </Field>
+            ) : null}
+            {isMeter ? (
+              <Field
+                label="Measures the solar output"
+                hint="No for a meter on another line — the site's own supply, say. Its readings are still kept and shown, but PR, energy, Current Power, the Grid stage and the reports stop using it."
+              >
+                <select
+                  value={form.measures_generation ?? "true"}
+                  onChange={(event) =>
+                    setForm((f) => ({ ...f, measures_generation: event.target.value }))
+                  }
+                  className={inputClass}
+                  data-testid="measures-generation"
+                >
+                  <option value="true">Yes — the Plant's figures use it</option>
+                  <option value="false">No — another line, left out of the Plant's figures</option>
+                </select>
               </Field>
             ) : null}
           </div>
