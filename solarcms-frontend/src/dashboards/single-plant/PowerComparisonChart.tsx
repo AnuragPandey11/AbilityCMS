@@ -177,7 +177,15 @@ export function PowerComparisonChart({
     ? (() => {
         const step = niceStep((scales.radiation.max - scales.radiation.min) / 5);
         const out: number[] = [];
-        for (let at = Math.ceil(scales.radiation.min / step) * step; at <= scales.radiation.max + 1e-9; at += step) {
+        // The tolerance is a share of the step, never a fixed amount: a fixed
+        // 1e-9 against a 1E-18 step meant a billion ticks. The count limit is
+        // the backstop — a scale this loop should never have been handed must
+        // draw a bare axis, not lock the browser.
+        for (
+          let at = Math.ceil(scales.radiation.min / step) * step;
+          at <= scales.radiation.max + step * 1e-6 && out.length < 50;
+          at += step
+        ) {
           out.push(Number(at.toFixed(6)));
         }
         return out;

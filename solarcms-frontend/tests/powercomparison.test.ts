@@ -51,6 +51,19 @@ describe("the axis lock", () => {
     expect(radiation.max).toBeGreaterThanOrEqual(1000);
   });
 
+  it("frames float noise as it frames zeros, never in steps of 1E-18", () => {
+    const perWm2 = kwPerWm2(2000)!;
+    const zeros = lockedAxes([0, 0], [0], perWm2);
+    for (const [power, radiation] of [
+      [[1.500121e-17, 1.000077e-17, 0], [0]],
+      [[0], [2.530885e-41, 0]],
+    ]) {
+      expect(lockedAxes(power!, radiation!, perWm2)).toEqual(zeros);
+    }
+    // A small real reading still gets its own scale.
+    expect(lockedAxes([0.4], [0], perWm2).power.max).toBeLessThan(1);
+  });
+
   it("steps in 1, 2, 2.5 and 5", () => {
     expect(niceStep(640)).toBe(1000);
     expect(niceStep(180)).toBe(200);

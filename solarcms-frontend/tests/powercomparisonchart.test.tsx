@@ -92,6 +92,28 @@ describe("the power comparison chart", () => {
     expect(drawn().every((entry) => entry.connectNulls === false)).toBe(true);
   });
 
+  it("draws a night of float noise as it draws zeros, instead of freezing", () => {
+    // OASIS_2MW before sunrise: its meters send 1.5E-17 kW for zero and its
+    // pyranometer 2.5E-41 W/m². Counting the radiation ticks out in steps that
+    // small once ran for ever.
+    const noise = (values: number[]): Series["points"] => points(values);
+    render(
+      <PowerComparisonChart
+        series={[
+          { ...power, points: noise([1.500121e-17, 1.000077e-17, 0, 1.99996e-17, 0]) },
+          { ...radiation, points: noise([2.530885e-41, 0, 0, 2.530885e-41, 0]) },
+        ]}
+        perWm2={2}
+        dcCapacityKwp={2000}
+        tier="agg_15m"
+      />,
+    );
+    const [left, right] = axes();
+    // A quarter of the nameplate, as a night of exact zeros is framed.
+    expect(left?.max).toBe(500);
+    expect(right?.max).toBe(250);
+  });
+
   it("names each axis with the unit the catalogue gives", () => {
     render(
       <PowerComparisonChart series={[power, radiation]} perWm2={5.76} dcCapacityKwp={5760} tier="agg_15m" />,
