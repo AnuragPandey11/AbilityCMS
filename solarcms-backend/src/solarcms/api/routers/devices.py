@@ -526,9 +526,11 @@ async def delete_device(
 
     # Order matters: the telemetry tables carry no foreign key, so nothing
     # cascades and nothing stops this happening in the wrong order either.
+    # ⚠ Through the function, never `DELETE FROM readings`: the API holds no
+    # privilege on the base relation (0044), and that statement 500'd every time.
     if readings:
         await session.execute(
-            text("DELETE FROM readings WHERE device_id = :id"), {"id": device_id})
+            text("SELECT app_delete_device_readings(:id)"), {"id": device_id})
     await session.execute(
         text("DELETE FROM device_tag_bindings WHERE device_id = :id"), {"id": device_id})
     await session.execute(
