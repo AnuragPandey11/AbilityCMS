@@ -137,11 +137,17 @@ export function lockedAxes(
   divisions = 5,
 ): { power: AxisScale; radiation: AxisScale } {
   const asPower = [...power, ...radiation.map((value) => value * perWm2)].filter(Number.isFinite);
+  const nameplate = perWm2 * STC_IRRADIANCE_W_M2;
   // An empty chart still gets a frame: 0 to the nameplate, which is 0 to
   // 1,000 W/m² on the other side — the scale the lock is defined by.
-  const top = asPower.length > 0 ? Math.max(0, ...asPower) : perWm2 * STC_IRRADIANCE_W_M2;
+  const top = asPower.length > 0 ? Math.max(0, ...asPower) : nameplate;
   const bottom = asPower.length > 0 ? Math.min(0, ...asPower) : 0;
-  const step = niceStep((top - bottom || perWm2 * STC_IRRADIANCE_W_M2) / divisions);
+  // So does a chart of float noise. A meter that sends 1.5E-17 kW for zero
+  // (OASIS's MFMs at night) or a pyranometer sending 2.5E-41 W/m² would
+  // otherwise size the scale in steps of 1E-18, and the radiation ticks are
+  // counted out in those steps — a frozen tab, not a chart.
+  const span = top - bottom > nameplate * 1e-9 ? top - bottom : nameplate;
+  const step = niceStep(span / divisions);
   const max = Math.max(step, Math.ceil(top / step) * step);
   const min = Math.floor(bottom / step) * step;
   return {
