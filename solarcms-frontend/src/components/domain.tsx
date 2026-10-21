@@ -31,6 +31,27 @@ export function isOnboarding(status: string): boolean {
   return ONBOARDING_STATUSES.has(status);
 }
 
+/**
+ * Only an `active` Plant is counted in fleet totals (MASTER §6.5: "`active` —
+ * included"). ⚠ This used to be "anything not onboarding", which counted a
+ * decommissioned Plant: retired, sending nothing, so it read as a Plant with no
+ * Devices, held the Portfolio at PARTIAL and put its capacity in every total.
+ * A status this build does not know is not counted either.
+ */
+export function isCounted(status: string): boolean {
+  return status === "active";
+}
+
+/** Neither counted nor on its way to being counted: `decommissioned`, `suspended`. */
+export function isRetired(status: string): boolean {
+  return !isCounted(status) && !isOnboarding(status);
+}
+
+/** "decommissioned", or "decommissioned or suspended" — the statuses as the badges print them. */
+export function retiredWord(plants: { status: string }[]): string {
+  return [...new Set(plants.map((plant) => plant.status))].join(" or ");
+}
+
 export function PlantStatusBadge({ status }: { status: string }): JSX.Element {
   return (
     <Badge
@@ -38,7 +59,9 @@ export function PlantStatusBadge({ status }: { status: string }): JSX.Element {
       title={
         isOnboarding(status)
           ? "Excluded from portfolio totals until the Plant is active — a partly mapped Plant would distort fleet figures."
-          : undefined
+          : isRetired(status)
+            ? "Excluded from portfolio totals — history is kept, and nothing new is expected."
+            : undefined
       }
     >
       {status}

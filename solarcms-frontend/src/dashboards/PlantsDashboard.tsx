@@ -21,9 +21,10 @@
  * every Plant in the fleet; ranking on it would put the whole estate at the top
  * of the screen at dusk and teach operators that the ordering means nothing.
  *
- * ⚠ Plants in `draft` or `commissioning` are shown in their own group and
- * excluded from the summary totals (MASTER §6.5) — a half-mapped Plant would
- * otherwise drag fleet figures down.
+ * ⚠ Only `active` Plants are live and counted (MASTER §6.5). Plants in `draft`
+ * or `commissioning` are shown in their own group and excluded from the summary
+ * totals — a half-mapped Plant would otherwise drag fleet figures down — and a
+ * `decommissioned` Plant is listed in a group of its own for the same reason.
  */
 
 import { useMemo, useState } from "react";
@@ -35,8 +36,12 @@ import {
   PeriodPicker,
   PlantStatusBadge,
   SeverityBadge,
+  isCounted,
   isOnboarding,
+  isRetired,
+  retiredWord,
 } from "@/components/domain";
+import type { PlantListItem } from "@/api/schemas";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { CoverageBadge } from "@/components/dashboard/CoverageBadge";
 import {
@@ -120,8 +125,9 @@ export function PlantsDashboard(): JSX.Element {
     [plants, clientFilter],
   );
 
-  const live = useMemo(() => visible.filter((p) => !isOnboarding(p.status)), [visible]);
+  const live = useMemo(() => visible.filter((p) => isCounted(p.status)), [visible]);
   const onboarding = useMemo(() => visible.filter((p) => isOnboarding(p.status)), [visible]);
+  const retired = useMemo(() => visible.filter((p) => isRetired(p.status)), [visible]);
 
   /** Live Plants, worst first. */
   const ranked = useMemo(
@@ -303,7 +309,8 @@ export function PlantsDashboard(): JSX.Element {
           <h1 className="page-title">Plants</h1>
           <p className="mt-1.5 text-sm leading-snug text-ink-muted">
             {live.length} live
-            {onboarding.length > 0 ? `, ${onboarding.length} onboarding` : ""}. Cards are
+            {onboarding.length > 0 ? `, ${onboarding.length} onboarding` : ""}
+            {retired.length > 0 ? `, ${retired.length} ${retiredWord(retired)}` : ""}. Cards are
             ordered by need for attention; the table sorts on any column.
           </p>
         </div>
@@ -374,7 +381,7 @@ export function PlantsDashboard(): JSX.Element {
             tone="info"
             icon={IconCapacity}
             label="DC capacity"
-            footnote="Live Plants only; onboarding is excluded."
+            footnote="Live Plants only; onboarding and decommissioned are excluded."
           >
             <RailFigure value={summary.capacity} unit="kWp" />
           </RailTile>
@@ -443,29 +450,49 @@ export function PlantsDashboard(): JSX.Element {
           title={`Onboarding — ${onboarding.length}`}
           subtitle="Excluded from every total above. A half-mapped Plant would otherwise drag fleet figures down."
         >
-          <ul className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
-            {onboarding.map((plant) => (
-              <li key={plant.id}>
-                <button
-                  type="button"
-                  onClick={() => openPlant(plant.id)}
-                  className="flex w-full items-center gap-2 rounded-control border border-line px-2.5 py-1.5 text-left transition hover:border-accent/50"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-ink">
-                      {plant.code}
-                    </span>
-                    <span className="block truncate text-[10px] text-ink-faint">{plant.name}</span>
-                  </span>
-                  <PlantStatusBadge status={plant.status} />
-                  <IconChevronRight size={13} className="shrink-0 text-ink-faint" />
-                </button>
-              </li>
-            ))}
-          </ul>
+          <UncountedPlants plants={onboarding} onOpen={openPlant} />
+        </Panel>
+      ) : null}
+
+      {retired.length > 0 ? (
+        <Panel
+          title={`${retiredWord(retired).replace(/^./, (c) => c.toUpperCase())} — ${retired.length}`}
+          subtitle="Retired, and excluded from every total above. History is kept; nothing new is expected."
+        >
+          <UncountedPlants plants={retired} onOpen={openPlant} />
         </Panel>
       ) : null}
     </div>
+  );
+}
+
+/** A Plant that is shown but not counted, one press from its own screen. */
+function UncountedPlants({
+  plants,
+  onOpen,
+}: {
+  plants: PlantListItem[];
+  onOpen: (plantId: number) => void;
+}): JSX.Element {
+  return (
+    <ul className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+      {plants.map((plant) => (
+        <li key={plant.id}>
+          <button
+            type="button"
+            onClick={() => onOpen(plant.id)}
+            className="flex w-full items-center gap-2 rounded-control border border-line px-2.5 py-1.5 text-left transition hover:border-accent/50"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-medium text-ink">{plant.code}</span>
+              <span className="block truncate text-[10px] text-ink-faint">{plant.name}</span>
+            </span>
+            <PlantStatusBadge status={plant.status} />
+            <IconChevronRight size={13} className="shrink-0 text-ink-faint" />
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
