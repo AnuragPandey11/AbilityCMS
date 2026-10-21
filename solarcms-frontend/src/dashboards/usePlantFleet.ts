@@ -27,7 +27,7 @@ import type {
   PlantKpis,
   PlantListItem,
 } from "@/api/schemas";
-import { isOnboarding } from "@/components/domain";
+import { isCounted, isOnboarding } from "@/components/domain";
 import { useLiveSocket } from "@/live/LiveSocket";
 
 /** Worst first, so `Math.min` over an Alarm set picks the one that matters. */
@@ -64,7 +64,7 @@ export interface PlantFleet {
   refetch: () => void;
   /** Every visible Plant, in the order `GET /plants` returned them. */
   plants: PlantListItem[];
-  /** Excludes `draft` and `commissioning` (MASTER §6.5). */
+  /** `active` Plants only (MASTER §6.5): not onboarding, not decommissioned. */
   active: PlantListItem[];
   onboarding: PlantListItem[];
   entryFor: (plantId: number) => PlantFleetEntry | undefined;
@@ -153,7 +153,7 @@ export function usePlantFleet(period: KpiPeriod): PlantFleet {
     error: plantsQuery.error,
     refetch: () => void plantsQuery.refetch(),
     plants,
-    active: plants.filter((plant) => !isOnboarding(plant.status)),
+    active: plants.filter((plant) => isCounted(plant.status)),
     onboarding: plants.filter((plant) => isOnboarding(plant.status)),
     entryFor: (plantId: number) => byId.get(plantId),
     entries,

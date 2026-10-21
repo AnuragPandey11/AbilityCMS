@@ -5,10 +5,12 @@
  * `/portfolio` endpoint and there should not be: this sums what `/plants`
  * returns and asks each active Plant for its KPIs.
  *
- * ⚠ Plants in `draft` or `commissioning` are **excluded from every total**
- * (MASTER §6.5). A half-mapped Plant would otherwise drag fleet PR down. They
- * are shown in a separate "Onboarding" group so they remain visible without
- * polluting the numbers.
+ * ⚠ Only `active` Plants are counted (MASTER §6.5). Plants in `draft` or
+ * `commissioning` are **excluded from every total** — a half-mapped Plant would
+ * otherwise drag fleet PR down — and are shown in a separate "Onboarding" group
+ * so they remain visible without polluting the numbers. A `decommissioned`
+ * Plant is excluded too, and named in one line under the title: it needs no
+ * action, but a header saying "5 visible" over figures from four has to say why.
  */
 
 import { useState } from "react";
@@ -34,7 +36,10 @@ import {
   PeriodPicker,
   PlantStatusBadge,
   SeverityBadge,
+  isCounted,
   isOnboarding,
+  isRetired,
+  retiredWord,
 } from "@/components/domain";
 import { sourceLabel } from "@/components/dashboard/SlotValue";
 import { DataTable, type Column } from "@/components/tables/DataTable";
@@ -127,8 +132,9 @@ export function PortfolioDashboard(): JSX.Element {
   const healthQuery = useDeviceHealth();
 
   const all = plantsQuery.data ?? [];
-  const counted = all.filter((plant) => !isOnboarding(plant.status));
+  const counted = all.filter((plant) => isCounted(plant.status));
   const onboarding = all.filter((plant) => isOnboarding(plant.status));
+  const retired = all.filter((plant) => isRetired(plant.status));
 
   // One KPI request per counted Plant. There is no fleet endpoint, by design.
   //
@@ -441,6 +447,26 @@ export function PortfolioDashboard(): JSX.Element {
               </button>
             </p>
           ) : null}
+          {retired.length > 0 ? (
+            <p data-testid="retired-notice" className="mt-1 text-xs text-ink-muted">
+              {retired.length}
+              {counted.length + onboarding.length > 0 ? " more" : ""} Plant
+              {retired.length === 1 ? " is" : "s are"} {retiredWord(retired)} and not counted:{" "}
+              {retired.map((plant, index) => (
+                <span key={plant.id}>
+                  {index > 0 ? ", " : null}
+                  <button
+                    type="button"
+                    className="text-accent hover:underline"
+                    onClick={() => openPlant(plant.id)}
+                  >
+                    {plant.name}
+                  </button>
+                </span>
+              ))}
+              . {retired.length === 1 ? "Its" : "Their"} history stays on Single Plant.
+            </p>
+          ) : null}
           {split.notInstrumented > 0 ? (
             <p className="mt-1 text-xs text-warn">
               {split.notInstrumented} of {counted.length} active Plant(s) have no Devices
@@ -725,6 +751,14 @@ export function PortfolioDashboard(): JSX.Element {
                 value={`${onboarding.length} not counted`}
                 tone="faint"
                 hint="Draft and commissioning Plants are excluded from every total."
+              />
+            ) : null}
+            {retired.length > 0 ? (
+              <SummaryRow
+                label={retiredWord(retired).replace(/^./, (c) => c.toUpperCase())}
+                value={`${retired.length} not counted`}
+                tone="faint"
+                hint="Retired Plants are excluded from every total; their history is kept."
               />
             ) : null}
           </div>

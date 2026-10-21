@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { isOnboarding } from "@/components/domain";
+import { isCounted, isOnboarding, isRetired, retiredWord } from "@/components/domain";
 
 describe("portfolio exclusion", () => {
   it("excludes draft and commissioning Plants from totals", () => {
@@ -11,10 +11,24 @@ describe("portfolio exclusion", () => {
     expect(isOnboarding("commissioning")).toBe(true);
   });
 
-  it("counts every other status", () => {
-    for (const status of ["active", "suspended", "decommissioned"]) {
-      expect(isOnboarding(status)).toBe(false);
+  it("counts only an active Plant", () => {
+    // A decommissioned Plant was counted, and held the fleet at PARTIAL.
+    expect(isCounted("active")).toBe(true);
+    for (const status of ["draft", "commissioning", "suspended", "decommissioned", "unheard-of"]) {
+      expect(isCounted(status)).toBe(false);
     }
+  });
+
+  it("files a decommissioned Plant as retired, never as onboarding", () => {
+    expect(isRetired("decommissioned")).toBe(true);
+    expect(isRetired("suspended")).toBe(true);
+    expect(isOnboarding("decommissioned")).toBe(false);
+    for (const status of ["active", "draft", "commissioning"]) {
+      expect(isRetired(status)).toBe(false);
+    }
+    expect(retiredWord([{ status: "decommissioned" }, { status: "decommissioned" }])).toBe(
+      "decommissioned",
+    );
   });
 });
 
