@@ -1,0 +1,11 @@
+[Unit]
+Description=SolarCMS broker watchdog: restart EMQX when production stops receiving data
+After=docker.service postgresql.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/solarcms-broker-watchdog
+StateDirectory=solarcms-broker-watchdog
+ExecStart=/usr/local/sbin/solarcms-broker-watchdog
+TimeoutStartSec=50
