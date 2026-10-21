@@ -53,11 +53,13 @@ from solarcms.domain.data_issues import (
     OwnTopicFact,
     PlantFacts,
     ReplayBurst,
+    SunlightSetAside,
     TagHealth,
     UnregisteredTopic,
 )
 from solarcms.domain.decoding import TopicPattern, normalise_payload, parse_topic
-from solarcms.services import scope
+from solarcms.services import scope, snapshots
+from solarcms.services.kpis import plant_pr_today
 
 # The same look-back discovery uses, so a topic offered there is offered here.
 UNREGISTERED_WINDOW = "interval '7 days'"
@@ -297,9 +299,34 @@ async def gather(
         devices=tuple(devices),
         unregistered=unregistered,
         replay_bursts=await _replay_bursts(session, plant_id),
+        sunlight_set_aside=await _sunlight_set_aside(session, plant_id, now),
         device_type_codes=type_codes,
         tag_codes=tag_codes,
     )
+
+
+async def _sunlight_set_aside(
+    session: AsyncSession, plant_id: int, now: datetime,
+) -> tuple[SunlightSetAside, ...]:
+    """The weather stations today's PR set aside as reading too little
+    sunlight for the Plant's output (`domain/pr_matching`).
+
+    From the stored KPIs when they are fresh — the scheduler works today's out
+    every minute — and worked out otherwise, by the same rule.
+    """
+    stored = await snapshots.read_kpis(session, plant_id, "today", compare=False)
+    if stored is not None and "pr_basis" in stored:
+        return tuple(
+            SunlightSetAside(int(s["device_id"]), str(s["device_code"]),
+                             float(s["hours"]), float(s["energy_kwh"]),
+                             bool(s.get("reads_dark", True)))
+            for s in (stored.get("pr_basis") or {}).get("stations_set_aside", []))
+    pr = await plant_pr_today(session, plant_id, now)
+    if pr is None or pr.basis is None:
+        return ()
+    return tuple(
+        SunlightSetAside(s.device_id, s.device_code, s.hours, s.energy_kwh, s.reads_dark)
+        for s in pr.basis.stations_set_aside)
 
 
 async def _patterns(session: AsyncSession) -> list[TopicPattern]:

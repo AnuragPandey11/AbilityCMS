@@ -175,6 +175,13 @@ export function RowSummary({ issue, timezone }: { issue: DataIssue; timezone: st
       );
     case "plant_silent":
       return <Line>{num(issue, "devices")} Device(s), none sending</Line>;
+    case "sunlight_too_low":
+      return (
+        <Line>
+          Set aside for {plain(num(issue, "hours"))} h today
+          <Muted inline>{plain(num(issue, "energy_kwh"))} kWh made in those hours</Muted>
+        </Line>
+      );
     case "replay_burst":
       return (
         <ul className="mt-0.5 space-y-0.5">
@@ -253,7 +260,7 @@ function Topic({ value }: { value: string | null }): JSX.Element | null {
 /** Fixed by editing mappings alone — `config.modify`, which the screen itself needs. */
 const MAPPING_ONLY = new Set([
   "unmapped_key", "key_renamed", "binding_silent", "strings_not_arriving", "values_rejected",
-  "replay_burst", "plant_silent",
+  "replay_burst", "plant_silent", "sunlight_too_low",
 ]);
 
 export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): JSX.Element | null {
@@ -411,6 +418,15 @@ export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): J
       return (
         <Link to="/admin/plant-setup" className="text-xs font-medium text-accent hover:underline">
           Open in Plants &amp; Devices →
+        </Link>
+      );
+    case "sunlight_too_low":
+      return issue.device_id === null ? null : (
+        <Link
+          to={`/admin/bindings?device=${issue.device_id}`}
+          className="text-xs font-medium text-accent hover:underline"
+        >
+          Check its mapping in Tag Mapping →
         </Link>
       );
     default:

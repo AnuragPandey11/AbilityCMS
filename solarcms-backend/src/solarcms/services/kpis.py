@@ -36,7 +36,6 @@ from solarcms.domain.formulas import (
     availability,
     co2_avoided_kg,
     cuf,
-    performance_ratio,
     specific_yield,
 )
 from solarcms.domain.health_logic import uptime_seconds_from_events
@@ -47,6 +46,7 @@ from solarcms.domain.periods import (
     period_start,
     previous_window,
 )
+from solarcms.domain.pr_matching import REASON_WORDS, PlantPr, plant_pr
 from solarcms.domain.tiering import Tier, bucket_start, select_tier
 from solarcms.services import scope
 from solarcms.services.energy import (
@@ -141,23 +141,23 @@ async def meters_and_stations(
     Kolkata, 05:30 local — so every day's `last` is taken after the restart
     and each day's sun reads as nothing. Only a lifetime over a year old
     selects the daily tier, which is why this never showed on a young fleet.
+
+    ⚠ The energy is read on the same tier as the sunlight, for the same
+    lifetime: PR matches the two period by period (`domain/pr_matching`), and
+    a meter read once a day makes every day one block that a station quiet or
+    flagged at night never covers — lifetime PR had no value at all past a
+    year (21 Oct 2026). The energy total is the same either way; only the
+    number of steps it is summed from changes.
     """
     irradiation_tier = Tier.AGG_1H if tier == Tier.AGG_1D else tier
     live = (await read_live_irradiance(
         session, tier=irradiation_tier,
         start=bucket_start(start, irradiation_tier) if lifetime else start, end=end,
         plant_ids=[plant_id])).get(plant_id, [])
-    if irradiation_tier == tier:
-        series = await counter_series(
-            session, plant_id, tier, start, lifetime,
-            [*PLANT_ENERGY_COUNTER_PRECEDENCE, PLANT_IRRADIATION_SOURCE], end=end)
-        stations, meters = split_by_pair(series, PLANT_IRRADIATION_SOURCE)
-        return meters, stations, live
-    meters = await counter_series(
-        session, plant_id, tier, start, lifetime, PLANT_ENERGY_COUNTER_PRECEDENCE, end=end)
-    stations = await counter_series(
-        session, plant_id, irradiation_tier, start, lifetime, [PLANT_IRRADIATION_SOURCE],
-        end=end)
+    series = await counter_series(
+        session, plant_id, irradiation_tier, start, lifetime,
+        [*PLANT_ENERGY_COUNTER_PRECEDENCE, PLANT_IRRADIATION_SOURCE], end=end)
+    stations, meters = split_by_pair(series, PLANT_IRRADIATION_SOURCE)
     return meters, stations, live
 
 
@@ -315,6 +315,43 @@ def irradiation_payload(irradiation: PlantIrradiation) -> dict[str, Any]:
     }
 
 
+def pr_basis_payload(pr: PlantPr) -> dict[str, Any] | None:
+    """What PR stands on: the energy and sunlight of the periods both sides
+    measured, and what was left out of them (`domain/pr_matching`).
+
+    ⚠ PR is *not* `energy_kwh` over `irradiation_kwh_m2` whenever anything is
+    left out: an outage drops out of both its sides, and a station reading too
+    little for the Plant's output is set aside. A screen showing PR says how
+    much of the period's energy it stands on whenever that is not all of it.
+    """
+    basis = pr.basis
+    if basis is None:
+        return None
+    return {
+        "energy_kwh": basis.energy_kwh,
+        "irradiation_kwh_m2": basis.sunlight_kwh_m2,
+        "energy_share": basis.energy_share,
+        # The runs worth naming, largest first, at most ten; `left_out_count`
+        # is every run, named or not.
+        "left_out": [
+            {"from": run.start, "to": run.end, "reason": run.reason,
+             "words": REASON_WORDS[run.reason], "energy_kwh": run.energy_kwh,
+             "irradiation_kwh_m2": run.sunlight_kwh_m2, "devices": list(run.missing)}
+            for run in sorted(basis.left_out, key=lambda r: -r.energy_kwh)[:10]
+        ],
+        "left_out_count": basis.left_out_count,
+        "stations_set_aside": [
+            {"device_id": station.device_id, "device_code": station.device_code,
+             "hours": station.hours, "energy_kwh": station.energy_kwh,
+             "from": station.first, "to": station.last,
+             # No daylight at all: the station. Some: the station, or the DC
+             # capacity or a meter on record (`StationSetAside.reads_dark`).
+             "reads_dark": station.reads_dark}
+            for station in basis.stations_set_aside
+        ],
+    }
+
+
 def render_formula(result: FormulaResult) -> dict[str, Any]:
     return {"value": result.value, "variant": result.variant,
             "undefined_reason": result.undefined_reason}
@@ -340,14 +377,13 @@ async def previous_figures(
     energy_result = plant_energy(
         meters, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac_kw or None)
     irradiation = plant_irradiation(stations, live)
+    # Over the periods both sides measured (`domain/pr_matching`).
+    pr = plant_pr(energy_result, irradiation, dc_kwp)
     if energy_result.value is None:
         reason = energy_result.undefined_reason
-        pr = FormulaResult(None, performance_ratio(0.0, 0.0, 0.0).variant, reason)
         cuf_result = FormulaResult(None, cuf(0.0, 0.0, 0.0).variant, reason)
     else:
         hours = (window.end - window.measured_since).total_seconds() / 3600.0
-        pr = performance_ratio(
-            energy_result.value, (irradiation.value or 0.0) * 1000.0, dc_kwp)
         cuf_result = cuf(energy_result.value, ac_kw, hours)
     coverage = await plant_coverage(session, plant_id, tier, window.start, window.end, False)
     return {
@@ -355,7 +391,8 @@ async def previous_figures(
         "period_end": window.end,
         "measured_since": window.measured_since,
         "source_tier": tier.value,
-        "performance_ratio": render_formula(pr),
+        "performance_ratio": render_formula(pr.result),
+        "pr_basis": pr_basis_payload(pr),
         "cuf": render_formula(cuf_result),
         "irradiation_kwh_m2": irradiation_payload(irradiation),
         "counter_anomalies": counter_anomalies_payload(energy_result),
@@ -413,6 +450,28 @@ async def plant_availability(
     if weighed - excluded <= 0:
         return FormulaResult(None, AVAILABILITY_VARIANT, "no Device has reported in the period")
     return availability(uptime, weighed, excluded)
+
+
+async def plant_pr_today(
+    session: AsyncSession, plant_id: int, now: datetime,
+) -> PlantPr | None:
+    """Today's PR and what it stands on, alone — for a caller that needs no
+    other figure (Data Issues' stations reading too little sunlight). The same
+    reads and rules as `compute_plant_kpis` under "today"."""
+    plant = (await session.execute(text("""
+        SELECT p.dc_capacity_kwp, p.ac_capacity_kw, p.timezone FROM plants p
+         WHERE p.id = :plant_id
+    """), {"plant_id": plant_id})).first()
+    if plant is None:
+        return None
+    start = period_start("today", now, plant_zone(plant.timezone), None) or now
+    tier = select_tier(start, now, now, finest=Tier.AGG_1M)
+    meters, stations, live = await meters_and_stations(session, plant_id, tier, start, False)
+    ac_kw = float(plant.ac_capacity_kw or 0.0)
+    energy_result = plant_energy(
+        meters, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac_kw or None)
+    return plant_pr(energy_result, plant_irradiation(stations, live),
+                    float(plant.dc_capacity_kwp or 0.0))
 
 
 async def compute_plant_kpis(
@@ -481,21 +540,22 @@ async def compute_plant_kpis(
     energy_result = plant_energy(
         meters, PLANT_ENERGY_COUNTER_PRECEDENCE, plant_ac_capacity_kw=ac_kw or None)
     irradiation = plant_irradiation(stations, live)
-    # GHI_CUMULATIVE is kWh/m2; performance_ratio wants Wh/m2 over the period.
-    irradiation_wh = (irradiation.value or 0.0) * 1000.0
+    # PR over the periods both the energy and the sunlight were measured in,
+    # with any station reading too little for the output set aside
+    # (`domain/pr_matching`) — never the whole period's energy over whatever
+    # sunlight happened to be recorded.
+    pr = plant_pr(energy_result, irradiation, dc_kwp)
 
     if energy_result.value is None:
         # Nothing to read is not "made nothing": every figure built on energy
         # is undefined, with the reason, rather than a confident zero.
         reason = energy_result.undefined_reason
         energy_kwh = 0.0
-        pr = FormulaResult(None, performance_ratio(0.0, 0.0, 0.0).variant, reason)
         cuf_result = FormulaResult(None, cuf(0.0, 0.0, 0.0).variant, reason)
         co2 = FormulaResult(None, co2_avoided_kg(0.0, grid_factor).variant, reason)
         yield_result = FormulaResult(None, specific_yield(0.0, 0.0).variant, reason)
     else:
         energy_kwh = energy_result.value
-        pr = performance_ratio(energy_kwh, irradiation_wh, dc_kwp)
         cuf_result = cuf(energy_kwh, ac_kw, hours)
         co2 = co2_avoided_kg(energy_kwh, grid_factor)
         yield_result = specific_yield(energy_kwh, dc_kwp)
@@ -538,7 +598,9 @@ async def compute_plant_kpis(
         # daily register, or their live GHI integrated where the register is
         # missing or stuck; and any left out as not measuring (`domain/irradiation`).
         "irradiation_kwh_m2": irradiation_payload(irradiation),
-        "performance_ratio": render_formula(pr),
+        "performance_ratio": render_formula(pr.result),
+        # What PR stands on, when that is not the whole period (`pr_basis_payload`).
+        "pr_basis": pr_basis_payload(pr),
         "cuf": render_formula(cuf_result),
         "availability": render_formula(avail),
         "co2_avoided_kg": render_formula(co2),

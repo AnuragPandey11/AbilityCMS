@@ -76,6 +76,11 @@ export const KINDS: Record<string, KindInfo> = {
     explain:
       "Values outside their allowed range, or empty, are kept but not shown. A wrong unit or scale on the mapping causes it; so does a fault in the equipment.",
   },
+  sunlight_too_low: {
+    label: "Weather station reads too little sunlight",
+    explain:
+      "The Plant made far more than this station's sunlight could give, so its sunlight is set aside when Performance Ratio is worked out. A dead or dirty sensor, near-zero values sent for zero, or a wrong scale on its mapping.",
+  },
   interval_slower: {
     label: "Sends less often than recorded",
     explain:

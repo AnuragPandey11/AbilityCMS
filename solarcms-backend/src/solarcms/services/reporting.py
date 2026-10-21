@@ -70,6 +70,7 @@ from solarcms.domain.irradiation import (
     irradiation_notes,
     plant_irradiation,
 )
+from solarcms.domain.pr_matching import PrBasis, plant_pr, pr_basis_note
 from solarcms.domain.tiering import TIERS, Tier, select_tier
 from solarcms.services.energy import read_counter_series, read_live_irradiance, split_by_pair
 
@@ -112,6 +113,8 @@ class PlantReport:
     energy: PlantEnergy
     irradiation: PlantIrradiation
     kpis: dict[str, FormulaResult]
+    # What its PR stands on (`domain/pr_matching`); None when it has no PR.
+    pr_basis: PrBasis | None = None
     # Local period label (ISO, sortable) -> kWh. Absent label = no readings.
     breakdown: dict[str, float] = field(default_factory=dict)
 
@@ -297,6 +300,12 @@ def assemble(
         energy = plant_energy(meters, precedence, plant_ac_capacity_kw=ac or None)
         irradiation = plant_irradiation(stations, (live_by_plant or {}).get(plant.id, []))
         notes.extend(irradiation_notes(irradiation, plant.code if len(plants) > 1 else None))
+        # PR over the periods both sides measured (`domain/pr_matching`).
+        pr = plant_pr(energy, irradiation, dc)
+        if pr.basis is not None and (note := pr_basis_note(
+                f"{plant.code}'s PR" if len(plants) > 1 else "PR", pr.basis,
+                ZoneInfo(plant.timezone))):
+            notes.append(note)
 
         if energy.value is None:
             reason = energy.undefined_reason
@@ -312,15 +321,14 @@ def assemble(
             kpis = {
                 "specific_yield": specific_yield(energy.value, dc),
                 "cuf": cuf(energy.value, ac, hours),
-                "performance_ratio": performance_ratio(
-                    energy.value, (irradiation.value or 0.0) * 1000.0, dc),
+                "performance_ratio": pr.result,
                 "co2_avoided_kg": co2_avoided_kg(energy.value, plant.grid_factor),
             }
         tz = ZoneInfo(plant.timezone)
         report = PlantReport(
             plant_id=plant.id, code=plant.code, name=plant.name,
             timezone=plant.timezone, dc_kwp=dc, ac_kw=ac,
-            energy=energy, irradiation=irradiation, kpis=kpis,
+            energy=energy, irradiation=irradiation, kpis=kpis, pr_basis=pr.basis,
             breakdown=(bucket_steps(energy.steps, _label_fn(granularity, tz))
                        if granularity in ("hour", "day") else {}),
         )
@@ -374,14 +382,18 @@ def assemble(
         data.kpis["specific_yield"] = _render(specific_yield(total, dc_total))
         data.kpis["cuf"] = _render(cuf(total, ac_total, hours))
         # PR pooled, not averaged: total energy over total reference yield,
-        # across the Plants whose PR is defined (they had sun and a station).
-        with_pr = [p for p in answered if p.kpis["performance_ratio"].value is not None]
+        # across the Plants whose PR is defined (they had sun and a station),
+        # each over the periods its own energy and sunlight were both measured.
+        with_pr = [p for p in answered
+                   if p.kpis["performance_ratio"].value is not None and p.pr_basis is not None]
         if with_pr:
             dc_pr = sum(p.dc_kwp for p in with_pr)
             weighted_irr = sum(
-                p.dc_kwp * (p.irradiation.value or 0.0) * 1000.0 for p in with_pr) / dc_pr
+                p.dc_kwp * (p.pr_basis.sunlight_kwh_m2 if p.pr_basis else 0.0) * 1000.0
+                for p in with_pr) / dc_pr
             data.kpis["performance_ratio"] = _render(performance_ratio(
-                sum(p.energy.value or 0.0 for p in with_pr), weighted_irr, dc_pr))
+                sum(p.pr_basis.energy_kwh if p.pr_basis else 0.0 for p in with_pr),
+                weighted_irr, dc_pr))
         else:
             data.kpis["performance_ratio"] = _render(answered[0].kpis["performance_ratio"])
         co2_values = [p.kpis["co2_avoided_kg"] for p in answered]

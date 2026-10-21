@@ -36,6 +36,8 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Final
 
+from solarcms.domain.assumptions import FORMULA_DIVISOR_FLOOR
+
 # Aggregate prefixes a plant-scope formula may use: `SUM.ENERGY_TODAY`. Kept
 # explicit so a typo is a load-time error rather than a silently missing input.
 PLANT_AGGREGATES: Final[frozenset[str]] = frozenset({"SUM", "AVG", "MIN", "MAX", "COUNT"})
@@ -177,10 +179,11 @@ def _apply(op: ast.operator, left: float, right: float) -> float | None:
     if isinstance(op, ast.Div):
         # Division by zero is the normal night-time case for PR (no irradiation)
         # and for DC POWER (an idle Inverter reports 0% efficiency). Undefined,
-        # not an exception and not infinity.
-        return None if right == 0 else left / right
+        # not an exception and not infinity — and so is division by float noise
+        # standing for zero (`FORMULA_DIVISOR_FLOOR`), which gave PR at 1E+42%.
+        return None if abs(right) < FORMULA_DIVISOR_FLOOR else left / right
     if isinstance(op, ast.Mod):
-        return None if right == 0 else left % right
+        return None if abs(right) < FORMULA_DIVISOR_FLOOR else left % right
     if isinstance(op, ast.Pow):
         try:
             result = float(left**right)

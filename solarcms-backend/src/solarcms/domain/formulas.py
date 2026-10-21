@@ -23,6 +23,7 @@ from solarcms.domain.assumptions import (
     CUF_VARIANT,
     DEFAULT_GRID_EMISSION_FACTOR_KG_PER_KWH,
     G_REF_W_PER_M2,
+    PR_MIN_IRRADIATION_WH_PER_M2,
     PR_VARIANT,
 )
 
@@ -78,6 +79,11 @@ def performance_ratio(
         # At night this is the normal case, not an error. PR is undefined with no
         # irradiation, and reporting 0 would drag every daily average down.
         return FormulaResult(None, PR_VARIANT, "no irradiation in period")
+    if irradiation_wh_m2 < PR_MIN_IRRADIATION_WH_PER_M2:
+        # Float noise standing for zero, or so little sun that the meter's
+        # resolution is most of the figure. Refusing only an exact zero divided
+        # OASIS_2MW's day by 9.75E-42 and printed 1.02E+42%.
+        return FormulaResult(None, PR_VARIANT, "too little sunlight recorded in period")
     reference_yield = irradiation_wh_m2 / G_REF_W_PER_M2
     return FormulaResult((energy_kwh / dc_capacity_kwp) / reference_yield, PR_VARIANT)
 

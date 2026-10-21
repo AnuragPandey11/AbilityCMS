@@ -21,6 +21,7 @@ from solarcms.domain.irradiation import (
     integrate_irradiance,
     irradiation_by_label,
     irradiation_notes,
+    live_hold,
     not_measuring,
     plant_irradiation,
 )
@@ -73,6 +74,48 @@ class TestIntegrateIrradiance:
             IrradianceBucket(DAY1 + 5 * HOUR, 500.0),
         ], HOUR, LATE)
         assert abs(result.total - 1.0) < 1e-9
+
+    def test_a_reading_is_held_across_the_stations_own_spacing(self) -> None:
+        # GHI stored once a minute from a station sending every 86 s leaves
+        # minutes empty by design; they were not dark.
+        minute = timedelta(minutes=1)
+        buckets = [IrradianceBucket(DAY1 + m * minute, 600.0) for m in (0, 2, 3, 5)]
+        held = integrate_irradiance(buckets, minute, LATE, hold=2 * minute)
+        assert abs(held.total - 0.6 * 6 / 60) < 1e-9
+        assert held.steps[0].at == DAY1 + 2 * minute
+        unheld = integrate_irradiance(buckets, minute, LATE)
+        assert abs(unheld.total - 0.6 * 4 / 60) < 1e-9
+
+    def test_a_gap_wider_than_the_hold_stays_a_gap(self) -> None:
+        minute = timedelta(minutes=1)
+        result = integrate_irradiance(
+            [IrradianceBucket(DAY1, 600.0), IrradianceBucket(DAY1 + 10 * minute, 600.0)],
+            minute, LATE, hold=2 * minute)
+        assert abs(result.total - 0.6 * 2 / 60) < 1e-9
+
+    def test_nothing_is_held_into_a_flagged_bucket(self) -> None:
+        # SPINNING_AND_GENERAL_MILLS' stations send 6,550 at night: flagged,
+        # not data, so the reading before it is not carried into it either.
+        minute = timedelta(minutes=1)
+        result = integrate_irradiance(
+            [IrradianceBucket(DAY1, 600.0),
+             IrradianceBucket(DAY1 + 2 * minute, 65_509.0, good=False)],
+            minute, LATE, hold=2 * minute)
+        assert abs(result.total - 0.6 / 60) < 1e-9
+
+    def test_the_hold_covers_a_stations_own_spacing_and_never_a_missing_bucket(self) -> None:
+        minute = timedelta(minutes=1)
+        every_minute = [DAY1 + m * minute for m in range(60)]
+        # GHI kept once a minute from a station sending every 86 s: one empty
+        # minute now and then is by design.
+        assert live_hold(every_minute, minute, 86.0) == timedelta(seconds=112)
+        # Stored every five minutes (before 14 Oct 2026): four empty minutes.
+        every_five = [DAY1 + m * minute for m in range(0, 60, 5)]
+        assert live_hold(every_five, minute, 60.0) == timedelta(minutes=9)
+        # Hourly buckets of a station sending every minute: a missing hour is
+        # an hour nobody measured, never held.
+        hourly = [DAY1 + h * HOUR for h in (0, 1, 2, 4, 5)]
+        assert live_hold(hourly, HOUR, 60.0) == timedelta(0)
 
     def test_the_bucket_still_filling_spans_only_up_to_now(self) -> None:
         now = DAY1 + timedelta(minutes=15)

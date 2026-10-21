@@ -316,6 +316,50 @@ export const IrradiationSchema = z.object({
 export type Irradiation = z.infer<typeof IrradiationSchema>;
 
 /**
+ * What PR stands on (`domain/pr_matching`, ⚠ PROPOSED 21 Oct 2026). PR counts
+ * only the 15-minute periods in which both the energy and the sunlight were
+ * measured, and sets aside a station whose sunlight is too little for the
+ * Plant's output — so whenever anything was left out, PR is *not*
+ * `energy_kwh / irradiation_kwh_m2` of the whole response, and a screen showing
+ * PR says how much of the energy it stands on.
+ *
+ * `left_out` holds the runs worth naming (largest first, at most ten);
+ * `left_out_count` is every run.
+ */
+export const PrLeftOutSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  reason: z.string(),
+  words: z.string(),
+  energy_kwh: numeric(),
+  irradiation_kwh_m2: nullableNumeric(),
+  devices: z.array(z.string()).optional().default([]),
+});
+export type PrLeftOut = z.infer<typeof PrLeftOutSchema>;
+
+export const PrStationSetAsideSchema = z.object({
+  device_id: z.number(),
+  device_code: z.string(),
+  hours: numeric(),
+  energy_kwh: numeric(),
+  from: z.string(),
+  to: z.string(),
+  /** It read no daylight at all (a dead sensor); otherwise some, too little —
+   *  which a DC capacity or meter on record that is wrong looks exactly like. */
+  reads_dark: z.boolean().optional().default(true),
+});
+
+export const PrBasisSchema = z.object({
+  energy_kwh: numeric(),
+  irradiation_kwh_m2: numeric(),
+  energy_share: nullableNumeric(),
+  left_out: z.array(PrLeftOutSchema).optional().default([]),
+  left_out_count: z.number().optional().default(0),
+  stations_set_aside: z.array(PrStationSetAsideSchema).optional().default([]),
+});
+export type PrBasis = z.infer<typeof PrBasisSchema>;
+
+/**
  * PR and CUF over the previous period up to the same point — yesterday to
  * this time of day, last month to this date — computed exactly as the current
  * figures are. Only present with `compare=true`, and null for lifetime or a
@@ -335,6 +379,7 @@ export const KpiComparisonSchema = z.object({
   measured_since: z.string().nullable().optional().catch(null),
   source_tier: z.string().nullable().optional().catch(null),
   performance_ratio: KpiFigureSchema,
+  pr_basis: PrBasisSchema.nullable().optional().catch(null),
   cuf: KpiFigureSchema,
   irradiation_kwh_m2: IrradiationSchema.nullable().optional().catch(null),
   coverage: KpiCoverageSchema.nullable().catch(null),
@@ -352,6 +397,8 @@ export const PlantKpisSchema = z.object({
   computed_at: z.string().nullable().optional(),
   energy_kwh: numeric(),
   performance_ratio: KpiFigureSchema,
+  /** What PR stands on; see `PrBasisSchema`. Optional for an older server. */
+  pr_basis: PrBasisSchema.nullable().optional().catch(null),
   cuf: KpiFigureSchema,
   availability: KpiFigureSchema,
   co2_avoided_kg: KpiFigureSchema,

@@ -98,6 +98,17 @@ def test_division_by_zero_is_undefined() -> None:
     assert evaluate("A / B", {"A": 10.0, "B": 0.0}) is None
 
 
+def test_division_by_float_noise_is_undefined() -> None:
+    # OASIS_2MW's station sends GHI 2.530885E-41 for zero; the client's PR
+    # formula divided a day's energy by it.
+    formula = DERIVED_TAG_FORMULAS["PERFORMANCE_RATIO"][0]
+    inputs = {"PLANT_ENERGY_TODAY": 4_240.0, "AVG.GHI_CUMULATIVE": 2.530885e-41,
+              "DC_CAPACITY": 2_000.0}
+    assert evaluate(formula, inputs, scope="plant") is None
+    assert evaluate("A / B", {"A": 0.0, "B": -1.5e-17}) is None
+    assert evaluate("A % B", {"A": 1.0, "B": 1e-12}) is None
+
+
 def test_published_value_beats_a_computed_one() -> None:
     """A meter that genuinely transmits AVG VOLTAGE keeps its own figure.
 
