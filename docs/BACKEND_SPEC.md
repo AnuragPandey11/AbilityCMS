@@ -734,6 +734,17 @@ def co2_avoided_kg(energy_kwh: float, grid_factor_kg_per_kwh: float = 0.82) -> f
 | `IRRADIATION_JUDGED_KWH_PER_M2` | 0.2 | Daily totals are judged only once the brightest reaches this |
 | `IRRADIATION_STATION_SPREAD` | 0.10 | Stations used further apart than this share of their mean are flagged |
 
+**PR from the periods both sides measured (⚠ PROPOSED, MASTER v4.9).** `domain/pr_matching.py`, constants in `domain/assumptions.py`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `PR_MATCH_PERIOD_MINUTES` | 15 | A period counts towards PR only when the energy and a station both covered it whole |
+| `PR_SPLIT_MAX_MINUTES` | 120 | A register step up to this long is shared between periods by time; a longer one only as a whole |
+| `PR_PERIOD_CEILING` | 2.0 | In a period, a station whose sunlight puts PR above this is set aside |
+| `PR_LEFT_OUT_NOTED_SHARE` | 0.01 | A stretch left out, or a station set aside, is named when it holds this share of the energy or sunlight |
+| `PR_MIN_IRRADIATION_WH_PER_M2` | 10 | Less sunlight than this over the period is none |
+| `FORMULA_DIVISOR_FLOOR` | 1e-9 | A calculated Tag's divisor below this is float noise for zero |
+
 ### 12.3 Alarm thresholds ⚠ ASSUMED
 
 OPEN-14 — the client has decades of domain knowledge here; anything invented is worse. Seed data only:

@@ -191,6 +191,8 @@ export interface DialComparison {
   coverage: KpiCoverage | null | undefined;
   /** The window it covers, in the Plant's time, for the tooltip. */
   span?: string;
+  /** What the previous figure stands on, when not all of its period — "from 1% of the energy". */
+  basis?: string | null;
 }
 
 export function RatioDial({
@@ -360,7 +362,8 @@ function ComparisonLine({ comparison, label }: { comparison: DialComparison; lab
         ? implausibleRatioReason(value, `${label} for the comparison period`)
         : `${label} ${comparison.label.toLowerCase()}${comparison.span ? `, ${comparison.span}` : ""}: ` +
           `${formatRatioAsPercent(value)}. The same formula over the same share of the period, so the two can be compared.` +
-          (partial ? ` Only ${partial} over that span, so the comparison is only as good as that.` : "");
+          (partial ? ` Only ${partial} over that span, so the comparison is only as good as that.` : "") +
+          (comparison.basis ? ` It is worked out ${comparison.basis}: the rest had no matching readings.` : "");
   return (
     <div className="tile-note flex flex-col items-center text-sm font-semibold leading-snug text-ink-muted" title={title}>
       <span className="inline-flex flex-wrap items-center justify-center gap-x-1.5">
@@ -375,6 +378,7 @@ function ComparisonLine({ comparison, label }: { comparison: DialComparison; lab
       {/* Its own line: in a fifth of the row it wraps anyway, and a line that
           opens on a separator reads as a fragment. */}
       {partial ? <span className="text-ink-faint">at {partial}</span> : null}
+      {comparison.basis && value !== null ? <span className="text-warn">{comparison.basis}</span> : null}
     </div>
   );
 }

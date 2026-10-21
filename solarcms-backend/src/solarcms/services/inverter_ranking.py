@@ -8,7 +8,8 @@ rupees — the stops cost, for the Inverter Monitoring screen. The rules:
   Inverter Report counts it, so the two never disagree about the same day.
 * **PR** is that energy over the Plant's irradiation (the same stations and
   rule as the Plant's own PR, `irradiation.plant_irradiation`) and this Inverter's
-  own DC size. No size, no PR — never estimated (the user's choice).
+  own DC size, over the periods both were measured (`domain/pr_matching`). No
+  size, no PR — never estimated (the user's choice).
 * **Availability, downtime, no data and energy lost** are
   `domain/inverter_ranking.fold` over one-minute AC output (⚠ PROPOSED).
 * **Loss** is energy lost times the Plant's tariff, where one is recorded.
@@ -43,11 +44,11 @@ from solarcms.domain.assumptions import (
     PLANT_IRRADIATION_SOURCE,
     PLANT_OPERATING_SOURCE,
 )
-from solarcms.domain.counters import plant_energy
-from solarcms.domain.formulas import performance_ratio
+from solarcms.domain.counters import PlantEnergy, plant_energy
 from solarcms.domain.inverter_ranking import Folded, InverterMinutes, fold
 from solarcms.domain.irradiation import PlantIrradiation, plant_irradiation
 from solarcms.domain.periods import ReportWindow, report_window
+from solarcms.domain.pr_matching import plant_pr
 from solarcms.domain.tiering import Tier, select_tier
 from solarcms.services import scope
 from solarcms.services.energy import (
@@ -244,9 +245,10 @@ def _floor_minute(at: datetime) -> datetime:
 async def _energy(
     session: AsyncSession, plant_id: int, window: ReportWindow, now: datetime,
     ac_kw: float | None,
-) -> tuple[dict[int, tuple[float, int]], PlantIrradiation, Tier]:
-    """Each Inverter's generation (kWh, refused steps) and the Plant's
-    irradiation — the Inverter Report's and the Plant PR's own rules."""
+) -> tuple[dict[int, tuple[float, int]], PlantEnergy, PlantIrradiation, Tier]:
+    """Each Inverter's generation (kWh, refused steps), the registers it came
+    from, and the Plant's irradiation — the Inverter Report's and the Plant
+    PR's own rules."""
     tier = select_tier(window.start, window.end, now, finest=Tier.AGG_1M)
     # Irradiation never from the daily tier: its register restarts at the
     # Plant's midnight and a daily bucket is cut at UTC's (services/kpis).
@@ -268,7 +270,7 @@ async def _energy(
         item.series.device_id: (item.integral.total, len(item.integral.anomalies))
         for item in energy.devices
     }
-    return generation, plant_irradiation(stations, live), tier
+    return generation, energy, plant_irradiation(stations, live), tier
 
 
 async def _compute(
@@ -279,7 +281,7 @@ async def _compute(
     span = max(0, math.ceil((window.end - first) / MINUTE))
     minutes, flagged = await _minutes(session, inverters, window)
     planned = await _planned(session, plant.id, window)
-    generation, sun, tier = await _energy(
+    generation, energy, sun, tier = await _energy(
         session, plant.id, window, now, _float(plant.ac_capacity_kw))
     irradiation, irradiation_reason = sun.value, sun.undefined_reason
 
@@ -312,7 +314,9 @@ async def _compute(
         elif irradiation is None:
             pr_reason = irradiation_reason or "no irradiation was measured"
         else:
-            pr = performance_ratio(energy_kwh, irradiation * 1000.0, inv.dc_kwp)
+            # Over the periods this Inverter and the stations both measured,
+            # as the Plant's own PR is (`domain/pr_matching`).
+            pr = plant_pr(energy, sun, inv.dc_kwp, device_id=inv.id).result
             pr_value, pr_reason = pr.value, pr.undefined_reason
 
         time_ = folded.get(inv.id)

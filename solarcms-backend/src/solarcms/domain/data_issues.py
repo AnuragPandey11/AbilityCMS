@@ -44,6 +44,7 @@ from solarcms.domain.assumptions import (
     DATA_ISSUE_INTERVAL_MIN_GAPS,
     DATA_ISSUE_INTERVAL_SLOWER,
     DATA_ISSUE_STRING_CURRENT_A,
+    PR_PERIOD_CEILING,
     QUALITY_GOOD,
     QUALITY_OUT_OF_RANGE,
     alias_for,
@@ -213,6 +214,19 @@ class ReplayBurst:
 
 
 @dataclass(frozen=True, slots=True)
+class SunlightSetAside:
+    """A weather station whose sunlight today was too little for the Plant's
+    output, so PR set it aside (`domain/pr_matching`)."""
+
+    device_id: int
+    device_code: str
+    hours: float
+    energy_kwh: float
+    # It read no daylight at all; otherwise it read some, too little.
+    reads_dark: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class PlantFacts:
     plant_id: int
     plant_code: str
@@ -224,6 +238,7 @@ class PlantFacts:
     # "nothing unregistered" must never be claimed to someone who could not look.
     unregistered: tuple[UnregisteredTopic, ...] | None
     replay_bursts: tuple[ReplayBurst, ...] = ()
+    sunlight_set_aside: tuple[SunlightSetAside, ...] = ()
     device_type_codes: frozenset[str] = frozenset()
     tag_codes: frozenset[str] = frozenset()
 
@@ -873,6 +888,37 @@ def _inverter_issues(device: DeviceFact) -> Iterable[DataIssue]:
 
 
 def _plant_issues(plant: PlantFacts) -> Iterable[DataIssue]:
+    for station in plant.sunlight_set_aside:
+        # Keyed on the station alone: acknowledged once, it stays known for
+        # as long as the station goes on reading low.
+        # Reading no daylight at all is the station. Reading some, too
+        # little, may as well be the output's side: a DC capacity on record
+        # that is too low, or a meter counted as solar that measures more —
+        # the station is never named as the only suspect then.
+        causes = (
+            "A dead sensor, or one sending near-zero values for zero. Check the mapping in "
+            "Tag Mapping; the sensor itself is the client's to fix."
+            if station.reads_dark else
+            "A dirty, shaded or wrongly scaled sensor — or the Plant's DC capacity on record "
+            "is too low, or a meter counted as the solar output measures more than it "
+            "(Tag Mapping → Device settings, \"Measures the solar output\")."
+        )
+        yield DataIssue(
+            key=f"sunlight_too_low:{station.device_id}",
+            kind="sunlight_too_low", category="data_wrong",
+            title=(f"{station.device_code} reads no sunlight while the Plant generates"
+                   if station.reads_dark else
+                   f"{station.device_code}'s sunlight is too low for the Plant's output"),
+            detail=(
+                f"For {station.hours:.1f} h today the Plant made more than "
+                f"{PR_PERIOD_CEILING:g} times what {station.device_code}'s sunlight could give "
+                "a perfect Plant, so its sunlight is set aside for those hours when Performance "
+                f"Ratio is worked out. {causes}"
+            ),
+            device_id=station.device_id, device_code=station.device_code,
+            facts={"hours": station.hours, "energy_kwh": station.energy_kwh,
+                   "reads_dark": station.reads_dark},
+        )
     if plant.dc_capacity_kwp is None or plant.ac_capacity_kw is None:
         missing = [
             name for name, value in (("DC capacity", plant.dc_capacity_kwp),

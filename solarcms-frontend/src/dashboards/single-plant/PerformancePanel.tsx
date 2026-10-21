@@ -31,7 +31,7 @@
  */
 
 import type { ReactNode } from "react";
-import type { Irradiation, KpiFigure, KpiPeriod, PlantKpis } from "@/api/schemas";
+import type { Irradiation, KpiFigure, KpiPeriod, PlantKpis, PrBasis } from "@/api/schemas";
 import { RatioDial, type DialComparison } from "@/components/charts/RatioDial";
 import { RatioMeter } from "@/components/charts/RatioMeter";
 import { RailTile } from "@/components/charts/RailTile";
@@ -53,7 +53,7 @@ import {
   variantWords,
 } from "@/format/value";
 import { formatDate, formatDateTime } from "@/format/datetime";
-import { stationSourceWords, sunlightNote } from "@/format/sunlight";
+import { combineNotes, prBasisNote, spanWords, stationSourceWords, sunlightNote } from "@/format/sunlight";
 
 /**
  * Where the figures begin, in the Plant's own calendar — so "month" reads as
@@ -168,17 +168,22 @@ function footnote(
 }
 
 /**
- * PR's footnote, and — only when the sunlight was not simply each station's
- * own daily total — one more line saying what it was instead. A PR divided by
- * live GHI we added up, or by one station because the other read nothing, is a
- * different claim from the one the dial normally makes.
+ * PR's footnote, and — only when PR left part of the period out, or the
+ * sunlight was not simply each station's own daily total — one more line
+ * saying so. A PR from the morning alone, or divided by live GHI we added up,
+ * or by one station because the other read nothing, is a different claim from
+ * the one the dial normally makes.
  */
 function prFootnote(
   kpis: PlantKpis,
   period: KpiPeriod,
   measuredLater: boolean,
+  timeZone: string | undefined,
 ): ReactNode {
-  const note = sunlightNote(kpis.irradiation_kwh_m2);
+  const note = combineNotes(
+    prBasisNote(kpis.pr_basis, timeZone),
+    sunlightNote(kpis.irradiation_kwh_m2),
+  );
   if (!note) return footnote(kpis.performance_ratio, period, measuredLater);
   return (
     <>
@@ -237,6 +242,50 @@ function SunlightDetail({ irradiation }: { irradiation: Irradiation | null | und
 }
 
 /**
+ * The drawer's account of what PR stands on, when it is not the whole period:
+ * how much of the energy, the stretches left out, and any station set aside.
+ */
+function PrBasisDetail({
+  basis,
+  timeZone,
+}: {
+  basis: PrBasis | null | undefined;
+  timeZone?: string;
+}): JSX.Element | null {
+  const note = prBasisNote(basis, timeZone);
+  if (!basis || !note) return null;
+  const share = basis.energy_share;
+  return (
+    <div className="space-y-1 border-b border-line-soft py-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-xs text-ink">PR worked out from</span>
+        <span className="shrink-0 text-sm tabular-nums text-warn">
+          {share === null ? UNDEFINED_DISPLAY : `${Math.round(share * 100)}% of the energy`}
+        </span>
+      </div>
+      <ul className="space-y-0.5">
+        {basis.left_out.map((run) => (
+          <li
+            key={`${run.from}-${run.reason}`}
+            className="flex items-baseline justify-between gap-3 text-[10px] leading-snug text-ink-faint"
+          >
+            <span className="min-w-0 truncate">
+              {spanWords(run.from, run.to, timeZone)} · {run.words}
+            </span>
+            {run.energy_kwh > 0 ? (
+              <span className="shrink-0 font-mono tabular-nums">
+                {formatNumber(run.energy_kwh, { digits: 0 })} kWh
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      <p className="text-[10px] leading-snug text-warn">{note.title}</p>
+    </div>
+  );
+}
+
+/**
  * The comparison one dial draws: the previous period's figure to the same
  * point, or — where the period has one but the Plant cannot answer it — an
  * empty comparison that says so, rather than a line that vanishes and leaves
@@ -262,11 +311,17 @@ function comparisonFor(
       coverage: null,
     };
   }
+  // A previous PR from part of its period says so, as today's does.
+  const share = key === "performance_ratio" ? previous.pr_basis?.energy_share ?? null : null;
   return {
     label,
     figure: previous[key],
     coverage: previous.coverage,
     span: `${formatDateTime(previous.period_start, timeZone)} to ${formatDateTime(previous.period_end, timeZone)}`,
+    basis:
+      share !== null && (previous.pr_basis?.left_out.length ?? 0) > 0
+        ? `from ${Math.round(share * 100)}% of the energy`
+        : null,
   };
 }
 
@@ -333,7 +388,7 @@ export function PerformanceTiles({
             comparison={comparisonFor(kpis, "performance_ratio", period, timeZone)}
           />
         }
-        footnote={prFootnote(kpis, period, measuredLater)}
+        footnote={prFootnote(kpis, period, measuredLater, timeZone)}
       />
       <RailTile
         dense
@@ -419,9 +474,12 @@ export function PerformanceDetailsButton({
 export function PerformancePanel({
   kpis,
   period,
+  timeZone,
 }: {
   kpis: PlantKpis | undefined;
   period: string;
+  /** The Plant's zone, for the stretches PR left out. */
+  timeZone?: string;
 }): JSX.Element {
   return (
     <div className="space-y-4">
@@ -441,6 +499,7 @@ export function PerformancePanel({
           note="The period's energy over the Plant's DC capacity."
         />
         <FigureRow label="Performance ratio" figure={kpis?.performance_ratio} kind="ratio" />
+        <PrBasisDetail basis={kpis?.pr_basis} timeZone={timeZone} />
         <SunlightDetail irradiation={kpis?.irradiation_kwh_m2} />
         <FigureRow label="CUF" figure={kpis?.cuf} kind="ratio" />
         <FigureRow

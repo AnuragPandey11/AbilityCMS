@@ -73,7 +73,6 @@ from solarcms.domain.formulas import (
     FormulaResult,
     availability,
     cuf,
-    performance_ratio,
     specific_yield,
 )
 from solarcms.domain.health_logic import uptime_seconds_from_events
@@ -85,6 +84,12 @@ from solarcms.domain.irradiation import (
     plant_irradiation,
 )
 from solarcms.domain.periods import ReportWindow, local_midnight
+from solarcms.domain.pr_matching import (
+    matched_performance_ratio,
+    plant_periods,
+    pr_basis_note,
+    summarise_by_label,
+)
 from solarcms.domain.tiering import TIERS, Tier, bucket_start, select_tier
 from solarcms.services import scope
 from solarcms.services.energy import read_counter_series, read_live_irradiance
@@ -948,6 +953,12 @@ def build_monthly_plant(
     imported_by_month = split_steps(imports.steps, _month_key(zone))
     by_month, import_by_month = made_by_month.totals, imported_by_month.totals
     irr_by_month = _station_means(irradiation, _month_key(zone))
+    # PR over the periods both sides measured, month by month
+    # (`domain/pr_matching`) — the Plant's own PR rule.
+    pr_by_month = summarise_by_label(
+        plant_periods(energy, irradiation, dc)
+        if energy.value is not None and irradiation.value is not None else (),
+        _month_key(zone))
     power_pair, power = pick_source(stats, PLANT_POWER_SOURCE_PRECEDENCE)
 
     # CUF divides by the hours the Plant could be measured in: a Plant first
@@ -974,8 +985,9 @@ def build_monthly_plant(
         if made is not None:
             yield_value = specific_yield(made, dc).value
             cuf_value = cuf(made, plant.ac_kw or 0.0, hours).value
-            if irr is not None:
-                pr = performance_ratio(made, irr * 1000.0, dc).value
+            basis = pr_by_month.get(month)
+            if irr is not None and basis is not None:
+                pr = matched_performance_ratio(basis, dc).value
         index = len(rows)
         for key, ratio in (("performance_ratio", pr), ("cuf", cuf_value)):
             # Shown unaltered and flagged, never clamped (Guardrail 33).
@@ -1021,9 +1033,12 @@ def build_monthly_plant(
          if irradiation.value is not None else
          "Irradiation is not known — no Weather Station reported — so PR is not either."),
         *irradiation_notes(irradiation),
-        "PR is energy over DC capacity, over irradiation in kWh/m²; CUF is energy over AC "
-        "capacity times the hours the Plant could be measured in. Both are provisional pending "
+        "PR is energy over DC capacity, over irradiation in kWh/m², counting only the "
+        "15-minute periods in which both were measured; CUF is energy over AC capacity "
+        "times the hours the Plant could be measured in. Both are provisional pending "
         "the client's formulas (OPEN-16).",
+        *(note for month, basis in sorted(pr_by_month.items())
+          if (note := pr_basis_note(f"PR for {month}", basis, zone))),
     ]
     if power_pair:
         notes.append(_coverage_note(

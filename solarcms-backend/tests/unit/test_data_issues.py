@@ -13,6 +13,7 @@ from solarcms.domain.data_issues import (
     OwnTopicFact,
     PlantFacts,
     ReplayBurst,
+    SunlightSetAside,
     TagHealth,
     UnregisteredTopic,
     find_issues,
@@ -400,6 +401,28 @@ class TestPlant:
         assert issue.title.startswith("AC capacity")
         both = find_issues(plant(ac_capacity_kw=None, dc_capacity_kwp=None))
         assert both[0].title.startswith("DC capacity and AC capacity")
+
+    def test_a_station_reading_too_little_sunlight_for_the_output(self) -> None:
+        # OASIS_2MW, 21 Oct 2026: GHI 9.75E-42 while the Inverters made 4,240 kWh.
+        station = SunlightSetAside(device_id=30, device_code="WMS", hours=9.5,
+                                   energy_kwh=4_240.0)
+        [issue] = find_issues(plant(sunlight_set_aside=(station,)))
+        assert issue.kind == "sunlight_too_low"
+        assert issue.category == "data_wrong"
+        assert issue.key == "sunlight_too_low:30"
+        assert (issue.device_id, issue.device_code) == (30, "WMS")
+        assert issue.title == "WMS reads no sunlight while the Plant generates"
+        assert "9.5 h" in issue.detail
+        assert "DC capacity" not in issue.detail
+
+    def test_a_station_reading_some_sun_is_never_the_only_suspect(self) -> None:
+        # The DC capacity on record a third of the real array looks exactly
+        # like a station reading a third of the sun.
+        station = SunlightSetAside(device_id=30, device_code="WMS", hours=6.0,
+                                   energy_kwh=3_000.0, reads_dark=False)
+        [issue] = find_issues(plant(sunlight_set_aside=(station,)))
+        assert issue.title == "WMS's sunlight is too low for the Plant's output"
+        assert "DC capacity" in issue.detail and "Measures the solar output" in issue.detail
 
     def test_a_replayed_backlog(self) -> None:
         burst = ReplayBurst(minute=NOW, messages=196, topics=56)

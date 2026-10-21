@@ -27,12 +27,15 @@ moment (`not_measuring`, for the live tiles and the Plant KPI formula's inputs).
 
 from __future__ import annotations
 
+import statistics
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from itertools import pairwise
 from typing import Literal
 
 from solarcms.domain.assumptions import (
+    HEALTH_DEGRADED_MULTIPLIER,
     IRRADIANCE_DAYLIGHT_W_PER_M2,
     IRRADIANCE_DEAD_SHARE,
     IRRADIANCE_SUN_TAGS,
@@ -77,17 +80,49 @@ class LiveIrradiance:
     integral: CounterIntegral
 
 
+def live_hold(
+    starts: Sequence[datetime], width: timedelta, recorded_spacing_s: float,
+) -> timedelta:
+    """How long a station's live reading may be held across empty time to the
+    next one (`integrate_irradiance`): the empty time its own spacing leaves by
+    design, doubled as the health sweep allows a Device.
+
+    The spacing is the slower of how often it sends and how often its GHI is
+    kept, as recorded — or, where its buckets fall further apart than the
+    tier's width, the median gap between them: GHI stored every five minutes
+    before 14 Oct 2026 left four minutes in five empty, and only the data says
+    so now. ⚠ Only the time *between* buckets is ever held. On a tier as coarse
+    as the spacing — an hourly bucket of a station sending every minute — a
+    missing bucket is an hour nobody measured, and is never filled.
+    """
+    gaps = [(b - a).total_seconds() for a, b in pairwise(sorted(starts))]
+    median = statistics.median(gaps) if gaps else 0.0
+    width_s = width.total_seconds()
+    spacing_s = max(recorded_spacing_s, median if median > width_s else 0.0)
+    return timedelta(seconds=max(0.0, HEALTH_DEGRADED_MULTIPLIER * spacing_s - width_s))
+
+
 def integrate_irradiance(
     buckets: Sequence[IrradianceBucket], width: timedelta, now: datetime,
+    hold: timedelta = timedelta(0),
 ) -> CounterIntegral:
     """kWh/m² from W/m²: each bucket's mean times the time it spans.
 
-    One step per bucket, stamped at the bucket's end with `since` at its start,
-    so a per-day breakdown attributes it exactly as it does a register's step.
-    The bucket still filling spans only up to `now`.
+    One step per bucket, stamped at the end of the span it is credited with and
+    `since` at its start, so a per-day breakdown attributes it exactly as it
+    does a register's step. The bucket still filling spans only up to `now`.
 
-    Only buckets holding readings count: a missing bucket adds nothing rather
-    than being filled in (Guardrail 18), and a flagged one is not data. A
+    A bucket's mean is **held until the next bucket** when the empty time
+    between them is no longer than `hold` — the station's own spacing
+    (`live_hold`). GHI stored once a minute from a
+    station sending every 30 to 86 s leaves minutes empty by design, and they
+    were not dark: counted as nothing, they put SPINNING_AND_GENERAL_MILLS'
+    live sunlight for 9 Oct 2026 at 0.58 kWh/m² instead of 0.84, and its PR at
+    158.5% instead of 109.3% (measured 21 Oct). The same hold the operating
+    status gives each Device between its own readings.
+
+    Beyond `hold` a missing bucket adds nothing rather than being filled in
+    (Guardrail 18), and a flagged one is not data and is never held across. A
     negative mean — a sensor's dark offset — adds nothing either: irradiance
     below zero is not sunlight taken away.
 
@@ -99,10 +134,15 @@ def integrate_irradiance(
     """
     steps: list[CounterStep] = []
     total = 0.0
-    for bucket in sorted(buckets, key=lambda item: item.start):
+    ordered = sorted(buckets, key=lambda item: item.start)
+    for index, bucket in enumerate(ordered):
         if not bucket.good or bucket.mean_w_per_m2 is None:
             continue
         end = min(bucket.start + width, now)
+        following = ordered[index + 1] if index + 1 < len(ordered) else None
+        if (following is not None and following.good and following.mean_w_per_m2 is not None
+                and timedelta(0) < following.start - end <= hold):
+            end = min(following.start, now)
         hours = (end - bucket.start).total_seconds() / 3600.0
         if hours <= 0:
             continue

@@ -113,10 +113,20 @@ export function formatForTag(
 }
 
 /**
+ * Past this a percentage is shown as the bound. A ratio this far out is a fault
+ * in its inputs, and its digits say nothing the bound does not.
+ */
+export const PERCENT_SHOWN_LIMIT = 1000;
+
+/**
  * A ratio the backend expresses as 0..1, shown as a percentage.
  *
  * `null` stays `—`. PR is undefined at night; 0% drags every average down and
  * tells an operator their Plant failed.
+ *
+ * ⚠ Never in scientific notation. `toFixed` falls back to it from 1e21, and
+ * OASIS_2MW's PR — a day's energy over a weather station sending 9.75E-42 for
+ * zero — printed as `1.0227728597636426e+42%` across its dial (21 Oct 2026).
  */
 export function formatRatioAsPercent(
   value: number | null | undefined,
@@ -125,7 +135,11 @@ export function formatRatioAsPercent(
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return UNDEFINED_DISPLAY;
   }
-  return `${(value * 100).toFixed(digits)}%`;
+  const percent = value * 100;
+  const limit = PERCENT_SHOWN_LIMIT.toLocaleString("en-GB");
+  if (percent > PERCENT_SHOWN_LIMIT) return `>${limit}%`;
+  if (percent < -PERCENT_SHOWN_LIMIT) return `<−${limit}%`;
+  return `${percent.toFixed(digits)}%`;
 }
 
 /**

@@ -1475,7 +1475,7 @@ export function SinglePlantDashboard(): JSX.Element {
           />
         ) : null}
         {open?.kind === "performance" ? (
-          <PerformancePanel kpis={kpis} period={period} />
+          <PerformancePanel kpis={kpis} period={period} timeZone={timezone} />
         ) : null}
 
         {/* Everything behind Plant Status: how its derived rows were decided,
@@ -1516,7 +1516,7 @@ export function SinglePlantDashboard(): JSX.Element {
                   ))}
               </div>
             ) : null}
-            <PerformancePanel kpis={kpisTodayQuery.data} period="today" />
+            <PerformancePanel kpis={kpisTodayQuery.data} period="today" timeZone={timezone} />
           </div>
         ) : null}
 

@@ -21,14 +21,22 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solarcms.domain.assumptions import PLANT_IRRADIANCE_LIVE_SOURCE, QUALITY_GOOD
+from solarcms.domain.assumptions import (
+    PLANT_IRRADIANCE_LIVE_SOURCE,
+    QUALITY_GOOD,
+)
 from solarcms.domain.counters import (
     CounterBucket,
     DeviceSeries,
     PlantEnergy,
     samples_from_buckets,
 )
-from solarcms.domain.irradiation import IrradianceBucket, LiveIrradiance, integrate_irradiance
+from solarcms.domain.irradiation import (
+    IrradianceBucket,
+    LiveIrradiance,
+    integrate_irradiance,
+    live_hold,
+)
 from solarcms.domain.tiering import TIERS, Tier
 from solarcms.services import scope
 
@@ -174,11 +182,16 @@ async def read_live_irradiance(
         scope_sql.append("d.client_id = :client_id")
         params["client_id"] = client_id
 
+    # How far apart the station's readings are stored by design: the slower of
+    # how often it sends and how often its GHI is kept (`tags.min_interval_s`).
     rows = (await session.execute(text(f"""
         SELECT d.plant_id, d.id AS device_id, d.code AS device_code,
+               GREATEST(coalesce(d.expected_interval_s, 0), coalesce(t.min_interval_s, 0))
+                   AS spacing_s,
                a.bucket, a.avg_value, a.worst_quality
           FROM {tier.value}_v a
           JOIN devices d ON d.id = a.device_id
+          JOIN tags t    ON t.id = a.tag_id
          WHERE {" AND ".join(scope_sql)}
            AND a.bucket >= :start
            AND (CAST(:end AS timestamptz) IS NULL OR a.bucket < CAST(:end AS timestamptz))
@@ -187,10 +200,11 @@ async def read_live_irradiance(
 
     width = next(spec.resolution for spec in TIERS if spec.tier == tier)
     now = datetime.now(UTC)
-    grouped: dict[tuple[int, int], tuple[str, list[IrradianceBucket]]] = {}
+    grouped: dict[tuple[int, int], tuple[str, float, list[IrradianceBucket]]] = {}
     for row in rows:
-        _code, buckets = grouped.setdefault(
-            (row.plant_id, row.device_id), (row.device_code, []))
+        _code, _spacing, buckets = grouped.setdefault(
+            (row.plant_id, row.device_id),
+            (row.device_code, float(row.spacing_s or 0), []))
         buckets.append(IrradianceBucket(
             row.bucket,
             float(row.avg_value) if row.avg_value is not None else None,
@@ -199,10 +213,13 @@ async def read_live_irradiance(
         ))
 
     result: dict[int, list[LiveIrradiance]] = {}
-    for (plant_id, device_id), (device_code, buckets) in grouped.items():
+    for (plant_id, device_id), (device_code, spacing_s, buckets) in grouped.items():
+        # Each reading held to the next across the station's own spacing
+        # (`irradiation.live_hold`), as the operating status holds a Device's.
+        hold = live_hold([bucket.start for bucket in buckets], width, spacing_s)
         result.setdefault(plant_id, []).append(LiveIrradiance(
             device_id=device_id, device_code=device_code,
-            integral=integrate_irradiance(buckets, width, now)))
+            integral=integrate_irradiance(buckets, width, now, hold)))
     return result
 
 def split_by_pair(

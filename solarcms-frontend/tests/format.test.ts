@@ -39,6 +39,14 @@ describe("undefined is not zero (§4.3, Guardrail 3)", () => {
     expect(formatValue(0, "kW")).toBe("0.00 kW");
   });
 
+  it("never prints a ratio in scientific notation", () => {
+    // OASIS_2MW, 21 Oct 2026: a day's energy over 9.75E-42 of sunlight.
+    expect(formatRatioAsPercent(1.02e40)).toBe(">1,000%");
+    expect(formatRatioAsPercent(-3e30)).toBe("<−1,000%");
+    expect(formatRatioAsPercent(9.99)).toBe("999.0%");
+    expect(formatRatioAsPercent(2.643)).toBe("264.3%");
+  });
+
   it("treats NaN and Infinity as undefined rather than plotting them", () => {
     expect(formatValue(Number.NaN, "kW")).toBe(UNDEFINED_DISPLAY);
     expect(formatValue(Number.POSITIVE_INFINITY, "kW")).toBe(UNDEFINED_DISPLAY);

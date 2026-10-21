@@ -65,6 +65,10 @@ class CounterStep:
     at: datetime
     amount: float
     since: datetime | None = None
+    # A daily register restarted between the two readings, so `amount` is only
+    # what accrued since the restart — not since `since`. Across an outage that
+    # spans midnight, what accrued before it is unknown (`domain/pr_matching`).
+    reset: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,12 +126,14 @@ def integrate_counter(
             (current.at - previous.at).total_seconds(), COUNTER_STEP_MIN_ELAPSED_S)
         limit = None if max_rate_per_hour is None else max_rate_per_hour * elapsed_s / 3600.0
         delta = current.value - previous.value
+        reset = False
 
         if delta < 0:
             if resets_expected:
                 # The register restarted between the two readings; what it reads
                 # now is what has accrued since.
                 delta = current.value
+                reset = True
             elif rollover_maximum is not None:
                 delta = (rollover_maximum - previous.value) + current.value
             else:
@@ -143,7 +149,7 @@ def integrate_counter(
 
         # Zero steps are kept: an hour whose readings did not move made nothing,
         # which is a different fact from an hour with no readings at all.
-        steps.append(CounterStep(current.at, delta, previous.at))
+        steps.append(CounterStep(current.at, delta, previous.at, reset))
         total += delta
 
     return CounterIntegral(

@@ -9,8 +9,15 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { IrradiationSchema, ResolvedSlotSchema } from "@/api/schemas";
-import { stationSourceWords, sunlightNote, withheldWords } from "@/format/sunlight";
+import { IrradiationSchema, PlantKpisSchema, PrBasisSchema, ResolvedSlotSchema } from "@/api/schemas";
+import {
+  combineNotes,
+  prBasisNote,
+  spanWords,
+  stationSourceWords,
+  sunlightNote,
+  withheldWords,
+} from "@/format/sunlight";
 
 function station(
   code: string,
@@ -122,5 +129,99 @@ describe("withheld readings", () => {
     });
     expect(parsed.withheld).toBeUndefined();
     expect(withheldWords(parsed.withheld)).toBeNull();
+  });
+});
+
+describe("what PR stands on", () => {
+  // SPINNING_AND_GENERAL_MILLS, 21 Oct 2026: the station's live GHI had no
+  // afternoon, so PR left 11:30–20:00 out of both sides.
+  const zone = "Asia/Kolkata";
+  const now = new Date("2026-10-21T15:00:00Z");
+  const outage = PrBasisSchema.parse({
+    energy_kwh: "820.5",
+    irradiation_kwh_m2: 2.9,
+    energy_share: 0.41,
+    left_out: [
+      {
+        from: "2026-10-21T06:00:00Z",
+        to: "2026-10-21T14:30:00Z",
+        reason: "no_sunlight",
+        words: "no sunlight readings",
+        energy_kwh: 1180.2,
+        irradiation_kwh_m2: null,
+        devices: [],
+      },
+    ],
+    left_out_count: 1,
+    stations_set_aside: [],
+  });
+
+  it("names the share and the stretch, in the Plant's time", () => {
+    const note = prBasisNote(outage, zone, now);
+    expect(note?.text).toBe("PR from 41% of the energy · no sunlight readings 11:30–20:00");
+    expect(note?.title).toContain("1,180 kWh");
+    expect(note?.warn).toBe(true);
+  });
+
+  it("says nothing when PR stands on all the energy", () => {
+    expect(
+      prBasisNote(
+        PrBasisSchema.parse({ energy_kwh: 10, irradiation_kwh_m2: 1, energy_share: 1 }),
+        zone,
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("names a station set aside", () => {
+    const dead = PrBasisSchema.parse({
+      energy_kwh: 0,
+      irradiation_kwh_m2: 0,
+      energy_share: 0,
+      left_out: [],
+      stations_set_aside: [
+        { device_id: 30, device_code: "WMS", hours: 9.5, energy_kwh: 4240, from: "2026-10-21T01:00:00Z", to: "2026-10-21T10:30:00Z" },
+      ],
+    });
+    expect(prBasisNote(dead, zone, now)?.text).toBe("PR from 0% of the energy · WMS set aside");
+  });
+
+  it("dates a span on another day, and one across midnight", () => {
+    expect(spanWords("2026-10-19T06:00:00Z", "2026-10-19T14:30:00Z", zone, now)).toBe(
+      "19-10 11:30–20:00",
+    );
+    expect(spanWords("2026-10-20T15:00:00Z", "2026-10-21T02:00:00Z", zone, now)).toBe(
+      "20-10 20:30 – 21-10 07:30",
+    );
+    // Ending on the stroke of midnight is still the day it began.
+    expect(spanWords("2026-10-21T12:30:00Z", "2026-10-21T18:30:00Z", zone, now)).toBe(
+      "18:00–00:00",
+    );
+  });
+
+  it("joins with the sunlight note on one line", () => {
+    const joined = combineNotes(
+      prBasisNote(outage, zone, now),
+      { text: "Sunlight from live GHI", title: "Live.", warn: false },
+    );
+    expect(joined?.text).toBe(
+      "PR from 41% of the energy · no sunlight readings 11:30–20:00 · sunlight from live GHI",
+    );
+    expect(combineNotes(null, null)).toBeNull();
+  });
+
+  it("is optional on the KPI response, for an older server", () => {
+    const parsed = PlantKpisSchema.safeParse({
+      plant_id: 1,
+      period: "today",
+      energy_kwh: 1,
+      performance_ratio: { value: 0.8, variant: "ghi_uncorrected", undefined_reason: null },
+      cuf: { value: 0.2, variant: "x", undefined_reason: null },
+      availability: { value: 1, variant: "x", undefined_reason: null },
+      co2_avoided_kg: { value: 1, variant: "x", undefined_reason: null },
+      coverage: null,
+      assumptions_note: "",
+    });
+    expect(parsed.success).toBe(true);
   });
 });

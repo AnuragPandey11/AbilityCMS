@@ -1135,6 +1135,47 @@ PR_VARIANT: Final = "ghi_uncorrected"  # not temperature-corrected
 CUF_VARIANT: Final = "ac_capacity_calendar_hours"  # no exclusions
 AVAILABILITY_VARIANT: Final = "time_based_excluding_comms"
 
+# Less sunlight than this over a period is no sunlight to PR — twelve minutes at
+# `IRRADIANCE_DAYLIGHT_W_PER_M2`, below which the meter's own resolution swamps
+# the figure. ⚠ PROPOSED. OASIS_2MW's station sends GHI 9.75E-42 for zero, and
+# PR refused only an exact zero, so a day's energy was divided by almost nothing
+# and the dial printed 1.02E+42% (21 Oct 2026).
+PR_MIN_IRRADIATION_WH_PER_M2: Final = 10.0
+# A divisor smaller than this in a calculated Tag's formula is float noise
+# standing for zero (`P: "1.500121E-17"` from OASIS_2MW's meters, `GHI:
+# "2.530885E-41"`), and the quotient is undefined as it is for zero. No
+# quantity a formula divides by is that small in its own units.
+FORMULA_DIVISOR_FLOOR: Final = 1e-9
+
+# ── PR from the periods both sides measured — ⚠ PROPOSED (the user's request,
+# 21 Oct 2026; `domain/pr_matching`). An 8-hour outage left
+# SPINNING_AND_GENERAL_MILLS at PR 264.3% and UNIT1 at 177.2%: the meters'
+# registers stepped across the hole and counted the afternoon's energy, the
+# stations' live GHI had no afternoon to add up.
+#
+# The span a period counts or is left out in. Fine enough that an outage
+# costs PR only its own hours; coarse enough that a meter's register, stored
+# once a minute, moves several times inside one.
+PR_MATCH_PERIOD_MINUTES: Final = 15
+# A register step up to this long is shared between the periods it spans in
+# proportion to time; a longer one — a register stepping across an outage — is
+# known only as a whole. Two hours, because KULAR_GREEN's GHI register was read
+# 61 and 65 minutes apart on 9 Oct 2026: kept whole, those steps chained the
+# afternoon into one block, and a single refused glitch inside it (+0.57
+# kWh/m² in five minutes) threw out 2¼ hours instead of its own half-hour.
+# An outage is longer than this, and is never spread.
+PR_SPLIT_MAX_MINUTES: Final = 120
+# In a period, a station whose sunlight puts PR above this read too little for
+# what the Plant evidently received — dead, sending noise for zero, or scaled
+# wrong — and is set aside for that period. Twice a perfect Plant, so a flat
+# sensor on a tilted array (KULAR_GREEN reads 100.5% for a day), a cold bright
+# morning or a tracker at low sun is never mistaken for a fault.
+PR_PERIOD_CEILING: Final = 2.0
+# A stretch left out, or a station set aside, is named on screen and in Data
+# Issues only when it holds at least this share of the period's energy or
+# sunlight — dawn's few kWh over a register still at 0.00 are not news.
+PR_LEFT_OUT_NOTED_SHARE: Final = 0.01
+
 # The month a KPI "year" begins in, in the Plant's own calendar. Decided
 # 23 Sep 2026 by the development team: the calendar year, January to December —
 # not the Indian financial year (April to March), which the client may yet ask

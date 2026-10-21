@@ -13,7 +13,9 @@
  * exception, or people stop reading it.
  */
 
-import type { Irradiation, IrradiationStation, WithheldReading } from "@/api/schemas";
+import type { Irradiation, IrradiationStation, PrBasis, WithheldReading } from "@/api/schemas";
+import { formatDate, formatTime } from "@/format/datetime";
+import { formatNumber } from "@/format/value";
 
 export interface SunlightNote {
   /** One short line, for a footnote. */
@@ -66,6 +68,100 @@ export function sunlightNote(irradiation: Irradiation | null | undefined): Sunli
     text: text.charAt(0).toUpperCase() + text.slice(1),
     title: full.join(" "),
     warn: left.length > 0 || spread !== null,
+  };
+}
+
+/** `11:30–20:00` on one day, with the date unless it is the day `now` is in. */
+export function spanWords(
+  from: string,
+  to: string,
+  timeZone?: string,
+  now: Date = new Date(),
+): string {
+  const hhmm = (value: string): string => formatTime(value, timeZone).slice(0, 5);
+  const day = formatDate(from, timeZone);
+  // A span ending at midnight belongs to the day it began.
+  const endDay = formatDate(Date.parse(to) - 1, timeZone);
+  if (day === endDay) {
+    return day === formatDate(now, timeZone)
+      ? `${hhmm(from)}–${hhmm(to)}`
+      : `${day.slice(0, 5)} ${hhmm(from)}–${hhmm(to)}`;
+  }
+  return `${day.slice(0, 5)} ${hhmm(from)} – ${endDay.slice(0, 5)} ${hhmm(to)}`;
+}
+
+/**
+ * What a PR left out, in words — or null when it stands on all the energy.
+ *
+ * PR counts only the periods in which both the energy and the sunlight were
+ * measured, and sets aside a station reading too little for the output
+ * (`domain/pr_matching`, ⚠ proposed). A figure from part of the day is a
+ * different claim from one over all of it, so the dial says which.
+ */
+export function prBasisNote(
+  basis: PrBasis | null | undefined,
+  timeZone?: string,
+  now: Date = new Date(),
+): SunlightNote | null {
+  if (!basis) return null;
+  const left = basis.left_out;
+  const aside = basis.stations_set_aside;
+  if (left.length === 0 && aside.length === 0) return null;
+
+  const short: string[] = [];
+  const full: string[] = [
+    "PR counts only the 15-minute periods in which both the energy and the sunlight were " +
+      "measured, so a gap drops out of both rather than tilting the figure (proposed).",
+  ];
+  const share = basis.energy_share;
+  if (share !== null && share < 1) {
+    short.push(`PR from ${Math.round(share * 100)}% of the energy`);
+    full.push(`It stands on ${Math.round(share * 100)}% of the energy recorded.`);
+  }
+  const first = left[0];
+  if (first) {
+    short.push(`${first.words} ${spanWords(first.from, first.to, timeZone, now)}`);
+    full.push(
+      `Left out: ${left
+        .map(
+          (run) =>
+            `${spanWords(run.from, run.to, timeZone, now)}, ${run.words}` +
+            (run.energy_kwh > 0 ? ` (${formatNumber(run.energy_kwh, { digits: 0 })} kWh)` : ""),
+        )
+        .join("; ")}` +
+        (basis.left_out_count > left.length
+          ? `, and ${basis.left_out_count - left.length} shorter stretch(es).`
+          : "."),
+    );
+  }
+  if (aside.length > 0) {
+    short.push(`${list(aside.map((s) => s.device_code))} set aside`);
+    full.push(
+      ...aside.map(
+        (s) =>
+          `${s.device_code}'s sunlight was set aside for ${formatNumber(s.hours, { digits: 1 })} h ` +
+          (s.reads_dark
+            ? "as reading no sun while the Plant generated — a dead sensor (see Data Issues)."
+            : "as under half what the Plant's output needs — a dirty, shaded or wrongly scaled " +
+              "sensor, or a DC capacity or meter on record that is wrong (see Data Issues)."),
+      ),
+    );
+  }
+  const text = short.join(" · ");
+  return { text: text.charAt(0).toUpperCase() + text.slice(1), title: full.join(" "), warn: true };
+}
+
+/** Several notes as one line: the first's capital, every title, any warning. */
+export function combineNotes(...notes: (SunlightNote | null)[]): SunlightNote | null {
+  const present = notes.filter((note): note is SunlightNote => note !== null);
+  if (present.length === 0) return null;
+  const text = present
+    .map((note, index) => (index === 0 ? note.text : note.text.charAt(0).toLowerCase() + note.text.slice(1)))
+    .join(" · ");
+  return {
+    text,
+    title: present.map((note) => note.title).join(" "),
+    warn: present.some((note) => note.warn),
   };
 }
 
