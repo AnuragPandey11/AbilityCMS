@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+#
+# SolarCMS broker watchdog. Runs every minute on the data server (solarcms-data)
+# from solarcms-broker-watchdog.timer, as root.
+#
+# It restarts the broker (EMQX) when production has stored no message for
+# SILENT_AFTER_S seconds although Ability's broker is publishing and ingest is
+# connected to ours. That is the state of 21 Oct 2026: at 11:34 IST Ubuntu's
+# daily update restarted PostgreSQL and the network service on this server, a
+# broker connection came back carrying nothing, and no data reached production
+# for eight hours until EMQX was restarted by hand.
+#
+# It leaves the broker alone:
+#   - when it cannot read the database, since it then cannot tell;
+#   - when Ability's broker is silent too (nothing to copy). Messages the broker
+#     keeps and replays to every new listener (retained) do not count as
+#     publishing: a gateway's "offline" note would otherwise always look live;
+#   - when ingest is not connected: EMQX is then holding ingest's messages for
+#     it, and a restart would throw them away;
+#   - more than once every MIN_GAP_S seconds.
+#
+# Settings come from /etc/default/solarcms-broker-watchdog. Once Ability
+# publishes straight to our broker (runbook stage 13), set UPSTREAM_HOST= there
+# (empty) so the copy's source is no longer checked.
+#
+# What it decided is in: journalctl -u solarcms-broker-watchdog
+
+set -u
+cd /
+
+SILENT_AFTER_S="${SILENT_AFTER_S:-300}"
+MIN_GAP_S="${MIN_GAP_S:-1800}"
+UPSTREAM_HOST="${UPSTREAM_HOST-122.180.254.239}"
+UPSTREAM_PORT="${UPSTREAM_PORT:-1883}"
+UPSTREAM_TOPIC="${UPSTREAM_TOPIC:-SCMS/V1/#}"
+INGEST_CLIENT_ID="${INGEST_CLIENT_ID:-solarcms-ingest}"
+DATABASE="${DATABASE:-solarcms}"
+CONTAINER="${CONTAINER:-emqx}"
+STATE="${STATE_DIRECTORY:-/var/lib/solarcms-broker-watchdog}/last-restart"
+
+# 1. How long since production stored any message? Ingest writes every message
+#    it receives to mqtt_raw, registered or not.
+age=$(runuser -u postgres -- psql -d "$DATABASE" -XAtq -c \
+    "SELECT coalesce(extract(epoch FROM now() - max(time))::int, 99999)
+       FROM mqtt_raw WHERE time > now() - interval '6 hours'" 2>/dev/null)
+if ! [[ "$age" =~ ^[0-9]+$ ]]; then
+    echo "cannot read the database; broker left alone"
+    exit 0
+fi
+if (( age < SILENT_AFTER_S )); then
+    exit 0
+fi
+
+# 2. Is there anything to copy? One live (not retained) message within 20 s.
+if [[ -n "$UPSTREAM_HOST" ]] && ! mosquitto_sub -h "$UPSTREAM_HOST" -p "$UPSTREAM_PORT" \
+        -i "solarcms-watchdog-$$" -t "$UPSTREAM_TOPIC" -R -C 1 -W 20 >/dev/null 2>&1; then
+    echo "nothing stored for ${age}s, but ${UPSTREAM_HOST} is not publishing either; broker left alone"
+    exit 0
+fi
+
+# 3. Is ingest there to receive it?
+session=$(docker exec "$CONTAINER" emqx ctl clients show "$INGEST_CLIENT_ID" 2>&1)
+if [[ "$session" != *"connected=true"* ]]; then
+    echo "nothing stored for ${age}s and ingest is not connected; broker left alone (it holds ingest's messages)"
+    exit 0
+fi
+
+# 4. Not too often.
+now=$(date +%s)
+last=$(cat "$STATE" 2>/dev/null || echo 0)
+[[ "$last" =~ ^[0-9]+$ ]] || last=0
+if (( now - last < MIN_GAP_S )); then
+    echo "nothing stored for ${age}s; restarted $(( (now - last) / 60 )) min ago, waiting before another"
+    exit 0
+fi
+
+echo "nothing stored for ${age}s while publishing goes on and ingest is connected; restarting ${CONTAINER}. Ingest session before: ${session}"
+echo "$now" > "$STATE"
+if docker restart "$CONTAINER" >/dev/null; then
+    echo "restarted ${CONTAINER}"
+else
+    echo "restart of ${CONTAINER} FAILED"
+    exit 1
+fi
