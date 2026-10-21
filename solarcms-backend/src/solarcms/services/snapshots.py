@@ -195,11 +195,23 @@ class _Edited:
         # before the edit was visible is the one refused. Set inside the edit's
         # own transaction, a pass starting between this statement and the
         # commit would read the old settings and still count as later.
+        #
+        # ⚠ The rows are locked in (plant, kind) order before they are updated,
+        # the order `_store_all` writes them in. A plain UPDATE locks them in
+        # whatever order it scans them, and on 22 Oct 2026 — OASIS_2MW and its
+        # Devices decommissioned one after another — that met a scheduler pass
+        # holding the Plant's dashboard copy while it waited for a KPI copy this
+        # held: "deadlock detected", and the pass for that Plant was lost.
         async with scoped_session(context, role=role) as session:
             await session.execute(text("""
-                UPDATE plant_snapshots SET plant_edited_at = clock_timestamp()
-                 WHERE plant_id = ANY(:plant_ids)
-                    OR plant_id IN (SELECT plant_id FROM devices WHERE id = ANY(:device_ids))
+                UPDATE plant_snapshots s SET plant_edited_at = clock_timestamp()
+                  FROM (SELECT plant_id, kind FROM plant_snapshots
+                         WHERE plant_id = ANY(:plant_ids)
+                            OR plant_id IN (SELECT plant_id FROM devices
+                                             WHERE id = ANY(:device_ids))
+                         ORDER BY plant_id, kind COLLATE "C"
+                           FOR UPDATE) locked
+                 WHERE s.plant_id = locked.plant_id AND s.kind = locked.kind
             """), {"plant_ids": sorted(self.plants), "device_ids": sorted(self.devices)})
 
 
@@ -228,26 +240,42 @@ async def _store(session: AsyncSession, plant_id: int, client_id: int, kind: str
            "computed_at": computed_at, "payload": _encode(payload)})
 
 
+async def _store_all(session: AsyncSession, plant_id: int, client_id: int,
+                     computed_at: datetime, copies: list[tuple[str, dict[str, Any]]]) -> None:
+    """Write one pass's copies, in `kind` order — byte order, as `COLLATE "C"`
+    sorts it — so this and `_Edited.set_aside` always lock a Plant's rows in
+    the same order and can never wait on each other in a circle."""
+    for kind, payload in sorted(copies, key=lambda copy: copy[0]):
+        await _store(session, plant_id, client_id, kind, computed_at, payload)
+
+
 async def _work(plant_id: int, client_id: int, *, kpis: bool) -> int:
-    """Refresh one Plant. Returns how many copies were stored."""
+    """Refresh one Plant. Returns how many copies were stored.
+
+    ⚠ Worked out first, then written in a transaction of its own. The copies
+    used to be written as they were worked out, inside the one transaction, so
+    the dashboard copy stayed locked for the seconds the four KPI periods
+    took — long enough for an edit's set-aside to take the KPI copies and wait
+    for it, while this waited for them: a deadlock (22 Oct 2026). Now nothing
+    is locked while anything is worked out, and the writes take milliseconds.
+    """
     now = datetime.now(UTC)
-    stored = 0
+    copies: list[tuple[str, dict[str, Any]]] = []
     async with scoped_session(SecurityContext.platform(0), role=SCHEDULER_ROLE) as s:
         # Stamped with when the pass *began*, on the database's clock: an edit
         # sets copies aside by that clock (`_Edited.set_aside`), and this
         # server's clock and the database server's need not agree.
         began = (await s.execute(text("SELECT clock_timestamp()"))).scalar_one()
-        await _store(s, plant_id, client_id, "dashboard", began,
-                     await dashboard.render(s, plant_id))
-        stored += 1
+        copies.append(("dashboard", await dashboard.render(s, plant_id)))
         if kpis:
             for period in KPI_PERIODS:
                 result = await compute_plant_kpis(
                     s, plant_id, period, compare=period in COMPARED, now=now)
                 if result is not None:
-                    await _store(s, plant_id, client_id, f"kpis:{period}", began, result)
-                    stored += 1
-    return stored
+                    copies.append((f"kpis:{period}", result))
+    async with scoped_session(SecurityContext.platform(0), role=SCHEDULER_ROLE) as s:
+        await _store_all(s, plant_id, client_id, began, copies)
+    return len(copies)
 
 
 async def refresh_all(

@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from solarcms.db.rls import API_ROLE, SecurityContext
+from solarcms.db.rls import API_ROLE, SCHEDULER_ROLE, SecurityContext
 from solarcms.db.session import scoped_session
 from solarcms.services import snapshots
 from tests.conftest import requires_db
@@ -311,3 +311,41 @@ class TestBeforeTheResponse:
 
         await _app()(scope, receive, send)
         assert at_start == [(200, "set aside")]
+
+
+class TestNoDeadlockWithTheScheduler:
+    async def test_a_set_aside_waits_its_turn_instead_of_deadlocking(self) -> None:
+        """22 Oct 2026, OASIS_2MW and its Devices decommissioned one after
+        another: a scheduler pass held the Plant's dashboard copy and reached for
+        a KPI copy while an edit's set-aside, scanning the rows in the order
+        they lay on disk, held the KPI copies and waited for the dashboard's.
+        Postgres broke the circle by cancelling the pass. Both now lock in
+        (plant, kind) order, so the set-aside queues behind the pass instead.
+        """
+        plant = await _client_with_plant()
+        plant_id, client_id = plant["plant_id"], plant["client_id"]
+        # The KPI copies first, so a scan in disk order meets them before the
+        # dashboard's — the order that deadlocked.
+        async with scoped_session(SecurityContext.platform(0), role=None) as s:
+            for kind in ("kpis:today", "kpis:month", "kpis:year", "kpis:lifetime", "dashboard"):
+                await s.execute(text("""
+                    INSERT INTO plant_snapshots (plant_id, client_id, kind, computed_at, payload)
+                    VALUES (:p, :c, :k, now() - interval '1 minute', '{}'::jsonb)
+                """), {"p": plant_id, "c": client_id, "k": kind})
+
+        edited = snapshots._Edited()
+        edited.plants.add(plant_id)
+        async with scoped_session(SecurityContext.platform(0),
+                                  role=SCHEDULER_ROLE) as writer:
+            began = (await writer.execute(text("SELECT clock_timestamp()"))).scalar_one()
+            # The pass holds the dashboard copy…
+            await snapshots._store(writer, plant_id, client_id, "dashboard", began, {})
+            # …an edit commits and sets the Plant aside, as the API does…
+            aside = asyncio.create_task(
+                edited.set_aside(SecurityContext.platform(0), API_ROLE))
+            await asyncio.sleep(0.5)
+            # …and the pass reaches for a KPI copy. Before the fix: deadlock.
+            await asyncio.wait_for(snapshots._store(
+                writer, plant_id, client_id, "kpis:today", began, {}), timeout=10)
+        await asyncio.wait_for(aside, timeout=10)
+        assert await _copies(plant_id) == "set aside"
