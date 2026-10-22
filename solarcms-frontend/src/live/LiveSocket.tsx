@@ -23,16 +23,45 @@ import {
   type ReactNode,
 } from "react";
 import { getTokens } from "@/api/tokens";
-import { LiveControlSchema, LiveFrameSchema, type LiveFrame } from "@/api/schemas";
+import {
+  LiveControlSchema,
+  LiveFrameSchema,
+  type LiveFrame,
+  type LiveRejected,
+} from "@/api/schemas";
 import { useAuth } from "@/auth/AuthProvider";
 
 export interface DeviceLiveState {
   deviceId: number;
   plantId: number;
-  /** Keyed by tag_id. Join against /catalog/tags for code and unit (§5.1). */
+  /** Keyed by tag_id. Join against /catalog/tags for code and unit (§5.1). Accepted values only. */
   values: Record<number, number>;
+  /**
+   * Tags with no current value now, by tag_id: refused — what arrived, and
+   * why — or, as `null`, a calculation that could not be worked out. Never in
+   * `values` at the same time, and a value stored before must not stand in for
+   * one of these (`currentValues`).
+   */
+  withdrawn: Record<number, LiveRejected | null>;
   /** Server-stamped instant of the batch; staleness is measured from it. */
   at: string;
+}
+
+/**
+ * A Device's current values: what was stored, with the live frames over it per
+ * Tag. A Tag a frame withdrew has none, whatever was stored before — an
+ * efficiency of 98.5 % from ten minutes ago is not the efficiency now that the
+ * Inverter sends −1.
+ */
+export function currentValues(
+  stored: Record<string, number> | undefined,
+  live: DeviceLiveState | undefined,
+): Record<string, number> | undefined {
+  if (!stored && !live) return undefined;
+  const out: Record<string, number> = { ...stored };
+  for (const tagId of Object.keys(live?.withdrawn ?? {})) delete out[tagId];
+  for (const [tagId, value] of Object.entries(live?.values ?? {})) out[tagId] = value;
+  return out;
 }
 
 export type SocketStatus =
@@ -146,8 +175,20 @@ export function LiveSocketProvider({ children }: { children: ReactNode }): JSX.E
         // Merge rather than replace: a batch carries only the Tags that were
         // published in it, and a Device throttles its Tags independently.
         const values: Record<number, number> = { ...(existing?.values ?? {}) };
+        const withdrawn: Record<number, LiveRejected | null> = { ...(existing?.withdrawn ?? {}) };
         for (const [tagId, value] of Object.entries(frame.values)) {
           values[Number(tagId)] = value;
+          delete withdrawn[Number(tagId)];
+        }
+        // A refused value takes the Tag's value away rather than leaving the
+        // last accepted one on screen as though it were still current.
+        for (const [tagId, entry] of Object.entries(frame.rejected ?? {})) {
+          delete values[Number(tagId)];
+          withdrawn[Number(tagId)] = entry;
+        }
+        for (const tagId of frame.cleared ?? []) {
+          delete values[Number(tagId)];
+          withdrawn[Number(tagId)] = null;
         }
         return {
           ...previous,
@@ -155,6 +196,7 @@ export function LiveSocketProvider({ children }: { children: ReactNode }): JSX.E
             deviceId: frame.device_id,
             plantId: frame.plant_id,
             values,
+            withdrawn,
             at: frame.at,
           },
         };

@@ -45,7 +45,13 @@ from solarcms.cache.heartbeat import Heartbeat
 from solarcms.config import Settings, get_settings
 from solarcms.db.rls import INGEST_ROLE, SecurityContext
 from solarcms.db.session import asyncpg_connect_args, dispose_engine, scoped_session
-from solarcms.domain.decoding import DecodedReading, DeviceResolution, TopicPattern, decode
+from solarcms.domain.decoding import (
+    DecodedReading,
+    DeviceResolution,
+    TopicPattern,
+    current_state,
+    decode,
+)
 from solarcms.logging import RepeatGate, configure_logging, get_logger
 from solarcms.workers.delivery import PendingAck, RedeliveryFilter, fingerprint
 from solarcms.workers.leadership import Leadership, LeadershipLost
@@ -321,7 +327,8 @@ class IngestWorker:
             return
 
         await self._accept(topic, payload, now, result.readings, resolution, memory,
-                           unmapped=list(result.unmapped_keys))
+                           unmapped=list(result.unmapped_keys),
+                           unresolved=result.unresolved_derived)
 
     async def _resolve(self, topic: str) -> DeviceResolution | ResolutionFailure:
         """Memory, then Redis, then Postgres — opening a session only for the last.
@@ -408,6 +415,7 @@ class IngestWorker:
         self, topic: str, payload: dict[str, Any], now: datetime,
         readings: list[DecodedReading], resolution: DeviceResolution,
         memory: DeviceMemory, *, unmapped: list[str],
+        unresolved: dict[int, str | None] | None = None,
     ) -> None:
         device_id = resolution.device_id
         # Heard is not stored. Recorded before the early return below: when
@@ -425,15 +433,24 @@ class IngestWorker:
         # a message whose Redis write fails is retried whole
         # (`_handle_with_retry`), decides the same again from the unchanged
         # memory, and must not already be in the buffer.
-        written = {r.tag_id: r.value for r in readings}
+        #
+        # Every reading is stored and throttled alike; only an accepted one
+        # becomes the Tag's current value — for the screens, and for the
+        # formulas that read standing values (`domain/decoding.current_state`).
+        state = current_state(readings, unresolved or {}, resolution)
+        written = [r.tag_id for r in readings]
         cumulative = {b.tag_id for b in resolution.bindings.values() if b.cumulative}
-        counters = {tag_id: value for tag_id, value in written.items() if tag_id in cumulative}
+        counters = {tag_id: value for tag_id, value in state.accepted.items()
+                    if tag_id in cumulative}
         await live.write_message_state(
             device_id=device_id, client_id=resolution.client_id,
-            plant_id=readings[0].plant_id, at=now, current=written, counters=counters,
-            throttled_now=list(written), unmapped=unmapped,
+            plant_id=readings[0].plant_id, at=now, current=state.accepted, counters=counters,
+            throttled_now=written, unmapped=unmapped,
+            rejected=state.rejected, cleared=state.cleared,
         )
-        memory.current.update(written)
+        memory.current.update(state.accepted)
+        for tag_id in (*state.rejected, *state.cleared):
+            memory.current.pop(tag_id, None)
         memory.counters.update(counters)
         for tag_id in written:
             memory.throttle[tag_id] = now

@@ -50,9 +50,10 @@ from solarcms.domain.forecast import (
     daily_energy,
     forecast_at,
     history_window,
+    lifetime_as_daily,
     register_day_totals,
 )
-from solarcms.domain.slots import ResolvedSlot, resolve_all
+from solarcms.domain.slots import KIND_COUNTER_TODAY, ResolvedSlot, resolve_all
 from solarcms.services.dashboard import counter_pairs, gather, load_slot_specs
 
 POWER_SLOT = "kpi.current_power"
@@ -159,9 +160,14 @@ async def _power_days(
 async def _energy_totals(
     session: AsyncSession, slot: ResolvedSlot, zone: ZoneInfo, since: datetime,
 ) -> dict[date, float]:
-    """Each complete local day's total from a daily register, across the source's Devices."""
+    """Each complete local day's total from a daily register, across the source's Devices.
+
+    A `counter_today` source is a lifetime register — a meter that sends no
+    daily one — and each of its days is rebased on its first reading first.
+    """
     source = slot.source
     assert source is not None
+    lifetime = source.kind == KIND_COUNTER_TODAY
     tag = await _tag_id(session, source.tag_code)
     if tag is None or not source.device_ids:
         return {}
@@ -182,7 +188,8 @@ async def _energy_totals(
     settled_slots = -(-FORECAST_REGISTER_SETTLED_MIN // SLOT_MINUTES)
     per_day: dict[date, list[float]] = defaultdict(list)
     for days in buckets.values():
-        for day, total in register_day_totals(days, settled_slots=settled_slots).items():
+        daily = lifetime_as_daily(days) if lifetime else days
+        for day, total in register_day_totals(daily, settled_slots=settled_slots).items():
             per_day[day].append(total)
     totals: dict[date, float] = {}
     for day, values in per_day.items():

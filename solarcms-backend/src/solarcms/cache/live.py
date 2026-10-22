@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -248,6 +248,8 @@ async def write_message_state(
     counters: dict[int, float],
     throttled_now: list[int],
     unmapped: list[str],
+    rejected: Mapping[int, Mapping[str, Any]] | None = None,
+    cleared: Collection[int] = (),
 ) -> None:
     """Everything one accepted message writes to Redis, in a single round trip.
 
@@ -257,27 +259,69 @@ async def write_message_state(
     availability zones (docs/CAPACITY_AND_DEPLOYMENT.md §4.5, §10.3). The
     keys and values are exactly what the separate calls wrote. Raises on a
     connection failure, so the caller retries the whole message.
+
+    `current` holds accepted values only. A refused one goes to `rejected` —
+    stored beside the hash's values under its own field and sent on the frame
+    apart from them — and takes the Tag's value away, because a value from
+    before the refusal is not the Tag's value now. `cleared` Tags have no
+    value at all any more: a calculated Tag that could not be worked out.
     """
+    rejected = rejected or {}
+    prefix = keys.LIVE_REJECTED_FIELD_PREFIX
+    fields: dict[str, str] = {str(k): repr(v) for k, v in current.items()}
+    fields.update({f"{prefix}{k}": json.dumps(v) for k, v in rejected.items()})
+    gone = ([f"{prefix}{k}" for k in current] + [str(k) for k in rejected]
+            + [field for k in cleared for field in (str(k), f"{prefix}{k}")])
+    stamp = at.isoformat()
     async with get_redis().pipeline(transaction=False) as pipe:
-        if current:
-            mapping: dict[str, str] = {str(k): repr(v) for k, v in current.items()}
-            mapping["_ts"] = at.isoformat()
-            pipe.hset(keys.live_device(device_id), mapping=mapping)
+        if gone:
+            pipe.hdel(keys.live_device(device_id), *gone)
+        if fields:
+            fields["_ts"] = stamp
+            pipe.hset(keys.live_device(device_id), mapping=fields)
             pipe.expire(keys.live_device(device_id), keys.LIVE_DEVICE_TTL_S)
         for tag_id, value in counters.items():
             pipe.set(keys.counter(device_id, tag_id), repr(value), ex=keys.COUNTER_TTL_S)
-        stamp = at.isoformat()
         for tag_id in throttled_now:
             pipe.set(keys.throttle(device_id, tag_id), stamp, ex=keys.THROTTLE_TTL_S)
         if unmapped:
             pipe.sadd(keys.unmapped_keys(device_id), *unmapped)
             pipe.expire(keys.unmapped_keys(device_id), keys.UNMAPPED_KEYS_TTL_S)
-        if current:
+        if current or rejected or cleared:
             pipe.publish(keys.WS_FANOUT, json.dumps({
                 "client_id": client_id, "plant_id": plant_id, "device_id": device_id,
-                "values": {str(k): v for k, v in current.items()}, "at": stamp,
+                "values": {str(k): v for k, v in current.items()},
+                # A screen that does not know these keys ignores them, and still
+                # never receives a refused value as though it were a reading.
+                "rejected": {str(k): v for k, v in rejected.items()},
+                "cleared": [str(k) for k in cleared],
+                "at": stamp,
             }))
         await pipe.execute()
+
+
+def parse_device_hash(
+    raw: Mapping[str, str],
+) -> tuple[dict[int, float], dict[int, dict[str, Any]]]:
+    """A Device's live hash as (accepted values, refused values) by tag id.
+
+    Malformed entries are skipped rather than raised: a Redis hash is untyped,
+    and one bad field must not blank a whole dashboard.
+    """
+    values: dict[int, float] = {}
+    rejected: dict[int, dict[str, Any]] = {}
+    prefix = keys.LIVE_REJECTED_FIELD_PREFIX
+    for key, text in raw.items():
+        try:
+            if key.startswith(prefix):
+                entry = json.loads(text)
+                if isinstance(entry, dict):
+                    rejected[int(key.removeprefix(prefix))] = entry
+            elif not key.startswith("_"):
+                values[int(key)] = float(text)
+        except (ValueError, TypeError):
+            continue
+    return values, rejected
 
 
 async def touch_devices_seen(seen: dict[int, datetime]) -> None:

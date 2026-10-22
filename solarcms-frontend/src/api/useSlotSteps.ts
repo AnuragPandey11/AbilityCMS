@@ -184,12 +184,20 @@ export function useSlotSteps(
       }
     }
     return {
-      ...placeRegisterSteps(readings, periods, { stepMs: HOUR_MS, now, resetsExpected }),
+      ...placeRegisterSteps(readings, periods, {
+        stepMs: HOUR_MS,
+        now,
+        // A lifetime register never restarts by design. Today's Energy reads
+        // one where a meter sends no daily register (`counter_today`), and a
+        // fall there is a glitch or a replaced meter: read as a restart, one
+        // dip would place the whole 14,000,000 kWh in a single hour.
+        resetsExpected: resetsExpected && source?.kind !== "counter_today",
+      }),
       flagged,
     };
     // `results` is a new array every render; its data changes only with `dataStamp`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settled, dataStamp, periods, now, resetsExpected]);
+  }, [settled, dataStamp, periods, now, resetsExpected, source?.kind]);
 
   return {
     periods: placement?.periods ?? [],

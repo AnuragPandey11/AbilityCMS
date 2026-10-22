@@ -47,6 +47,8 @@ import {
   useUnmappedKeys,
 } from "@/api/hooks";
 import { useLatestValues } from "@/api/useLatestValues";
+import { currentValues, useLiveSocket } from "@/live/LiveSocket";
+import { rejectedText, rejectedValue, type Refused } from "@/format/rejected";
 import { DeviceArt } from "./DeviceArt";
 import { Badge, Panel } from "@/components/ui";
 import { CommStatusBadge } from "@/components/domain";
@@ -198,10 +200,26 @@ export function DeviceInspector({
     bindings.map((binding) => binding.tag_id),
     bindings.length > 0,
   );
+  /**
+   * The live frame decides last, here rather than in every caller: a Tag it
+   * withdrew — its value refused, or a calculation not worked out — has no
+   * value, whatever the caller or the stored readings held before.
+   */
+  const live = useLiveSocket().devices[device.id];
   const merged = useMemo(
-    () => ({ ...ownValues.byDevice[device.id], ...values }),
-    [ownValues.byDevice, device.id, values],
+    () => currentValues({ ...ownValues.byDevice[device.id], ...values }, live) ?? {},
+    [ownValues.byDevice, device.id, values, live],
   );
+  /** What was refused, per Tag, where that is its latest: shown, marked, never as a reading. */
+  const refused = useMemo(() => {
+    const out: Record<string, Refused> = { ...ownValues.rejectedByDevice[device.id] };
+    for (const [tagId, entry] of Object.entries(live?.withdrawn ?? {})) {
+      if (entry) out[tagId] = entry;
+      else delete out[tagId];
+    }
+    for (const tagId of Object.keys(merged)) delete out[tagId];
+    return out;
+  }, [ownValues.rejectedByDevice, device.id, live, merged]);
 
   /** Bindings grouped by their Tag's category, in the order above. */
   const groups = useMemo(() => {
@@ -468,6 +486,19 @@ export function DeviceInspector({
                   {entries.map(({ binding, tag }) => {
                     const value = merged[String(binding.tag_id)];
                     const digital = isDigital(tag);
+                    // Refused: what arrived, marked — so an operator can tell
+                    // the equipment's fault from the mapping's at a glance.
+                    const rejection =
+                      value === undefined ? refused[String(binding.tag_id)] : undefined;
+                    const rejectedEntry = rejection
+                      ? {
+                          ...rejection,
+                          tag_code: binding.tag_code,
+                          source_key: rejection.source_key ?? binding.source_key,
+                          valid_min: rejection.valid_min ?? binding.valid_min,
+                          valid_max: rejection.valid_max ?? binding.valid_max,
+                        }
+                      : undefined;
                     return (
                       <div
                         key={binding.id}
@@ -490,7 +521,17 @@ export function DeviceInspector({
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          {digital ? (
+                          {rejectedEntry ? (
+                            <span
+                              className="font-mono text-[11px] tabular-nums text-warn"
+                              title={rejectedText(rejectedEntry, binding.unit)}
+                            >
+                              {rejectedValue(rejectedEntry, binding.unit)}
+                              <span className="ml-1 font-sans text-[9px] uppercase tracking-wide">
+                                rejected
+                              </span>
+                            </span>
+                          ) : digital ? (
                             /*
                               A Digital Input is a contact, not a quantity
                               (§4.5). It is drawn as a state with a lamp: a

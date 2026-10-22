@@ -464,6 +464,32 @@ class TestCounterToday:
         assert slot.value == 1_000.0
         assert slot.source is not None and slot.source.device_type_code == "ABT_METER"
 
+    def test_todays_energy_reads_the_meter_before_the_inverters_zero(self) -> None:
+        # UNIT1, 22 Oct 2026: the Inverter sends its daily register as 0 all day
+        # and the meter only lifetime totals. The tile read 0.00 kWh beside a
+        # CUF worked out from the meter.
+        inverter = DeviceFacts(
+            device_id=81, code="INVERTER1", device_type_code="INVERTER",
+            bound_tag_codes=frozenset({"ENERGY_TODAY"}), values={"ENERGY_TODAY": 0.0},
+            online=True, in_power_path=True,
+        )
+        facts = PlantFacts(plant_id=5, devices=(export_meter("MFM", advance=2_040.0), inverter))
+        slot = resolve_slot(_BY_CODE["kpi.energy_today"], facts)
+        assert slot.value == 2_040.0
+        assert slot.source is not None and slot.source.kind == KIND_COUNTER_TODAY
+        assert slot.source.device_type_code == "MFM"
+
+    def test_without_a_meter_todays_energy_is_still_the_inverters(self) -> None:
+        inverter = DeviceFacts(
+            device_id=81, code="INVERTER1", device_type_code="INVERTER",
+            bound_tag_codes=frozenset({"ENERGY_TODAY"}), values={"ENERGY_TODAY": 410.0},
+            online=True, in_power_path=True,
+        )
+        slot = resolve_slot(_BY_CODE["kpi.energy_today"],
+                            PlantFacts(plant_id=5, devices=(inverter,)))
+        assert slot.value == 410.0
+        assert slot.source is not None and slot.source.device_type_code == "INVERTER"
+
     def test_too_few_readings_is_undefined_and_still_shown(self) -> None:
         facts = PlantFacts(plant_id=1, devices=(export_meter("MFM"),))
         slot = resolve_slot(EXPORT_TODAY, facts)

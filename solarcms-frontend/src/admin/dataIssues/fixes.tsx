@@ -377,7 +377,11 @@ export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): J
       );
     }
     case "values_rejected":
-      return bool(issue, "derived") || num(issue, "binding_id") === null ? null : (
+      // A scale or a range can only fix a number. Values that arrive empty —
+      // a meter's power factor at no load — have none to rescale.
+      return bool(issue, "derived") ||
+        num(issue, "binding_id") === null ||
+        (num(issue, "out_of_range") ?? 0) === 0 ? null : (
         <RangeFix issue={issue} ctx={ctx} busy={busy} />
       );
     case "interval_slower":

@@ -21,7 +21,7 @@
  * needs a backend endpoint over `mqtt_raw_v` that does not exist yet.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -48,6 +48,7 @@ import { usePermission } from "@/auth/usePermission";
 import { usePlantScope } from "@/state/usePlantScope";
 import { useLiveSocket } from "@/live/LiveSocket";
 import { formatValue, formatDigital, isDigital } from "@/format/value";
+import { rejectedText, rejectedValue } from "@/format/rejected";
 import { formatAge } from "@/format/datetime";
 import type { DeviceModel } from "@/api/schemas";
 
@@ -233,12 +234,26 @@ export function DeviceBindingsAdmin(): JSX.Element {
       ),
     );
 
-  /** The live decoded value for a bound Tag, if the socket has one. */
-  const liveFor = (tagCode: string): string => {
+  /**
+   * The live decoded value for a bound Tag, if the socket has one — or, where
+   * its latest value was refused, what arrived, marked. This is the screen a
+   * wrong scale is fixed on, so the value that failed is the one to see.
+   */
+  const liveFor = (tagCode: string): ReactNode => {
     const tag = (tagsQuery.data ?? []).find(
       (candidate) => candidate.code === tagCode,
     );
     if (!tag || !liveFrame) return "—";
+    const refused = liveFrame.withdrawn[tag.id];
+    if (refused) {
+      const entry = { ...refused, tag_code: tag.code };
+      return (
+        <span className="text-warn" title={rejectedText(entry, tag.unit)}>
+          {rejectedValue(entry, tag.unit)}
+          <span className="ml-1 font-sans text-[9px] uppercase tracking-wide">rejected</span>
+        </span>
+      );
+    }
     const value = liveFrame.values[tag.id];
     if (value === undefined) return "—";
     return isDigital(tag)

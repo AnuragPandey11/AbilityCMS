@@ -202,3 +202,25 @@ class TestRegisterDayTotals:
         dipped = [(slot, lo * 0.94, hi * 0.94) if slot > 80 else (slot, lo, hi)
                   for slot, lo, hi in day]
         assert f.register_day_totals({DAY0: dipped}, settled_slots=4)[DAY0] == pytest.approx(100.0)
+
+
+class TestLifetimeRegister:
+    """Today's Energy may be a meter's lifetime register (22 Oct 2026): the
+    forecast must read its days as the energy they added, not as 14 million."""
+
+    EVENING = 18 * 4
+    LIFETIME = 14_177_000.0
+
+    def test_each_day_is_what_the_register_moved_that_day(self) -> None:
+        days = {
+            DAY0 + timedelta(days=i): [
+                (slot, self.LIFETIME + 100.0 * i + lo, self.LIFETIME + 100.0 * i + hi)
+                for slot, lo, hi in register_day(24, self.EVENING, 95)
+            ]
+            for i in range(3)
+        }
+        totals = f.register_day_totals(f.lifetime_as_daily(days), settled_slots=4)
+        assert totals == {DAY0 + timedelta(days=i): pytest.approx(100.0) for i in range(3)}
+
+    def test_a_day_with_no_readings_is_not_a_day(self) -> None:
+        assert f.lifetime_as_daily({DAY0: []}) == {}

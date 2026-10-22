@@ -1382,13 +1382,36 @@ export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
 // ── Live socket ─────────────────────────────────────────────────────────────
 
+/**
+ * A Tag's latest value that ingest refused: stored and flagged, never a reading.
+ *
+ * `value` is what arrived (null when it was empty or not a number), under
+ * `source_key`, judged against `valid_min`–`valid_max`. A calculated Tag that
+ * could not be worked out because an input was refused names it in `because`
+ * and has no value at all.
+ */
+export const LiveRejectedSchema = z.object({
+  value: nullableNumeric(),
+  quality: z.number().nullable().optional(),
+  source_key: z.string().nullable().optional(),
+  valid_min: nullableNumeric().optional(),
+  valid_max: nullableNumeric().optional(),
+  because: z.string().nullable().optional(),
+});
+export type LiveRejected = z.infer<typeof LiveRejectedSchema>;
+
 export const LiveFrameSchema = z.object({
   client_id: z.number(),
   plant_id: z.number(),
   device_id: z.number(),
   // ⚠ Keyed by tag_id **as a string**. Join against /catalog/tags for code and
-  // unit; the socket carries neither (§5.1).
+  // unit; the socket carries neither (§5.1). Accepted values only.
   values: z.record(numeric()),
+  /** Tags whose value in this message was refused — no longer current, and why.
+   *  Optional: an older server does not send it. */
+  rejected: z.record(LiveRejectedSchema).optional(),
+  /** Calculated Tags that could not be worked out: no current value at all. */
+  cleared: z.array(z.string()).optional(),
   at: z.string(),
 });
 export type LiveFrame = z.infer<typeof LiveFrameSchema>;
@@ -1456,6 +1479,19 @@ export const WithheldReadingSchema = z.object({
 });
 export type WithheldReading = z.infer<typeof WithheldReadingSchema>;
 
+/**
+ * A reading a slot would have used but that ingest refused — shown, marked
+ * "Rejected", and never part of the slot's value (Guardrail 33). The arrived
+ * value, its payload key and the range it failed are what let somebody tell
+ * the equipment's fault from a wrong mapping from a bug of ours.
+ */
+export const SlotRejectedSchema = LiveRejectedSchema.extend({
+  device_id: z.number(),
+  device_code: z.string(),
+  tag_code: z.string(),
+});
+export type SlotRejected = z.infer<typeof SlotRejectedSchema>;
+
 export const ResolvedSlotSchema = z.object({
   slot_code: z.string(),
   label: z.string(),
@@ -1475,6 +1511,10 @@ export const ResolvedSlotSchema = z.object({
   /** Readings of this slot's Tags left out as not measuring — why a tile fell
    *  back from GTI to GHI. Optional: an older server does not send it. */
   withheld: z.array(WithheldReadingSchema).optional(),
+  /** Readings it would have used but that were refused. With a value, the
+   *  Devices left out of it; without one, why it is blank (`undefined_reason`
+   *  stays `no_value`). Optional: an older server does not send it. */
+  rejected: z.array(SlotRejectedSchema).optional(),
 });
 export type ResolvedSlot = z.infer<typeof ResolvedSlotSchema>;
 

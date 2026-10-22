@@ -321,6 +321,30 @@ class TestRejectedValues:
                                 tag_health=(sentinel,)), GHI=6553.4)
         assert kinds(plant(wms)) == ["values_rejected"]
 
+    def test_a_zero_sent_while_producing_is_the_cause_not_idleness(self) -> None:
+        # UNIT1's Inverter, 22 Oct 2026: efficiency -1 all day while making
+        # ~500 kW. Taken for idleness it went unreported, and only the DC Power
+        # worked out from it was listed — the symptom, not the cause.
+        placeholder = TagHealth(tag_code="INVERTER_EFFICIENCY", total=46, out_of_range=46,
+                                unparseable=0, latest_quality=OOR, latest_value=-1.0,
+                                flagged_min=-1.0, flagged_max=-1.0, valid_min=0.0,
+                                valid_max=100.0)
+        inverter = publishing(device(
+            2, "INVERTER1", "INVERTER", bindings=(binding(9, "EFF", "INVERTER_EFFICIENCY"),),
+            tag_health=(placeholder,), peak_power_kw=530.0), EFF=-1)
+        [issue] = [i for i in find_issues(plant(inverter)) if i.kind == "values_rejected"]
+        assert issue.facts["producing_kw"] == 530.0
+        assert "not available" in issue.detail
+
+    def test_the_same_zero_from_an_idle_inverter_is_still_not_an_issue(self) -> None:
+        asleep = TagHealth(tag_code="INVERTER_EFFICIENCY", total=46, out_of_range=46,
+                           unparseable=0, latest_quality=OOR, latest_value=-1.0,
+                           flagged_min=-1.0, flagged_max=-1.0, valid_min=0.0, valid_max=100.0)
+        inverter = publishing(device(
+            2, "INVERTER1", "INVERTER", bindings=(binding(9, "EFF", "INVERTER_EFFICIENCY"),),
+            tag_health=(asleep,), peak_power_kw=0.0), EFF=-1)
+        assert "values_rejected" not in kinds(plant(inverter))
+
     def test_empty_values_are_never_excused_as_idle(self) -> None:
         empty = self.health(unparseable=20, latest_quality=EMPTY, latest_value=0.0)
         assert kinds(plant(self.meter(empty))) == ["values_rejected"]

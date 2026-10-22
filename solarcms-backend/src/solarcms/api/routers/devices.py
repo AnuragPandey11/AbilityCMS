@@ -17,6 +17,7 @@ from solarcms.api.patching import patch_assignments
 from solarcms.cache import live
 from solarcms.cache.live import invalidate_resolution
 from solarcms.domain.assumptions import SOURCE_KEY_ALIASES
+from solarcms.domain.binding_changes import binding_changes
 from solarcms.domain.commissioning import own_topic_of, string_topic_owner
 from solarcms.domain.decoding import TopicPattern, collector_in_topic
 from solarcms.domain.sld import crosses_collector_boundary, would_create_cycle
@@ -952,6 +953,14 @@ async def replace_bindings(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"unknown Tag codes: {sorted(set(unknown))}")
 
+    # Read before the replace, so the audit can say what the save changed.
+    previous = [dict(row._mapping) for row in (await session.execute(text("""
+        SELECT b.source_key, t.code AS tag_code, b.scale, b.value_offset,
+               b.valid_min, b.valid_max, b.enabled
+          FROM device_tag_bindings b JOIN tags t ON t.id = b.tag_id
+         WHERE b.device_id = :id
+    """), {"id": device_id})).all()]
+
     await session.execute(
         text("DELETE FROM device_tag_bindings WHERE device_id = :id"), {"id": device_id})
     for binding in body.bindings:
@@ -970,8 +979,17 @@ async def replace_bindings(
             "enabled": binding.enabled,
         })
 
+    # What changed, key by key — "GHI: scale 1 → 10" — not only how many rows
+    # there are now (`domain/binding_changes`).
+    changes = binding_changes(previous, [
+        {"source_key": b.source_key, "tag_code": b.tag_code, "scale": b.scale,
+         "value_offset": b.value_offset, "valid_min": b.valid_min,
+         "valid_max": b.valid_max, "enabled": b.enabled}
+        for b in body.bindings
+    ])
     await _audit(session, user, device.client_id, "device.bindings.replace", device_id,
-                 after={"count": len(body.bindings)})
+                 before={"count": len(previous)},
+                 after={"count": len(body.bindings), **changes})
     # The ingest worker caches topic resolution for 300s; invalidate now so a
     # corrected scale takes effect on the next message rather than in five minutes.
     # Every topic: an Inverter's string topic decodes against these bindings too.

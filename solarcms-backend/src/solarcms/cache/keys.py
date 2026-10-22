@@ -13,6 +13,12 @@ from typing import Final
 # enough to survive a brief publisher outage without serving a stale dashboard.
 LIVE_DEVICE: Final = "live:device:{device_id}"
 LIVE_DEVICE_TTL_S: Final = 900
+# In the same hash, `_rejected:{tag_id}` → JSON: a Tag whose latest value was
+# refused, what arrived and why. Never beside the Tag's own field: one is the
+# current value, the other says there is none to use. The leading underscore
+# is what every reader of the hash already skips, so none can take it for a
+# value (`live.parse_device_hash` is the one that reads it).
+LIVE_REJECTED_FIELD_PREFIX: Final = "_rejected:"
 
 # When a Device was last *heard*, as distinct from when a Reading was last
 # *stored*. Throttling (`tags.min_interval_s`) can drop every Tag in a message,

@@ -93,7 +93,7 @@ describe("Performance tiles", () => {
     band();
     expect(screen.getByText(/plane-of-array irradiance, not temperature-corrected/)).toBeInTheDocument();
     expect(screen.getByText(/AC capacity, every hour since midnight/)).toBeInTheDocument();
-    expect(screen.getByText(/time-weighted; comms loss not counted as downtime/)).toBeInTheDocument();
+    expect(screen.getByText(/share of time Devices were reporting; offline counts as down/)).toBeInTheDocument();
     // The code itself stays on the tooltip, never in the footnote.
     expect(screen.queryByText(/poa uncorrected/)).not.toBeInTheDocument();
   });

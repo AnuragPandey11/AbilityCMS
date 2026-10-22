@@ -26,9 +26,11 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Final
 
 from solarcms.domain.assumptions import (
+    FORMULA_CONSTANTS,
     NEGATIVE_DELTA_IS_SUSPECT,
     QUALITY_GOOD,
     QUALITY_OUT_OF_RANGE,
@@ -36,7 +38,7 @@ from solarcms.domain.assumptions import (
     QUALITY_UNPARSEABLE,
     STALE_SOURCE_TIME_MULTIPLIER,
 )
-from solarcms.domain.derived import DerivedTag, evaluate_all
+from solarcms.domain.derived import DerivedTag, evaluate_all, referenced_names
 
 # Field names a topic pattern may capture. A pattern using any other name is
 # rejected at construction — a typo must not silently produce an unmatched topic.
@@ -223,6 +225,11 @@ class DecodeResult:
     unmapped_keys: list[str] = field(default_factory=list)  # published, not bound
     throttled_keys: list[str] = field(default_factory=list)  # dropped by min_interval_s
     suspect_counters: list[str] = field(default_factory=list)  # negative delta
+    # Calculated Tags this message could not work out although one of their
+    # inputs arrived in it, by tag id → the refused input that stopped it, or
+    # None where the formula is simply undefined (efficiency 0 at night). The
+    # Tag's current value no longer stands either way (`derive`).
+    unresolved_derived: dict[int, str | None] = field(default_factory=dict)
 
     @property
     def quarantined(self) -> bool:
@@ -431,11 +438,80 @@ def decode(
             )
         )
 
-    result.readings.extend(
-        derive(resolver, result.readings, now, source_time=source_time,
-               standing=standing, last_written=last_written)
+    derived, result.unresolved_derived = derive(
+        resolver, result.readings, now, source_time=source_time,
+        standing=standing, last_written=last_written,
     )
+    result.readings.extend(derived)
     return result
+
+
+@lru_cache(maxsize=256)
+def _formula_inputs(expression: str) -> frozenset[str]:
+    """The Tags a device-scope formula reads — its capacities are not Tags."""
+    return referenced_names(expression) - frozenset(FORMULA_CONSTANTS)
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentState:
+    """What one message changes about a Device's current values."""
+
+    # tag id → value: accepted, so usable by every figure and formula.
+    accepted: dict[int, float]
+    # tag id → what was refused and why (`domain/slots.RejectedReading`'s fields).
+    rejected: dict[int, dict[str, object]]
+    # Calculated Tags that could not be worked out, and refused nothing: they
+    # simply have no value now (efficiency 0 at night).
+    cleared: tuple[int, ...]
+
+
+def current_state(
+    readings: list[DecodedReading],
+    unresolved: dict[int, str | None],
+    resolver: DeviceResolution,
+) -> CurrentState:
+    """Split a message's readings into what may stand as a current value and
+    what may not (Guardrail 33).
+
+    Every reading is still stored, flagged or not — this decides only what the
+    screens and the formulas may treat as the Tag's value *now*. A refused
+    reading carries what arrived, the payload key it came under and the range
+    it was judged against, which is what lets somebody tell the equipment's
+    fault from a wrong mapping from a bug of ours.
+    """
+    bindings = {b.tag_id: b for b in resolver.bindings.values()}
+    derived = {d.tag_id: d for d in resolver.derived}
+    accepted: dict[int, float] = {}
+    rejected: dict[int, dict[str, object]] = {}
+    for reading in readings:
+        if reading.quality == QUALITY_GOOD:
+            accepted[reading.tag_id] = reading.value
+            continue
+        binding = bindings.get(reading.tag_id)
+        formula = derived.get(reading.tag_id)
+        rejected[reading.tag_id] = {
+            # An unreadable value is stored as 0.0 for the row's sake; it did
+            # not *arrive* as 0, and is not shown as though it had.
+            "value": None if reading.quality == QUALITY_UNPARSEABLE else reading.value,
+            "quality": reading.quality,
+            "source_key": binding.source_key if binding else None,
+            "valid_min": binding.valid_min if binding else formula.valid_min if formula else None,
+            "valid_max": binding.valid_max if binding else formula.valid_max if formula else None,
+            "because": None,
+        }
+    cleared: list[int] = []
+    for tag_id, because in unresolved.items():
+        if because is None:
+            cleared.append(tag_id)
+            continue
+        formula = derived.get(tag_id)
+        rejected[tag_id] = {
+            "value": None, "quality": None, "source_key": None,
+            "valid_min": formula.valid_min if formula else None,
+            "valid_max": formula.valid_max if formula else None,
+            "because": because,
+        }
+    return CurrentState(accepted=accepted, rejected=rejected, cleared=tuple(cleared))
 
 
 def derive(
@@ -446,7 +522,7 @@ def derive(
     source_time: datetime | None = None,
     standing: dict[str, float] | None = None,
     last_written: dict[int, datetime] | None = None,
-) -> list[DecodedReading]:
+) -> tuple[list[DecodedReading], dict[int, str | None]]:
     """Compute this Device's calculated Tags from what it just published.
 
     `standing` is the Device's last known value per Tag code, so a formula whose
@@ -457,11 +533,23 @@ def derive(
     A published value always beats a computed one: if this Device genuinely
     transmits AVG VOLTAGE, `evaluate_all` leaves it alone. That is what makes
     this safe to run for every Device without a per-Device switch.
+
+    **A refused input is never used** — not as sent, and not as the value it
+    had before. UNIT1's Inverter sends an efficiency of -1 for "not available";
+    flagged in its own message, it still reached `AC_ACTIVE_POWER / (EFF/100)`
+    from the standing values, and DC Power read -49,410 kW on the dashboard
+    as though it were a reading (22 Oct 2026). A formula that cannot be worked
+    out while one of its inputs arrived is returned beside the readings, with
+    the refused input that stopped it, so its old value can be withdrawn
+    rather than left standing.
     """
     if not resolver.derived:
-        return []
+        return [], {}
 
-    values: dict[str, float] = dict(standing or {})
+    refused = {r.tag_code for r in readings if r.quality != QUALITY_GOOD}
+    values: dict[str, float] = {
+        code: value for code, value in (standing or {}).items() if code not in refused
+    }
     values.update(resolver.constants)
     # This message wins over anything standing: it is the newer measurement.
     values.update({r.tag_code: r.value for r in readings if r.quality == QUALITY_GOOD})
@@ -470,6 +558,7 @@ def derive(
         [DerivedTag(d.tag_code, d.expression, "device") for d in resolver.derived],
         values,
     )
+    unresolved = _unresolved(resolver.derived, computed, values, readings, refused)
     written_at_by_tag = last_written or {}
     out: list[DecodedReading] = []
     for spec in resolver.derived:
@@ -506,4 +595,42 @@ def derive(
             time=now,
             source_time=source_time,
         ))
-    return out
+    return out, unresolved
+
+
+def _unresolved(
+    derived: tuple[DerivedBinding, ...],
+    computed: dict[str, float],
+    known: dict[str, float],
+    readings: list[DecodedReading],
+    refused: set[str],
+) -> dict[int, str | None]:
+    """The calculated Tags this message touched but could not work out.
+
+    Touched means one of its inputs arrived in this message: a formula over
+    signals on another topic (an Inverter's strings) is not withdrawn merely
+    because a message on this one said nothing about it. A formula reading
+    another calculated Tag that is itself withdrawn is withdrawn too, carrying
+    the same refused input, so a chain cannot leave its last link standing.
+    """
+    touched = {r.tag_code for r in readings}
+    root: dict[str, str] = {code: code for code in refused}
+    out: dict[str, str | None] = {}
+    changed = True
+    while changed:
+        changed = False
+        for spec in derived:
+            code = spec.tag_code
+            # Worked out, already withdrawn, or published by the Device itself.
+            if code in computed or code in out or code in known:
+                continue
+            inputs = _formula_inputs(spec.expression)
+            if not inputs & touched:
+                continue
+            blocking = sorted(root[name] for name in inputs if name in root)
+            out[code] = blocking[0] if blocking else None
+            touched.add(code)
+            if blocking:
+                root[code] = blocking[0]
+            changed = True
+    return {spec.tag_id: out[spec.tag_code] for spec in derived if spec.tag_code in out}

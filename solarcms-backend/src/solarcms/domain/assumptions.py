@@ -1133,6 +1133,13 @@ DEFAULT_GRID_EMISSION_FACTOR_KG_PER_KWH: Final = 0.82  # CEA all-India average, 
 # that was not (14 Oct 2026).
 PR_VARIANT: Final = "ghi_uncorrected"  # not temperature-corrected
 CUF_VARIANT: Final = "ac_capacity_calendar_hours"  # no exclusions
+# ⚠ The name says more than the figure does. Availability is the share of time
+# the Plant's registered Devices were reporting (`services/kpis.plant_availability`
+# over `health_logic.uptime_seconds_from_events`): `offline` and `degraded` time
+# count as down and only never-seen time is left out, so a communication loss
+# *is* counted, and an Inverter reporting 0 kW on time is available. Kept as the
+# identifier it is — screens key their wording on it (`format/value.variantWords`,
+# corrected 22 Oct 2026) — until the client supplies a definition (OPEN-16).
 AVAILABILITY_VARIANT: Final = "time_based_excluding_comms"
 
 # Less sunlight than this over a period is no sunlight to PR — twelve minutes at
