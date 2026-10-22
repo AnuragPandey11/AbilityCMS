@@ -23,6 +23,7 @@ from solarcms.domain.assumptions import (
     CUF_VARIANT,
     DEFAULT_GRID_EMISSION_FACTOR_KG_PER_KWH,
     G_REF_W_PER_M2,
+    PR_DISPLAY_CAP,
     PR_MIN_IRRADIATION_WH_PER_M2,
     PR_VARIANT,
 )
@@ -85,7 +86,8 @@ def performance_ratio(
         # OASIS_2MW's day by 9.75E-42 and printed 1.02E+42%.
         return FormulaResult(None, PR_VARIANT, "too little sunlight recorded in period")
     reference_yield = irradiation_wh_m2 / G_REF_W_PER_M2
-    return FormulaResult((energy_kwh / dc_capacity_kwp) / reference_yield, PR_VARIANT)
+    value = (energy_kwh / dc_capacity_kwp) / reference_yield
+    return FormulaResult(min(value, PR_DISPLAY_CAP), PR_VARIANT)
 
 
 def cuf(energy_kwh: float, ac_capacity_kw: float, hours: float) -> FormulaResult:

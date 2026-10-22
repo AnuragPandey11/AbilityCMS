@@ -43,6 +43,7 @@ from solarcms.domain.assumptions import (
     PLANT_ENERGY_SOURCE_PRECEDENCE,
     PLANT_OPERATING_SOURCE,
     PLANT_POWER_SOURCE_PRECEDENCE,
+    PR_DISPLAY_CAP,
     QUALITY_GOOD,
 )
 from solarcms.domain.derived import DerivedTag, evaluate_all
@@ -381,6 +382,9 @@ async def compute(
             standing.pop(code, None)
         standing.update(day)
         computed = evaluate_all(plant_formulas, inputs.values)
+        if "PERFORMANCE_RATIO" in computed:
+            computed["PERFORMANCE_RATIO"] = min(
+                computed["PERFORMANCE_RATIO"], PR_DISPLAY_CAP * 100.0)
         stateful, cleared = stateful_kpis(inputs, standing, moment)
         computed.update(stateful)
         if cleared:

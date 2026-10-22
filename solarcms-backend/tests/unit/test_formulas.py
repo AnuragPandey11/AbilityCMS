@@ -17,9 +17,13 @@ def test_a_pr_is_worked_out_as_before() -> None:
     assert performance_ratio(800.0, 1_000.0, 1_000.0).value == pytest.approx(0.8)
 
 
-def test_a_pr_above_100_percent_is_still_a_value() -> None:
-    # Shown and flagged on screen, never withheld or clamped (Guardrail 33).
-    assert performance_ratio(2_643.0, 1_000.0, 1_000.0).value == pytest.approx(2.643)
+def test_a_pr_above_100_percent_is_capped_at_100() -> None:
+    # The client's instruction (22 Oct 2026): PR is never shown above 100%.
+    assert performance_ratio(2_643.0, 1_000.0, 1_000.0).value == pytest.approx(1.0)
+
+
+def test_a_pr_below_the_cap_is_untouched() -> None:
+    assert performance_ratio(800.0, 1_000.0, 1_000.0).value == pytest.approx(0.8)
 
 
 def test_float_noise_for_sunlight_is_no_sunlight() -> None:
