@@ -25,10 +25,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from solarcms.domain.assumptions import (
-    PLANT_ENERGY_SOURCE_PRECEDENCE,
-    PLANT_POWER_SOURCE_PRECEDENCE,
-)
+from solarcms.domain.assumptions import PLANT_POWER_SOURCE_PRECEDENCE
 from solarcms.domain.slots import (
     KIND_COUNTER_TODAY,
     KIND_DEVICE_COUNT,
@@ -89,10 +86,12 @@ def _from_precedence(
 ) -> tuple[SlotCandidate, ...]:
     """Turn one of the hand-written precedence tuples into slot candidates.
 
-    Imported rather than restated so `PLANT_ENERGY_SOURCE_PRECEDENCE` and its
-    sibling stay the single source of truth for the two figures they cover. If
-    the client's answer to OPEN-14 reorders them, both the KPI service and this
-    catalogue follow in one edit.
+    Imported rather than restated so `PLANT_POWER_SOURCE_PRECEDENCE` stays the
+    single source of truth for the figure it covers. If the client's answer to
+    OPEN-14 reorders it, both the KPI service and this catalogue follow in one
+    edit. Today's Energy no longer comes from its energy sibling: it reads the
+    meters' lifetime registers too (`_meter_today`), which the scheduler's
+    daily-register precedence cannot express.
     """
     return tuple(
         SlotCandidate(
@@ -186,9 +185,22 @@ _KPI_ROW: Final[tuple[SlotSpec, ...]] = (
     SlotSpec(
         code="kpi.energy_today", label="Today's Energy", panel=PANEL_KPI_ROW, position=3,
         unit_hint="kWh", hide_when_unresolved=False,
+        # The meter first — its own daily register, else its lifetime register's
+        # advance since midnight — then the Inverters (22 Oct 2026, the user's
+        # decision; ⚠ PROPOSED, OPEN-14). It was the Plant KPI Device's figure,
+        # then the daily registers alone, so a meter that sends only lifetime
+        # totals never answered: UNIT1's Inverter sends its daily register as 0
+        # all day, and the tile read 0.00 kWh beside a CUF and a PR worked out
+        # from the meter's ~2,000 kWh. The meter order is the one
+        # "Energy Exported" and the reports use (`_meter_today`), so the three
+        # agree. The Plant KPI figure stays ahead of the Inverters only: it is
+        # the same daily-register precedence the scheduler applies, and placed
+        # first it would read the Inverters again wherever a meter sends no
+        # daily register.
         candidates=(
-            _tag(1, "PLANT_KPI", "PLANT_ENERGY_TODAY", "first"),
-            *_from_precedence(PLANT_ENERGY_SOURCE_PRECEDENCE, start=2),
+            *_meter_today("ENERGY_EXPORT_TODAY", "ENERGY_EXPORT_TOTAL"),
+            _tag(5, "PLANT_KPI", "PLANT_ENERGY_TODAY", "first"),
+            _tag(6, "INVERTER", "ENERGY_TODAY", "sum"),
         ),
     ),
     SlotSpec(

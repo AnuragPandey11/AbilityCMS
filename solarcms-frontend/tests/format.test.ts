@@ -215,6 +215,12 @@ describe("digitsForUnit", () => {
     expect(formatValue(17, "count")).toBe("17 count");
   });
 
+  it("gives a status code no decimals", () => {
+    // Tag Mapping printed an Inverter's STS as "0.00 code" (22 Oct 2026).
+    expect(digitsForUnit("code")).toBe(0);
+    expect(formatValue(0, "code")).toBe("0 code");
+  });
+
   it("gives a power factor two decimals", () => {
     expect(digitsForUnit("ratio")).toBe(2);
     expect(formatValue(0.9876, "ratio")).toBe("0.99 ratio");

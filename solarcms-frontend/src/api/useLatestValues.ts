@@ -87,6 +87,8 @@ const CURRENT_MINUTE_MS = 60_000;
 export interface LatestValues {
   /** device id → (tag id as string → value), shaped like a live frame (§5.1). */
   byDevice: Record<number, Record<string, number>>;
+  /** device id → (tag id as string → what arrived), where the latest was refused. */
+  rejectedByDevice: Record<number, Record<string, StoredRejected>>;
   isLoading: boolean;
 }
 
@@ -127,25 +129,67 @@ export function useLatestValues(
   });
 
   const codeTagIds = useCodeTagIds();
-  const byDevice = useMemo(() => {
-    const out: Record<number, Record<string, number>> = {};
-    const items = (readingsQuery.data?.items ?? []) as ReadingPoint[];
-    for (const point of items) {
-      // A flagged value is not presented as a reading (§4.2, Guardrail 4). It
-      // is not discarded from the system — `readings` still holds it, flagged,
-      // and the time-series chart re-draws it in the quality's own colour. It
-      // simply must not appear on a card as though it were a measurement.
-      // A status code outside its assumed range is the exception — see above.
-      if (!presentable(point, codeTagIds)) continue;
-      // The server returns buckets ascending, so the last write per key wins
-      // and is therefore the most recent good value.
-      const device = (out[point.device_id] ??= {});
-      device[String(point.tag_id)] = point.value as number;
-    }
-    return out;
-  }, [readingsQuery.data, codeTagIds]);
+  const latest = useMemo(
+    () => latestByDevice((readingsQuery.data?.items ?? []) as ReadingPoint[], codeTagIds),
+    [readingsQuery.data, codeTagIds],
+  );
 
-  return { byDevice, isLoading: readingsQuery.isLoading };
+  return {
+    byDevice: latest.values,
+    rejectedByDevice: latest.rejected,
+    isLoading: readingsQuery.isLoading,
+  };
+}
+
+/** `QUALITY_UNPARSEABLE`: stored as 0 for the row's sake, never sent as 0. */
+const UNPARSEABLE = 3;
+
+/** A Tag whose latest stored reading was refused, and what arrived. */
+export interface StoredRejected {
+  /** null when it arrived empty or not a number. */
+  value: number | null;
+  quality: number | null;
+}
+
+/**
+ * The latest stored point of each (Device, Tag) decides its current value.
+ *
+ * Accepted, it is the value. Refused, the Tag has **none** — and is returned
+ * apart, as what arrived — rather than its last accepted value from up to
+ * half an hour earlier: an efficiency of 98.5 % from before is not the
+ * efficiency now that the Inverter sends −1 (22 Oct 2026). A flagged value is
+ * not discarded from the system — `readings` still holds it, and charts count
+ * it — it simply must not appear on a card as though it were a measurement
+ * (§4.2, Guardrail 4). A status code outside its assumed range is the
+ * exception (`presentable`).
+ */
+export function latestByDevice(
+  points: ReadingPoint[],
+  codeTagIds: ReadonlySet<number>,
+): {
+  values: Record<number, Record<string, number>>;
+  rejected: Record<number, Record<string, StoredRejected>>;
+} {
+  const values: Record<number, Record<string, number>> = {};
+  const rejected: Record<number, Record<string, StoredRejected>> = {};
+  // The server returns buckets ascending, so the last write per key wins.
+  for (const point of points) {
+    if (point.value === null && (point.quality === null || point.quality === 0)) continue;
+    const key = String(point.tag_id);
+    const accepted = (values[point.device_id] ??= {});
+    const refused = (rejected[point.device_id] ??= {});
+    if (presentable(point, codeTagIds)) {
+      accepted[key] = point.value as number;
+      delete refused[key];
+    } else {
+      delete accepted[key];
+      refused[key] = {
+        value: point.quality === UNPARSEABLE ? null : point.value,
+        quality: point.quality,
+      };
+    }
+  }
+  return { values, rejected };
 }
 
 /** How far back a single Device's "current" values may come from. */
@@ -162,7 +206,7 @@ export const DEVICE_LOOKBACK_MINUTES = LOOKBACK_MINUTES;
  */
 export function useDeviceLatest(
   deviceId: number | null,
-): { values: Map<number, number>; isLoading: boolean } {
+): { values: Map<number, number>; rejected: Map<number, StoredRejected>; isLoading: boolean } {
   const now = Math.floor(Date.now() / 60_000) * 60_000;
   const query: readingsApi.ReadingsQuery = {
     deviceIds: deviceId === null ? [] : [deviceId],
@@ -180,16 +224,16 @@ export function useDeviceLatest(
     placeholderData: (previous) => previous,
   });
   const codeTagIds = useCodeTagIds();
-  const values = useMemo(() => {
-    const out = new Map<number, number>();
-    for (const point of (readings.data?.items ?? []) as ReadingPoint[]) {
-      // A flagged value is not presented as a reading (Guardrail 4), but for a
-      // status code outside its assumed range. Buckets arrive ascending, so
-      // the last write per Tag is the latest good value.
-      if (!presentable(point, codeTagIds)) continue;
-      out.set(point.tag_id, point.value as number);
-    }
-    return out;
-  }, [readings.data, codeTagIds]);
-  return { values, isLoading: deviceId !== null && readings.isLoading };
+  const latest = useMemo(() => {
+    // The latest point per Tag decides, as for `useLatestValues`.
+    const { values, rejected } = latestByDevice(
+      (readings.data?.items ?? []) as ReadingPoint[], codeTagIds);
+    const own = deviceId === null ? undefined : values[deviceId];
+    const refused = deviceId === null ? undefined : rejected[deviceId];
+    return {
+      values: new Map(Object.entries(own ?? {}).map(([tag, value]) => [Number(tag), value])),
+      rejected: new Map(Object.entries(refused ?? {}).map(([tag, entry]) => [Number(tag), entry])),
+    };
+  }, [readings.data, codeTagIds, deviceId]);
+  return { ...latest, isLoading: deviceId !== null && readings.isLoading };
 }

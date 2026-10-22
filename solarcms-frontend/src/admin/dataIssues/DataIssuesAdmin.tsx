@@ -685,6 +685,8 @@ function SharedRange({ issues, ctx }: { issues: DataIssue[]; ctx: FixContext }):
   for (const issue of issues) {
     const tag = str(issue, "tag_code");
     if (!tag || num(issue, "binding_id") === null || issue.device_id === null) continue;
+    // Only numbers can be rescaled: values that arrive empty are left out.
+    if ((num(issue, "out_of_range") ?? 0) === 0) continue;
     byTag.set(tag, [...(byTag.get(tag) ?? []), issue]);
   }
   const shared = [...byTag].filter(([, list]) => list.length > 1);

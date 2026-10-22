@@ -36,10 +36,14 @@ function significantDigits(magnitude: number): number {
  * decimals everywhere (the client's choice, 8 Oct 2026): `0.99`, never
  * `0.988`. The magnitude rule would give it three, which is why it is stated.
  *
+ * `code` is a status code — a label the equipment sends as a number — and has
+ * no fractional part to show: Tag Mapping printed an Inverter's `STS` as
+ * "0.00 code" (22 Oct 2026).
+ *
  * Returns `undefined` for every other unit, meaning "use the magnitude rule".
  */
 export function digitsForUnit(unit: string | null | undefined): number | undefined {
-  if (unit === "count") return 0;
+  if (unit === "count" || unit === "code") return 0;
   if (unit === "ratio") return 2;
   return undefined;
 }
@@ -341,8 +345,14 @@ export function variantWords(
       return "plane-of-array irradiance, not temperature-corrected";
     case "ac_capacity_calendar_hours":
       return `AC capacity, every hour since ${measuredLater ? "the first reading" : HOURS_SINCE[period]}`;
+    // ⚠ The code's name is older than what the figure measures, and wrong
+    // about it: availability is the share of time every registered Device was
+    // reporting (`services/kpis.plant_availability`). Time offline or late
+    // counts against it, and only time never heard is left out; a Device
+    // reporting 0 kW on time counts as available. Said as it is (22 Oct 2026)
+    // — the caption said comms loss was not counted, the opposite.
     case "time_based_excluding_comms":
-      return "time-weighted; comms loss not counted as downtime";
+      return "share of time Devices were reporting; offline counts as down";
     default:
       return variant.replace(/_/g, " ");
   }

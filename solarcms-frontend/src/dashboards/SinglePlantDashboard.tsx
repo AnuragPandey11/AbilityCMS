@@ -149,7 +149,7 @@ import { formatDateTime, timezoneLabel } from "@/format/datetime";
 import { useSelection } from "@/state/selection";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { usePermission } from "@/auth/usePermission";
-import { useLiveSocket } from "@/live/LiveSocket";
+import { currentValues, useLiveSocket } from "@/live/LiveSocket";
 import { useLiveRefresh } from "@/live/useLiveRefresh";
 
 /**
@@ -685,12 +685,10 @@ export function SinglePlantDashboard(): JSX.Element {
    * then lose values as the Device reported, which is the opposite of what
    * arriving data should do.
    */
-  const valuesFor = (deviceId: number): Record<string, number> | undefined => {
-    const stored = latest.byDevice[deviceId];
-    const live = liveDevices[deviceId]?.values;
-    if (!stored && !live) return undefined;
-    return { ...stored, ...live };
-  };
+  const valuesFor = (deviceId: number): Record<string, number> | undefined =>
+    // A Tag the live frame withdrew — refused, or not worked out — has no
+    // value, whatever was stored before it.
+    currentValues(latest.byDevice[deviceId], liveDevices[deviceId]);
 
   /** id → Device, so the inspector can name a parent rather than print `#38`. */
   const deviceById = useMemo(

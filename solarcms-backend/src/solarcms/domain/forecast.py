@@ -169,6 +169,27 @@ def history_window(
 RegisterBucket = tuple[int, float, float]
 
 
+def lifetime_as_daily(
+    days: Mapping[date, Sequence[RegisterBucket]],
+) -> dict[date, list[RegisterBucket]]:
+    """A lifetime register's days, each rebased on its own first reading.
+
+    Today's Energy reads a meter's lifetime register where the meter sends no
+    daily one (`kpi.energy_today`, 22 Oct 2026). Rebased, each day reads as the
+    daily register the meter does not have — starting at nought and rising
+    with the day's energy — so `register_day_totals` judges both alike. What
+    the register moved between one day's last reading and the next day's
+    first is night, and belongs to no day here.
+    """
+    out: dict[date, list[RegisterBucket]] = {}
+    for day, buckets in days.items():
+        if not buckets:
+            continue
+        base = min(low for _slot, low, _high in buckets)
+        out[day] = [(slot, low - base, high - base) for slot, low, high in buckets]
+    return out
+
+
 def register_day_totals(
     days: Mapping[date, Sequence[RegisterBucket]], *, settled_slots: int,
 ) -> dict[date, float]:

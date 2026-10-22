@@ -44,6 +44,7 @@ from solarcms.domain.assumptions import (
     DATA_ISSUE_INTERVAL_MIN_GAPS,
     DATA_ISSUE_INTERVAL_SLOWER,
     DATA_ISSUE_STRING_CURRENT_A,
+    INVERTER_PRODUCING_ABOVE_KW,
     PR_PERIOD_CEILING,
     QUALITY_GOOD,
     QUALITY_OUT_OF_RANGE,
@@ -184,6 +185,21 @@ class DeviceFact:
     # Set only for a Device registered on its own string topic: the topic it
     # publishes its own readings on, and what arrived there.
     own_topic: OwnTopicFact | None = None
+    # The highest AC power it reported over the rejected-values window, for a
+    # Device that reports any — what says whether it was idle at the time.
+    peak_power_kw: float | None = None
+
+    @property
+    def producing(self) -> bool:
+        """Whether it was producing while its rejected values arrived.
+
+        A value at zero just outside its range is equipment saying "nothing" —
+        0 Hz from a sleeping Inverter — only while the equipment *is* doing
+        nothing. UNIT1's Inverter sent an efficiency of -1 all day while making
+        500 kW (22 Oct 2026); taken for idleness, the cause went unreported and
+        only the DC Power calculated from it was listed.
+        """
+        return self.peak_power_kw is not None and self.peak_power_kw > INVERTER_PRODUCING_ABOVE_KW
 
     @property
     def publishes(self) -> bool:
@@ -723,9 +739,13 @@ def _rejected_issues(device: DeviceFact) -> Iterable[DataIssue]:
         if health.total == 0:
             continue
         # Out-of-range values that all sit at zero are equipment saying
-        # "nothing" (an Inverter asleep, a pyranometer at night): not counted.
+        # "nothing" (an Inverter asleep, a pyranometer at night): not counted —
+        # unless the Device was producing meanwhile, when "nothing" is a value
+        # it sends for "not available" and the cause of anything worked out
+        # from it (`DeviceFact.producing`).
+        idle = not device.producing
         out_of_range = (
-            0 if health.idle_zero(health.flagged_min, health.flagged_max)
+            0 if (idle and health.idle_zero(health.flagged_min, health.flagged_max))
             or health.accepted_now(health.flagged_min, health.flagged_max)
             else health.out_of_range
         )
@@ -734,7 +754,7 @@ def _rejected_issues(device: DeviceFact) -> Iterable[DataIssue]:
             continue
         latest_counts = health.latest_rejected and not (
             health.latest_quality == QUALITY_OUT_OF_RANGE
-            and (health.idle_zero(health.latest_value, health.latest_value)
+            and ((idle and health.idle_zero(health.latest_value, health.latest_value))
                  or health.accepted_now(health.latest_value, health.latest_value))
         )
         # Reported when it is happening now: the latest value rejected, or an
@@ -783,6 +803,14 @@ def _rejected_issues(device: DeviceFact) -> Iterable[DataIssue]:
                     "fault in the equipment."
                 )
             )
+            if device.producing and health.idle_zero(health.flagged_min, health.flagged_max):
+                # A placeholder sent while generating — not a mapping a scale can fix.
+                detail += (
+                    f" They sit at zero while {device.code} was producing up to "
+                    f"{device.peak_power_kw:,.0f} kW, so this is most likely the "
+                    "equipment's value for \"not available\" — raise it with the client."
+                )
+                facts["producing_kw"] = device.peak_power_kw
         yield DataIssue(
             key=f"rejected:{device.device_id}:{health.tag_code}",
             kind="values_rejected", category="data_wrong",

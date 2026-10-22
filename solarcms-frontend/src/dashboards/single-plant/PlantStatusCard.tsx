@@ -34,7 +34,12 @@ import type {
   OperatingStatus,
   ResolvedSlot,
 } from "@/api/schemas";
-import { undefinedExplanation, slotText, sourceLabel } from "@/components/dashboard/SlotValue";
+import {
+  isRejectedBlank,
+  undefinedExplanation,
+  slotText,
+  sourceLabel,
+} from "@/components/dashboard/SlotValue";
 import { Panel } from "@/components/ui";
 import { Skeleton } from "@/components/state";
 import { IconChevronRight } from "@/components/icons";
@@ -175,6 +180,11 @@ function slotRow(label: string, slot: ResolvedSlot | undefined): Row {
       tone: "faint",
       title: "No Device at this Plant reports this — there is no weather station bound to it.",
     };
+  }
+  if (isRejectedBlank(slot)) {
+    // What arrived, marked: a value the equipment sent and the platform
+    // refused, which is not the same as nothing arriving.
+    return { label, value: slotText(slot), tone: "warn", title: undefinedExplanation(slot) };
   }
   if (slot.value === null) {
     return { label, value: UNDEFINED_DISPLAY, tone: "faint", title: undefinedExplanation(slot) };

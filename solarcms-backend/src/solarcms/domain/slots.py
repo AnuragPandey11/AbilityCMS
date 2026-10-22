@@ -193,6 +193,37 @@ class DeviceFacts:
     # that line to the Plant's generation, and as `first` it can win on its
     # code alone (`MAIN_MFM` sorts before `MFM`). It stays in the SLD stages.
     measures_generation: bool = True
+    # The current value of a Tag ingest refused, by Tag code — never in
+    # `values` at the same time. No slot reads it; a slot that could have is
+    # told about it (`ResolvedSlot.rejected`), so the screen can show what
+    # arrived, marked, instead of a blank or a number that is not a reading.
+    rejected: Mapping[str, RejectedReading] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedReading:
+    """The current value of a Tag that was refused: stored and flagged, shown as
+    rejected, never used in a figure (Guardrail 33).
+
+    Either it *arrived* outside its range or unreadable — `value` is what came,
+    `source_key` the payload key it came under, and `valid_min`/`valid_max` the
+    range it was judged against — or it is a calculated Tag that could not be
+    worked out because one of its inputs was refused, named in `because`. The
+    two are kept apart because they point at different culprits: the first is
+    the equipment or its mapping, the second is our arithmetic declining to
+    run on a bad input.
+    """
+
+    device_id: int
+    device_code: str
+    tag_code: str
+    # None when it arrived empty or not a number, or when it was never calculated.
+    value: float | None
+    quality: int | None = None
+    source_key: str | None = None
+    valid_min: float | None = None
+    valid_max: float | None = None
+    because: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +299,11 @@ class ResolvedSlot:
     source: SlotSource | None
     undefined_reason: str | None
     hidden: bool = False
+    # Readings this slot would have used but that were refused. With a value,
+    # the Devices left out of it ("Σ 16 of 17"); without one, why it is blank
+    # — `undefined_reason` stays `no_value`, so a screen that does not know
+    # this field still reads a quiet source rather than failing.
+    rejected: tuple[RejectedReading, ...] = ()
 
 
 def _aggregate(values: Sequence[float], how: str) -> float | None:
@@ -305,8 +341,11 @@ def _candidate_is_bound(candidate: SlotCandidate, facts: PlantFacts) -> bool:
     return any(candidate.tag_code in d.bound_tag_codes for d in devices)
 
 
-def _evaluate(candidate: SlotCandidate, facts: PlantFacts) -> tuple[float | None, SlotSource]:
-    """Produce this candidate's value now, plus where it came from."""
+def _evaluate(
+    candidate: SlotCandidate, facts: PlantFacts,
+) -> tuple[float | None, SlotSource, tuple[RejectedReading, ...]]:
+    """Produce this candidate's value now, where it came from, and what it
+    could not use because it was refused."""
     if candidate.kind == KIND_PLANT_ATTRIBUTE:
         assert candidate.plant_attribute is not None
         raw = facts.attributes.get(candidate.plant_attribute)
@@ -314,7 +353,7 @@ def _evaluate(candidate: SlotCandidate, facts: PlantFacts) -> tuple[float | None
             kind=candidate.kind, device_type_code=None,
             tag_code=candidate.plant_attribute, aggregate="first", device_count=0,
         )
-        return (None if raw is None else float(raw)), source
+        return (None if raw is None else float(raw)), source, ()
 
     # Stable ordering: a slot whose value jumps between two Devices between
     # refreshes is unreadable, and `first` depends on it entirely.
@@ -329,7 +368,7 @@ def _evaluate(candidate: SlotCandidate, facts: PlantFacts) -> tuple[float | None
         )
         # A count of zero is a real answer — "0 Inverters online" is information,
         # not a missing reading — so this is the one place 0.0 is not a lie.
-        return float(len(counted)), source
+        return float(len(counted)), source, ()
 
     assert candidate.tag_code is not None
     tag = candidate.tag_code
@@ -342,13 +381,23 @@ def _evaluate(candidate: SlotCandidate, facts: PlantFacts) -> tuple[float | None
     values = [float(reading(d)[tag]) for d in contributing]
     if candidate.aggregate == "first":
         contributing, values = contributing[:1], values[:1]
+    # A register's advance is worked out from stored history, not from the
+    # current values, so only a reading slot can have had one refused. For
+    # `first`, only a Device that would have been chosen ahead of the one that
+    # was: the others were never going to be the figure.
+    refused = [] if counter_today else [
+        d.rejected[tag] for d in devices
+        if tag in d.bound_tag_codes and tag in d.rejected and tag not in d.values
+        and (candidate.aggregate != "first" or not contributing
+             or d.code < contributing[0].code)
+    ]
     source = SlotSource(
         kind=candidate.kind, device_type_code=candidate.device_type_code,
         tag_code=candidate.tag_code, aggregate=candidate.aggregate,
         device_count=len(contributing),
         device_ids=tuple(d.device_id for d in contributing),
     )
-    return _aggregate(values, candidate.aggregate), source
+    return _aggregate(values, candidate.aggregate), source, tuple(refused)
 
 
 def resolve_slot(spec: SlotSpec, facts: PlantFacts, unit: str | None = None) -> ResolvedSlot:
@@ -384,8 +433,16 @@ def resolve_slot(spec: SlotSpec, facts: PlantFacts, unit: str | None = None) -> 
 
     planned = bound[0]
     attempts = bound if spec.fallback_when_silent else bound[:1]
+    # What every candidate tried so far could not use. A refused reading counts
+    # as silence for choosing a source — the slot falls back past it exactly as
+    # it would past a Device that sent nothing — but it is not forgotten.
+    refused: list[RejectedReading] = []
+    refused_source: SlotSource | None = None
     for index, candidate in enumerate(attempts):
-        value, source = _evaluate(candidate, facts)
+        value, source, rejected = _evaluate(candidate, facts)
+        refused.extend(rejected)
+        if rejected and refused_source is None:
+            refused_source = source
         if value is None:
             continue
         if index > 0:
@@ -401,18 +458,21 @@ def resolve_slot(spec: SlotSpec, facts: PlantFacts, unit: str | None = None) -> 
         return ResolvedSlot(
             slot_code=spec.code, label=spec.label, panel=spec.panel, position=spec.position,
             value=value, unit=unit or spec.unit_hint, source=source, undefined_reason=None,
+            rejected=tuple(refused),
         )
 
     # Bound, but nothing is talking. Name the planned source anyway: "no reading
-    # from the ABT Meter" is actionable where a bare blank is not.
-    _, planned_source = _evaluate(planned, facts)
+    # from the ABT Meter" is actionable where a bare blank is not — unless a
+    # source *did* talk and was refused, which is the source worth naming.
+    _, planned_source, _ = _evaluate(planned, facts)
     return ResolvedSlot(
         slot_code=spec.code, label=spec.label, panel=spec.panel, position=spec.position,
-        value=None, unit=unit or spec.unit_hint, source=planned_source,
+        value=None, unit=unit or spec.unit_hint, source=refused_source or planned_source,
         undefined_reason=UNDEFINED_NO_VALUE,
         # Never hidden: the source exists and has gone quiet, which is exactly
         # the condition the screen must not conceal.
         hidden=False,
+        rejected=tuple(refused),
     )
 
 
@@ -442,7 +502,7 @@ def resolve_all(
                 slot_code=resolved.slot_code, label=resolved.label, panel=resolved.panel,
                 position=resolved.position, value=resolved.value, unit=unit,
                 source=resolved.source, undefined_reason=resolved.undefined_reason,
-                hidden=resolved.hidden,
+                hidden=resolved.hidden, rejected=resolved.rejected,
             )
         )
     return out

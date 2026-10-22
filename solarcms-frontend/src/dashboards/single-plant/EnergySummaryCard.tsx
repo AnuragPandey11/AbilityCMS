@@ -27,7 +27,12 @@
 
 import type { KpiFigure, PlantKpis, ResolvedSlot } from "@/api/schemas";
 import type { YesterdayEnergy } from "@/api/useYesterdayEnergy";
-import { sourceLabel, undefinedExplanation } from "@/components/dashboard/SlotValue";
+import {
+  isRejectedBlank,
+  slotText,
+  sourceLabel,
+  undefinedExplanation,
+} from "@/components/dashboard/SlotValue";
 import { Panel } from "@/components/ui";
 import {
   UNDEFINED_DISPLAY,
@@ -49,6 +54,9 @@ function slotRow(label: string, slot: ResolvedSlot | undefined): StatusRowData {
       tone: "faint",
       title: "No Device at this Plant is bound to a Tag that could answer this.",
     };
+  }
+  if (isRejectedBlank(slot)) {
+    return { label, value: slotText(slot), tone: "warn", title: undefinedExplanation(slot) };
   }
   if (slot.value === null) {
     return { label, value: UNDEFINED_DISPLAY, tone: "faint", title: undefinedExplanation(slot) };

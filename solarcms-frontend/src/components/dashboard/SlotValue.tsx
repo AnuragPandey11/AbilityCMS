@@ -22,6 +22,7 @@ import {
   formatHeadline,
   formatNumber,
 } from "@/format/value";
+import { rejectedText, rejectedValue } from "@/format/rejected";
 import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "@/components/icons";
 import { iconWell } from "@/components/icons/wells";
@@ -29,8 +30,27 @@ import { InfoHint } from "@/components/ui";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 import { RailTile, type RailTone } from "@/components/charts/RailTile";
 
+/**
+ * True when a slot is blank because what arrived was refused. It is drawn as
+ * what arrived, marked "rejected", rather than as a dash: "−1.00 % rejected"
+ * says the equipment sent a value the platform will not use, where a dash says
+ * nothing arrived — opposite problems, different people to call.
+ */
+export function isRejectedBlank(slot: ResolvedSlot): boolean {
+  return slot.value === null && (slot.rejected?.length ?? 0) > 0;
+}
+
+/** What was refused, in sentences: who sent what, under which key, against which range. */
+function rejectionSentences(slot: ResolvedSlot): string {
+  const rejected = slot.rejected ?? [];
+  const shown = rejected.slice(0, 3).map((entry) => rejectedText(entry, slot.unit));
+  const more = rejected.length - shown.length;
+  return `Rejected — ${shown.join(" ")}${more > 0 ? ` And ${more} more.` : ""}`;
+}
+
 /** Why a slot is blank, in words an operator can act on. */
 export function undefinedExplanation(slot: ResolvedSlot): string {
+  if (isRejectedBlank(slot)) return rejectionSentences(slot);
   switch (slot.undefined_reason) {
     case "no_source":
       return "No Device on this Plant is bound to a Tag that could answer this.";
@@ -84,6 +104,13 @@ function titleCase(code: string): string {
  * longer fits its tile. The full value is still on the tooltip.
  */
 export function slotText(slot: ResolvedSlot): string {
+  if (isRejectedBlank(slot)) {
+    // What arrived, with its unit, since a caller adds the unit only to a value.
+    const rejected = slot.rejected ?? [];
+    return rejected.length === 1
+      ? `${rejectedValue(rejected[0], slot.unit)} rejected`
+      : `${rejected.length} rejected`;
+  }
   if (slot.value === null) return UNDEFINED_DISPLAY;
   // The unit decides where it can: two decimals for a ratio, none for a
   // count — "17.00 count" invites the reader to look for a precision that
@@ -91,10 +118,15 @@ export function slotText(slot: ResolvedSlot): string {
   return formatNumber(slot.value, { digits: digitsForUnit(slot.unit) });
 }
 
-/** Where a slot's figure came from, amber when a fallback source answered. */
+/**
+ * Where a slot's figure came from, amber when a fallback source answered — and
+ * how many readings it left out because they were refused: a sum of 16
+ * Inverters where 17 are registered is not the Plant's total, and says so.
+ */
 export function Provenance({ slot }: { slot: ResolvedSlot }): JSX.Element | null {
   const label = sourceLabel(slot.source);
   if (!label) return null;
+  const leftOut = slot.value !== null ? (slot.rejected ?? []).length : 0;
   return (
     <span
       className={slot.source?.degraded ? "text-warn" : "text-ink-faint"}
@@ -107,6 +139,11 @@ export function Provenance({ slot }: { slot: ResolvedSlot }): JSX.Element | null
     >
       {label}
       {slot.source?.degraded ? " (fallback)" : ""}
+      {leftOut > 0 ? (
+        <span className="text-warn" title={`Left out of this figure. ${rejectionSentences(slot)}`}>
+          {` · ${leftOut} rejected`}
+        </span>
+      ) : null}
     </span>
   );
 }

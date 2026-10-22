@@ -109,6 +109,7 @@ async def gather(
     primary_times: dict[int, list[datetime]] = defaultdict(list)
     health: dict[int, list[TagHealth]] = defaultdict(list)
     string_max: dict[int, dict[int, float]] = defaultdict(dict)
+    peak_power: dict[int, float] = {}
     own_of: dict[str, int] = {}
     own_seen: dict[str, _OwnSeen] = {}
 
@@ -232,6 +233,25 @@ async def gather(
                 recent_rejected=sum(1 for q in (row.recent_qualities or []) if q != QUALITY_GOOD),
             ))
 
+        # Whether a Device with rejected values was producing meanwhile: a value
+        # at zero is only "nothing" from equipment that is doing nothing
+        # (`DeviceFact.producing`). Asked only of those Devices, over the same
+        # window the rejections were counted in.
+        power_tags = await scope.tag_ids(session, ["AC_ACTIVE_POWER"]) if health else []
+        if power_tags:
+            for row in (await session.execute(text("""
+                SELECT a.device_id, max(a.max_value) AS peak
+                  FROM agg_1m_v a
+                 WHERE a.device_id = ANY(:ids) AND a.tag_id = ANY(:tag_ids)
+                   AND a.bucket > now() - make_interval(
+                           secs => CAST(:window AS double precision))
+                   AND COALESCE(a.worst_quality, 0) = :good
+                 GROUP BY a.device_id
+            """), {"ids": sorted(health), "tag_ids": power_tags,
+                   "window": DATA_ISSUE_FLAGGED_WINDOW_S, "good": QUALITY_GOOD})).all():
+                if row.peak is not None:
+                    peak_power[row.device_id] = float(row.peak)
+
         string_ids = [r.id for r in device_rows if r.type_code in ("INVERTER", "SMB")]
         current_tags = (await scope.tag_ids_matching(session, "^PV[0-9]+_CURRENT$")
                         if string_ids else [])
@@ -274,6 +294,7 @@ async def gather(
             measured_gaps=len(gaps),
             tag_health=tuple(health.get(row.id, ())),
             string_current_max=string_max.get(row.id, {}),
+            peak_power_kw=peak_power.get(row.id),
             own_topic=OwnTopicFact(
                 topic=own, messages=seen.messages, last_seen=seen.last,
                 keys=tuple(seen.keys),

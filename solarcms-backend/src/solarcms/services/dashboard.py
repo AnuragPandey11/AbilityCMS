@@ -48,6 +48,7 @@ from solarcms.domain.slots import (
     KIND_COUNTER_TODAY,
     DeviceFacts,
     PlantFacts,
+    RejectedReading,
     ResolvedSlot,
     SlotCandidate,
     SlotSpec,
@@ -277,22 +278,21 @@ async def gather(
             constant_names=FORMULA_CONSTANTS, available_constants=constants))
 
     values_by_device: dict[int, dict[str, float]] = {}
+    rejected_by_device: dict[int, dict[str, RejectedReading]] = {}
     for row in device_rows:
-        values: dict[str, float] = {}
-        for key, raw in (await live.read_current_values(row.id)).items():
-            if key.startswith("_"):
-                continue  # `_ts`, the hash's own timestamp
-            try:
-                tag_id, value = int(key), float(raw)
-            except ValueError:
-                # A Redis hash is untyped and ingest is not the only thing that
-                # could ever write one. Skipping a malformed entry is right;
-                # letting it raise would blank a whole dashboard.
-                continue
-            code = tag_code_by_id.get(tag_id)
-            if code is not None:
-                values[code] = value
-        values_by_device[row.id] = values
+        # Accepted values and refused ones are separate fields of the same hash
+        # (`live.parse_device_hash`); a refused value never reaches `values`, so
+        # no slot can use it, and is carried beside them so a slot can say so.
+        current, refused = live.parse_device_hash(await live.read_current_values(row.id))
+        values_by_device[row.id] = {
+            tag_code_by_id[tag_id]: value for tag_id, value in current.items()
+            if tag_id in tag_code_by_id
+        }
+        rejected_by_device[row.id] = {
+            tag_code_by_id[tag_id]: _rejected_reading(row.id, row.code, tag_code_by_id[tag_id],
+                                                      entry)
+            for tag_id, entry in refused.items() if tag_id in tag_code_by_id
+        }
 
     # A sun sensor reading 0 W/m² beside one reading the sun is not measuring
     # (`domain/irradiation`). Its value is withheld — never its binding — so
@@ -324,6 +324,7 @@ async def gather(
                     for (device_id, tag_code), total in advances.items()
                     if device_id == row.id
                 },
+                rejected=rejected_by_device[row.id],
             )
         )
 
@@ -395,6 +396,33 @@ def _withheld_json(reading: WithheldReading) -> dict[str, Any]:
             "tag_code": reading.tag_code, "value": reading.value, "reason": reading.reason}
 
 
+def _number(value: object) -> float | None:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _rejected_reading(
+    device_id: int, device_code: str, tag_code: str, entry: dict[str, Any],
+) -> RejectedReading:
+    """A refused value as ingest recorded it (`domain/decoding.current_state`)."""
+    quality = entry.get("quality")
+    return RejectedReading(
+        device_id=device_id, device_code=device_code, tag_code=tag_code,
+        value=_number(entry.get("value")),
+        quality=quality if isinstance(quality, int) else None,
+        source_key=entry.get("source_key") if isinstance(entry.get("source_key"), str) else None,
+        valid_min=_number(entry.get("valid_min")),
+        valid_max=_number(entry.get("valid_max")),
+        because=entry.get("because") if isinstance(entry.get("because"), str) else None,
+    )
+
+
+def _rejected_json(reading: RejectedReading) -> dict[str, Any]:
+    return {"device_id": reading.device_id, "device_code": reading.device_code,
+            "tag_code": reading.tag_code, "value": reading.value, "quality": reading.quality,
+            "source_key": reading.source_key, "valid_min": reading.valid_min,
+            "valid_max": reading.valid_max, "because": reading.because}
+
+
 def _slot_json(
     slot: ResolvedSlot, note: str | None = None, withheld: list[WithheldReading] | None = None,
 ) -> dict[str, Any]:
@@ -421,6 +449,10 @@ def _slot_json(
         "override_note": note,
         # Readings of this slot's Tags left out as not measuring (`facts.withheld`).
         "withheld": [_withheld_json(r) for r in withheld or []],
+        # Readings it would have used but that were refused — shown, marked, and
+        # never part of `value`. A field of its own rather than a new
+        # `undefined_reason`, so a screen built before it still parses.
+        "rejected": [_rejected_json(r) for r in slot.rejected],
     }
 
 

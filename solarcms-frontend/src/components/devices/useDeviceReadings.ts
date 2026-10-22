@@ -66,6 +66,8 @@ export function useDeviceReadings(
 
   const values = useMemo(() => {
     const out = new Map(latest.values);
+    // A Tag the live frame withdrew has no value, whatever was stored before.
+    for (const key of Object.keys(live?.withdrawn ?? {})) out.delete(Number(key));
     for (const [key, value] of Object.entries(live?.values ?? {})) out.set(Number(key), value);
     return out;
   }, [latest.values, live]);

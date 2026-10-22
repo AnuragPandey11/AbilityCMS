@@ -166,3 +166,31 @@ async def test_an_announced_change_drops_the_remembered_resolution(worker: Any) 
 def test_memory_holds_what_redis_held() -> None:
     memory = DeviceMemory(throttle={1: datetime.now(UTC)}, counters={2: 5.0}, current={3: 1.0})
     assert memory.counters[2] == 5.0
+
+
+async def test_a_refused_reading_is_written_as_a_refusal_not_a_value(
+        worker: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # UNIT1's Inverter sends an efficiency of -1 (22 Oct 2026). It is stored and
+    # throttled like any reading; it is not the Tag's current value, and the
+    # accepted value from before it does not stay standing in its place.
+    w, calls = worker
+    ranged = DeviceResolution(
+        device_id=7, client_id=1, plant_id=2, expected_interval_s=30,
+        bindings={"EFF": TagBinding(source_key="EFF", tag_id=12, tag_code="INVERTER_EFFICIENCY",
+                                    valid_min=0.0, valid_max=100.0)},
+    )
+
+    async def cached(_topic: str) -> DeviceResolution:
+        return ranged
+
+    monkeypatch.setattr(ingest_module, "resolve_cached", cached)
+    await w.handle("scms/v1/C/P/M/INV1", json.dumps({"EFF": 98.5}).encode())
+    assert w._devices[7].current == {12: 98.5}
+    await w.handle("scms/v1/C/P/M/INV1", json.dumps({"EFF": -1}).encode())
+    written = calls.pipelines[-1]
+    assert written["current"] == {}
+    assert written["rejected"][12]["value"] == -1.0
+    assert written["rejected"][12]["source_key"] == "EFF"
+    assert written["throttled_now"] == [12]
+    assert w._devices[7].current == {}, "98.5 is not the efficiency now"
+    assert len(w.batch.readings) == 2, "both are stored"
