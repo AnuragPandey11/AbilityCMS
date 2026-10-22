@@ -21,7 +21,7 @@ import { qk } from "./queryKeys";
 import * as readingsApi from "./endpoints/readings";
 import { usePlantDevices } from "./hooks";
 import type { DeviceListItem, ReadingPoint, Tag, Tier } from "./schemas";
-import { provenanceOf, seriesFromReadings, useSlotSource, type TrendPoint } from "./useSlotTrend";
+import { curveRefusal, provenanceOf, seriesFromReadings, useSlotSource, type TrendPoint } from "./useSlotTrend";
 import { tierWithin, type WindowRange } from "./trendWindow";
 
 export interface Series {
@@ -129,6 +129,7 @@ export function useSlotSeries(
   options: { live: boolean },
 ): SlotSeries {
   const slotSource = useSlotSource(plantId, slotCode);
+  const refusal = curveRefusal(slotSource.source);
   const devicesQuery = usePlantDevices(plantId);
   const devices = useMemo(() => {
     const ids = new Set(slotSource.deviceIds);
@@ -138,7 +139,7 @@ export function useSlotSeries(
   const series = useSeries(
     { devices, tag: slotSource.tag, aggregate: slotSource.source?.aggregate ?? "first" },
     range,
-    { live: options.live, enabled: slotSource.source !== null },
+    { live: options.live, enabled: slotSource.source !== null && refusal === null },
   );
 
   return {
@@ -146,7 +147,7 @@ export function useSlotSeries(
     unit: slotSource.slot?.unit ?? slotSource.tag?.unit ?? null,
     label: slotSource.slot?.label ?? slotCode,
     provenance: provenanceOf(slotSource.slot),
-    unavailableReason: slotSource.unavailableReason,
+    unavailableReason: slotSource.unavailableReason ?? refusal,
     isLoading: slotSource.isLoading || series.isLoading,
   };
 }
