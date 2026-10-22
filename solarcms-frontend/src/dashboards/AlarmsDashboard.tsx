@@ -21,6 +21,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useReducedMotion } from "framer-motion";
 import { useAlarms, usePlantDevices } from "@/api/hooks";
 import * as alarmsApi from "@/api/endpoints/alarms";
 import type { Alarm, AlarmSeverity, AlarmState } from "@/api/schemas";
@@ -45,6 +46,8 @@ import { isApiError } from "@/api/problem";
 const STATES: (AlarmState | "")[] = ["", "active", "acknowledged", "resolved"];
 const SEVERITIES: (AlarmSeverity | "")[] = ["", "critical", "high", "medium", "low"];
 const CLASSIFICATIONS = ["", "communication", "equipment"] as const;
+/** Long enough for an acknowledged row to fade out before the list refreshes. */
+const LEAVE_MS = 220;
 
 export function AlarmsDashboard(): JSX.Element {
   const queryClient = useQueryClient();
@@ -60,6 +63,10 @@ export function AlarmsDashboard(): JSX.Element {
   const [plantId, setPlantId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Acknowledged while the list shows only active Alarms: these rows are about
+  // to leave it, and fade out first so the acknowledgement is seen to land.
+  const [leaving, setLeaving] = useState<ReadonlySet<number>>(new Set());
+  const reduceMotion = useReducedMotion();
 
   // A Plant the Client filter or search has since excluded falls back to "All"
   // of what remains, rather than holding a choice the picker no longer lists.
@@ -80,9 +87,24 @@ export function AlarmsDashboard(): JSX.Element {
 
   const acknowledge = useMutation({
     mutationFn: (alarmId: number) => alarmsApi.acknowledgeAlarm(alarmId),
-    onSuccess: () => {
+    onSuccess: (_result, alarmId) => {
       setActionError(null);
-      void queryClient.invalidateQueries({ queryKey: ["alarms"] });
+      if (state !== "active" || reduceMotion) {
+        void queryClient.invalidateQueries({ queryKey: ["alarms"] });
+        return;
+      }
+      setLeaving((previous) => new Set(previous).add(alarmId));
+      window.setTimeout(() => {
+        // Unmarked once the refresh is back: by then the row has left the
+        // data, or — if the server still lists it — it comes back into view.
+        void queryClient.invalidateQueries({ queryKey: ["alarms"] }).finally(() => {
+          setLeaving((previous) => {
+            const next = new Set(previous);
+            next.delete(alarmId);
+            return next;
+          });
+        });
+      }, LEAVE_MS);
     },
     onError: (error) => {
       setActionError(
@@ -341,6 +363,8 @@ export function AlarmsDashboard(): JSX.Element {
               rowKey={(alarm) => alarm.id}
               filterPlaceholder="Filter by message, Device, rule…"
               exportFilename={canExport ? "alarms.csv" : undefined}
+              animateArrivals
+              leavingKeys={leaving}
             />
             {expanded !== null ? (
               <div className="mt-3 rounded border border-info/30 bg-info/10 p-3">

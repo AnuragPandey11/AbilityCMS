@@ -19,12 +19,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useReducedMotion } from "framer-motion";
 import * as clientsApi from "@/api/endpoints/clients";
 import * as api from "@/api/endpoints/notifications";
 import type { Member, Subscription } from "@/api/endpoints/notifications";
 import { qk } from "@/api/queryKeys";
 import { isApiError } from "@/api/problem";
-import { Badge, Button, Field, Panel, inputClass } from "@/components/ui";
+import { Badge, Button, Field, Panel, Reveal, inputClass } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { formatDateTime } from "@/format/datetime";
@@ -50,6 +51,9 @@ function personLabel(member: { email: string; full_name: string | null }): strin
     ? `${member.full_name} (${member.email})`
     : member.email;
 }
+
+/** Long enough for a removed recipient to fade out before the list refreshes. */
+const LEAVE_MS = 220;
 
 export function AlarmEmailsAdmin(): JSX.Element {
   const canManage = usePermission("user.manage");
@@ -103,6 +107,10 @@ export function AlarmEmailsAdmin(): JSX.Element {
     refresh();
   };
 
+  // Recipients just removed, fading out before the list refreshes.
+  const [leaving, setLeaving] = useState<ReadonlySet<number>>(new Set());
+  const reduceMotion = useReducedMotion();
+
   const create = useMutation({
     mutationFn: () =>
       api.createSubscription({
@@ -128,7 +136,16 @@ export function AlarmEmailsAdmin(): JSX.Element {
   });
   const remove = useMutation({
     mutationFn: (id: number) => api.deleteSubscription(id),
-    onSuccess: () => done("Removed. They will no longer be emailed about these Alarms."),
+    onSuccess: (_result, id) => {
+      const removed = "Removed. They will no longer be emailed about these Alarms.";
+      if (reduceMotion) {
+        done(removed);
+        return;
+      }
+      // The row fades out first, then the list refreshes without it.
+      setLeaving((previous) => new Set(previous).add(id));
+      window.setTimeout(() => done(removed), LEAVE_MS);
+    },
     onError: (err) => fail(err, "Could not remove the subscription."),
   });
   const test = useMutation({
@@ -388,7 +405,7 @@ export function AlarmEmailsAdmin(): JSX.Element {
         </div>
       ) : null}
 
-      {adding ? (
+      <Reveal open={adding}>
         <Panel title="Add recipient" subtitle="Email only for now: nobody has a phone number on record for WhatsApp or SMS.">
           <div className="grid max-w-4xl grid-cols-1 gap-3 md:grid-cols-3">
             <Field label="Person" required>
@@ -468,7 +485,7 @@ export function AlarmEmailsAdmin(): JSX.Element {
             {create.isPending ? "Adding…" : "Add"}
           </Button>
         </Panel>
-      ) : null}
+      </Reveal>
 
       <Panel
         title={`${rows.length} recipient${rows.length === 1 ? "" : "s"}`}
@@ -484,6 +501,8 @@ export function AlarmEmailsAdmin(): JSX.Element {
             rows={rows}
             columns={columns}
             rowKey={(row) => row.id}
+            animateArrivals
+            leavingKeys={leaving}
             filterPlaceholder="Filter recipients…"
           />
         )}

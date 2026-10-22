@@ -296,6 +296,7 @@ export function MeteorologicalDashboard(): JSX.Element {
                     height={chartHeight}
                     day={range?.day ?? null}
                     markPeak={peak}
+                    syncGroup={station ? `device-${station.id}` : undefined}
                   />
                 )}
               </section>
@@ -364,6 +365,7 @@ export function MeteorologicalDashboard(): JSX.Element {
                   day={range?.day ?? null}
                   // The strongest gust is what a tracker stows for.
                   markPeak
+                  syncGroup={station ? `device-${station.id}` : undefined}
                 />
               )}
             </section>

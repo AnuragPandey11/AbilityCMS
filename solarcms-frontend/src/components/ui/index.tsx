@@ -1,6 +1,7 @@
 /** Small presentational primitives. No data access, no branching on identity. */
 
-import { useState, type InputHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { IconChevronDown } from "@/components/icons";
 
 export function Panel({
@@ -169,6 +170,10 @@ export function SegmentedControl<T extends string>({
   /** `lg` for a page's title band, beside a large `PeriodPicker`. */
   size?: "sm" | "lg";
 }): JSX.Element {
+  // The raised pill is one element shared by the options, so choosing another
+  // slides it across rather than switching it off here and on there. Scoped to
+  // this control: two on one screen must not trade pills.
+  const pillId = useId();
   return (
     <div
       role="radiogroup"
@@ -187,19 +192,99 @@ export function SegmentedControl<T extends string>({
             aria-checked={active}
             title={option.hint}
             onClick={() => onChange(option.value)}
-            className={`rounded-control transition ${
+            className={`relative rounded-control transition-colors ${
               size === "lg" ? "px-4 py-1.5 text-sm font-semibold" : "px-3 py-1.5 text-xs font-medium"
             } ${
               active
-                ? "bg-white dark:bg-surface-raised text-slate-900 dark:text-accent shadow-[0_1px_2px_rgba(0,0,0,0.08)] font-semibold"
+                ? "text-slate-900 dark:text-accent font-semibold"
                 : "text-slate-600 dark:text-ink-muted hover:text-slate-900 dark:hover:text-ink"
             }`}
           >
-            {option.label}
+            {active ? (
+              <motion.span
+                layoutId={`segmented-pill-${pillId}`}
+                aria-hidden
+                className="absolute inset-0 rounded-control bg-white dark:bg-surface-raised shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
+                transition={{ type: "spring", stiffness: 520, damping: 40 }}
+              />
+            ) : null}
+            <span className="relative">{option.label}</span>
           </button>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * One ring that fades out when `value` changes — a Device's communication
+ * status, a process's verdict — so a change among seventeen cards is noticed
+ * by somebody who was not looking at that one. Once per change, never on the
+ * first render and never on a loop: a status that keeps pulsing is decoration.
+ * The parent must be positioned; `className` is the ring's colour, the new
+ * state's own.
+ */
+export function ChangePulse({ value, className }: { value: unknown; className: string }): JSX.Element | null {
+  const previous = useRef(value);
+  const [changes, setChanges] = useState(0);
+  useEffect(() => {
+    if (Object.is(previous.current, value)) return;
+    previous.current = value;
+    setChanges((count) => count + 1);
+  }, [value]);
+  if (changes === 0) return null;
+  return (
+    <motion.span
+      key={changes}
+      aria-hidden
+      className={`pointer-events-none absolute inset-0 rounded-[inherit] ring-2 ${className}`}
+      initial={{ opacity: 0.9 }}
+      animate={{ opacity: 0, transition: { duration: 1.6, ease: "easeOut" } }}
+    />
+  );
+}
+
+/**
+ * Content that opens and closes in place — an admin row's detail, a form
+ * behind an "Edit" button.
+ *
+ * It grows to its height and fades in, and shrinks away on close, so the rows
+ * below move smoothly instead of jumping and the reader can see where the new
+ * content came from. Clipped only while it moves: once open it is ordinary
+ * content, and a menu inside it may hang outside its box.
+ *
+ * ⚠ Not for a dashboard. The dashboard fits one screen and its detail opens in
+ * a `Drawer`, never in place (see `Drawer`); this is for the admin screens,
+ * which are documents and already grow.
+ */
+export function Reveal({
+  open,
+  children,
+  className,
+}: {
+  open: boolean;
+  children: ReactNode;
+  className?: string;
+}): JSX.Element {
+  return (
+    <AnimatePresence initial={false}>
+      {open ? (
+        <motion.div
+          key="reveal"
+          className={className}
+          initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+          animate={{
+            height: "auto",
+            opacity: 1,
+            transition: { duration: 0.22, ease: [0.22, 1, 0.36, 1] },
+            transitionEnd: { overflow: "visible" },
+          }}
+          exit={{ height: 0, opacity: 0, overflow: "hidden", transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
+        >
+          {children}
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
   );
 }
 

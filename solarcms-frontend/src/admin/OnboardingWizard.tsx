@@ -28,7 +28,8 @@
  * skipping it is the unremarkable path.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDeviceModels, useDeviceTypes } from "@/api/hooks";
 import { qk } from "@/api/queryKeys";
@@ -160,6 +161,14 @@ export function OnboardingWizard(): JSX.Element {
   }, [sessionClientId]);
 
   const [step, setStep] = useState(0);
+  // The step shown before this render, for which way to slide. Equal on the
+  // first render, so the first step simply appears.
+  const lastStep = useRef(step);
+  const stepMoved = lastStep.current !== step;
+  const stepDirection = step > lastStep.current ? 1 : -1;
+  useEffect(() => {
+    lastStep.current = step;
+  }, [step]);
   // The furthest step reached. `step` alone cannot drive the tabs: stepping back
   // to 1 would lower it and strand the work done at 3 with no way forward.
   const [maxStep, setMaxStep] = useState(0);
@@ -598,693 +607,702 @@ export function OnboardingWizard(): JSX.Element {
         </div>
       ) : null}
 
-      {step === STEP_CLIENT ? (
-        <Panel
-          title="1 · Client"
-          subtitle="Every Plant belongs to exactly one Client. Choose it before the Plant exists, so it can never be filed under the wrong one."
-        >
-          {!isPlatformAdmin ? (
-            // A Client Admin has exactly one Client and the API ignores any
-            // other they might send. So this confirms rather than asks — but
-            // it still appears, because "which Client is this Plant for" is
-            // worth stating once rather than assuming.
-            sessionClientId === null ? (
-              <p className="max-w-2xl text-xs text-ink-muted">
-                Your account has no Client membership, so there is no Client to
-                create a Plant under. Ask a Super Admin to add you to one.
-              </p>
-            ) : (
-              <div className="max-w-2xl space-y-3">
-                <div className="rounded border border-line bg-surface px-3 py-2">
-                  <p className="text-sm text-ink">{clientLabel}</p>
-                  <p className="mt-0.5 text-xs text-ink-muted">
-                    Your Client. A Plant you create belongs to it, and to no
-                    other — that is enforced by the server, not by this form.
-                  </p>
-                </div>
-                <Button
-                  variant="primary"
-                  onClick={() => chooseClient(sessionClientId, clientLabel)}
-                >
-                  Continue to the Plant
-                </Button>
-              </div>
-            )
-          ) : clientsQuery.isPending ? (
-            <LoadingState />
-          ) : clientsQuery.isError ? (
-            <ErrorState
-              error={clientsQuery.error}
-              retry={() => void clientsQuery.refetch()}
-            />
-          ) : (
-            <div className="max-w-2xl space-y-5">
-              {clientsQuery.data.length > 0 ? (
-                <div>
-                  <h3 className="mb-1 text-sm font-medium text-ink">
-                    Existing Client
-                  </h3>
-                  <p className="mb-2 text-xs text-ink-muted">
-                    A Client can have any number of Plants. Choosing one here
-                    does not change your session — nothing else you have open
-                    is affected.
-                  </p>
-                  <ul className="space-y-1">
-                    {clientsQuery.data.map((client) => (
-                      <li key={client.id}>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            chooseClient(
-                              client.id,
-                              `${client.code} · ${client.name}`,
-                            )
-                          }
-                          className={`flex w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left transition ${
-                            client.id === clientId
-                              ? "border-accent bg-accent/10"
-                              : "border-line bg-surface hover:border-line-strong"
-                          }`}
-                        >
-                          <span className="min-w-0">
-                            <span className="block truncate text-sm text-ink">
-                              {client.name}
-                            </span>
-                            <span className="block truncate font-mono text-[11px] text-ink-muted">
-                              {client.code}
-                            </span>
-                          </span>
-                          <span className="flex shrink-0 items-center gap-1.5">
-                            {client.is_demo ? (
-                              <Badge tone="warn" title="A demonstration Client — Guests may reach it.">
-                                demo
-                              </Badge>
-                            ) : null}
-                            <Badge tone={client.id === clientId ? "accent" : "neutral"}>
-                              {client.id === clientId ? "chosen" : client.status}
-                            </Badge>
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+      {/* A step slides in from the side the reader is heading: forward from
+          the right, back from the left. */}
+      <motion.div
+        key={step}
+        initial={stepMoved ? { opacity: 0, x: 28 * stepDirection } : false}
+        animate={{ opacity: 1, x: 0, transition: { duration: 0.26, ease: [0.22, 1, 0.36, 1] } }}
+        className="space-y-4"
+      >
+        {step === STEP_CLIENT ? (
+          <Panel
+            title="1 · Client"
+            subtitle="Every Plant belongs to exactly one Client. Choose it before the Plant exists, so it can never be filed under the wrong one."
+          >
+            {!isPlatformAdmin ? (
+              // A Client Admin has exactly one Client and the API ignores any
+              // other they might send. So this confirms rather than asks — but
+              // it still appears, because "which Client is this Plant for" is
+              // worth stating once rather than assuming.
+              sessionClientId === null ? (
+                <p className="max-w-2xl text-xs text-ink-muted">
+                  Your account has no Client membership, so there is no Client to
+                  create a Plant under. Ask a Super Admin to add you to one.
+                </p>
               ) : (
-                <p className="text-xs text-ink-muted">
-                  No Clients exist yet. Create the first one below — a Plant
-                  cannot be created without one.
-                </p>
-              )}
+                <div className="max-w-2xl space-y-3">
+                  <div className="rounded border border-line bg-surface px-3 py-2">
+                    <p className="text-sm text-ink">{clientLabel}</p>
+                    <p className="mt-0.5 text-xs text-ink-muted">
+                      Your Client. A Plant you create belongs to it, and to no
+                      other — that is enforced by the server, not by this form.
+                    </p>
+                  </div>
+                  <Button
+                    variant="primary"
+                    onClick={() => chooseClient(sessionClientId, clientLabel)}
+                  >
+                    Continue to the Plant
+                  </Button>
+                </div>
+              )
+            ) : clientsQuery.isPending ? (
+              <LoadingState />
+            ) : clientsQuery.isError ? (
+              <ErrorState
+                error={clientsQuery.error}
+                retry={() => void clientsQuery.refetch()}
+              />
+            ) : (
+              <div className="max-w-2xl space-y-5">
+                {clientsQuery.data.length > 0 ? (
+                  <div>
+                    <h3 className="mb-1 text-sm font-medium text-ink">
+                      Existing Client
+                    </h3>
+                    <p className="mb-2 text-xs text-ink-muted">
+                      A Client can have any number of Plants. Choosing one here
+                      does not change your session — nothing else you have open
+                      is affected.
+                    </p>
+                    <ul className="space-y-1">
+                      {clientsQuery.data.map((client) => (
+                        <li key={client.id}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              chooseClient(
+                                client.id,
+                                `${client.code} · ${client.name}`,
+                              )
+                            }
+                            className={`flex w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left transition ${
+                              client.id === clientId
+                                ? "border-accent bg-accent/10"
+                                : "border-line bg-surface hover:border-line-strong"
+                            }`}
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm text-ink">
+                                {client.name}
+                              </span>
+                              <span className="block truncate font-mono text-[11px] text-ink-muted">
+                                {client.code}
+                              </span>
+                            </span>
+                            <span className="flex shrink-0 items-center gap-1.5">
+                              {client.is_demo ? (
+                                <Badge tone="warn" title="A demonstration Client — Guests may reach it.">
+                                  demo
+                                </Badge>
+                              ) : null}
+                              <Badge tone={client.id === clientId ? "accent" : "neutral"}>
+                                {client.id === clientId ? "chosen" : client.status}
+                              </Badge>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-xs text-ink-muted">
+                    No Clients exist yet. Create the first one below — a Plant
+                    cannot be created without one.
+                  </p>
+                )}
 
-              <div className="border-t border-line pt-4">
-                <h3 className="mb-1 text-sm font-medium text-ink">New Client</h3>
-                <p className="mb-3 text-xs text-ink-muted">
-                  Create the Client and its first login, then continue straight into
-                  its first Plant.
-                </p>
-                <NewClientForm
-                  submitLabel="Create Client and login, and continue"
-                  onCreated={(client, loginEmail) => {
-                    setError(null);
-                    void queryClient.invalidateQueries({ queryKey: qk.clients() });
-                    chooseClient(client.id, `${client.code} · ${client.name}`);
-                    setMessage(
-                      `${client.code} created, and ${loginEmail} can sign in now. ` +
-                        "Next, its first Plant.",
-                    );
-                  }}
+                <div className="border-t border-line pt-4">
+                  <h3 className="mb-1 text-sm font-medium text-ink">New Client</h3>
+                  <p className="mb-3 text-xs text-ink-muted">
+                    Create the Client and its first login, then continue straight into
+                    its first Plant.
+                  </p>
+                  <NewClientForm
+                    submitLabel="Create Client and login, and continue"
+                    onCreated={(client, loginEmail) => {
+                      setError(null);
+                      void queryClient.invalidateQueries({ queryKey: qk.clients() });
+                      chooseClient(client.id, `${client.code} · ${client.name}`);
+                      setMessage(
+                        `${client.code} created, and ${loginEmail} can sign in now. ` +
+                          "Next, its first Plant.",
+                      );
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </Panel>
+        ) : null}
+
+        {step === STEP_PLANT ? (
+          <Panel
+            title="2 · Plant"
+            subtitle={`Created in draft for ${clientLabel}, and excluded from portfolio totals until it is active.`}
+            actions={
+              <Button onClick={() => setStep(STEP_CLIENT)}>Back</Button>
+            }
+          >
+            <div className="grid max-w-2xl grid-cols-2 gap-3">
+              <Field
+                label="Code"
+                required
+                hint="Unique within the Client. Used in MQTT topics."
+              >
+                <input
+                  value={plant.code}
+                  onChange={(event) =>
+                    setPlant({ ...plant, code: event.target.value })
+                  }
+                  className={`${inputClass} font-mono`}
+                />
+                <PublishingCodes
+                  typed={plant.code}
+                  codes={plantCodes}
+                  onPick={(code) => setPlant({ ...plant, code })}
+                  prefilled={plantCodePrefilled}
+                />
+              </Field>
+              <Field label="Name" required>
+                <input
+                  value={plant.name}
+                  onChange={(event) =>
+                    setPlant({ ...plant, name: event.target.value })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+              <RegionSelect
+                value={plant.region_code}
+                onChange={(code) => setPlant({ ...plant, region_code: code })}
+              />
+              <Field
+                label="Timezone"
+                hint="Every timestamp for this Plant is displayed in this zone, not the viewer's."
+              >
+                <input
+                  value={plant.timezone}
+                  onChange={(event) =>
+                    setPlant({ ...plant, timezone: event.target.value })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="AC capacity (kW)">
+                <input
+                  type="number"
+                  value={plant.ac_capacity_kw}
+                  onChange={(event) =>
+                    setPlant({ ...plant, ac_capacity_kw: event.target.value })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+              <Field
+                label="DC capacity (kWp)"
+                hint="Performance ratio divides by this; without it PR is undefined."
+              >
+                <input
+                  type="number"
+                  value={plant.dc_capacity_kwp}
+                  onChange={(event) =>
+                    setPlant({ ...plant, dc_capacity_kwp: event.target.value })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+              <Field
+                label="Latitude"
+                hint="Decimal degrees. Used for sunrise/sunset and irradiance context."
+              >
+                <input
+                  type="number"
+                  step="any"
+                  value={plant.latitude}
+                  onChange={(event) =>
+                    setPlant({ ...plant, latitude: event.target.value })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Longitude" hint="Decimal degrees.">
+                <input
+                  type="number"
+                  step="any"
+                  value={plant.longitude}
+                  onChange={(event) =>
+                    setPlant({ ...plant, longitude: event.target.value })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+              <Field
+                label="Commissioned on"
+                hint="The date the Plant went live. Leave blank if it has not."
+              >
+                <input
+                  type="date"
+                  value={plant.commissioned_on}
+                  onChange={(event) =>
+                    setPlant({ ...plant, commissioned_on: event.target.value })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+            </div>
+
+            {/*
+              ⚠ The "planned Device counts" input was removed on 19 Sep 2026.
+
+              It asked, at the moment a Plant was created, how many Devices of
+              each Type it was *meant* to have — a figure typed from a contract
+              before a single Device existed, which began drifting from reality
+              the moment anyone registered one. Nothing downstream depended on it
+              being right, so nothing ever caught it being wrong.
+
+              The count that matters is the count of Devices that actually exist,
+              and that needs no input at all: it is `count(*)` on `devices`, shown
+              on the Plant Setup screen where Devices are registered. The table
+              and the API field remain, unused, so no history is destroyed.
+            */}
+
+            <Button
+              variant="primary"
+              className="mt-4"
+              disabled={!plant.code || !plant.name || createPlant.isPending}
+              onClick={() => createPlant.mutate()}
+            >
+              {createPlant.isPending ? "Creating…" : "Create Plant"}
+            </Button>
+          </Panel>
+        ) : null}
+
+        {step === STEP_BLOCKS ? (
+          <Panel
+            title="3 · Blocks"
+            subtitle="Optional. A Plant with zero Blocks is valid and normal — most are."
+          >
+            <p className="mb-3 max-w-2xl text-xs leading-relaxed text-ink-muted">
+              A Block is a geographic grouping used for zone-level performance.
+              Add them only if this Plant is actually divided into zones the
+              Client wants reported separately. Devices attach directly to the
+              Plant without one, and there is no "unassigned" Block.
+            </p>
+
+            {blocks.map((block, index) => (
+              <div key={index} className="mb-2 grid grid-cols-3 gap-2">
+                <input
+                  placeholder="Code"
+                  value={block.code}
+                  onChange={(event) =>
+                    setBlocks((previous) =>
+                      previous.map((entry, i) =>
+                        i === index
+                          ? { ...entry, code: event.target.value }
+                          : entry,
+                      ),
+                    )
+                  }
+                  className={inputClass}
+                />
+                <input
+                  placeholder="Name"
+                  value={block.name}
+                  onChange={(event) =>
+                    setBlocks((previous) =>
+                      previous.map((entry, i) =>
+                        i === index
+                          ? { ...entry, name: event.target.value }
+                          : entry,
+                      ),
+                    )
+                  }
+                  className={inputClass}
+                />
+                <input
+                  placeholder="Capacity kWp (required)"
+                  type="number"
+                  value={block.capacity_kwp}
+                  onChange={(event) =>
+                    setBlocks((previous) =>
+                      previous.map((entry, i) =>
+                        i === index
+                          ? { ...entry, capacity_kwp: event.target.value }
+                          : entry,
+                      ),
+                    )
+                  }
+                  className={inputClass}
                 />
               </div>
-            </div>
-          )}
-        </Panel>
-      ) : null}
+            ))}
 
-      {step === STEP_PLANT ? (
-        <Panel
-          title="2 · Plant"
-          subtitle={`Created in draft for ${clientLabel}, and excluded from portfolio totals until it is active.`}
-          actions={
-            <Button onClick={() => setStep(STEP_CLIENT)}>Back</Button>
-          }
-        >
-          <div className="grid max-w-2xl grid-cols-2 gap-3">
-            <Field
-              label="Code"
-              required
-              hint="Unique within the Client. Used in MQTT topics."
-            >
-              <input
-                value={plant.code}
-                onChange={(event) =>
-                  setPlant({ ...plant, code: event.target.value })
-                }
-                className={`${inputClass} font-mono`}
-              />
-              <PublishingCodes
-                typed={plant.code}
-                codes={plantCodes}
-                onPick={(code) => setPlant({ ...plant, code })}
-                prefilled={plantCodePrefilled}
-              />
-            </Field>
-            <Field label="Name" required>
-              <input
-                value={plant.name}
-                onChange={(event) =>
-                  setPlant({ ...plant, name: event.target.value })
-                }
-                className={inputClass}
-              />
-            </Field>
-            <RegionSelect
-              value={plant.region_code}
-              onChange={(code) => setPlant({ ...plant, region_code: code })}
-            />
-            <Field
-              label="Timezone"
-              hint="Every timestamp for this Plant is displayed in this zone, not the viewer's."
-            >
-              <input
-                value={plant.timezone}
-                onChange={(event) =>
-                  setPlant({ ...plant, timezone: event.target.value })
-                }
-                className={inputClass}
-              />
-            </Field>
-            <Field label="AC capacity (kW)">
-              <input
-                type="number"
-                value={plant.ac_capacity_kw}
-                onChange={(event) =>
-                  setPlant({ ...plant, ac_capacity_kw: event.target.value })
-                }
-                className={inputClass}
-              />
-            </Field>
-            <Field
-              label="DC capacity (kWp)"
-              hint="Performance ratio divides by this; without it PR is undefined."
-            >
-              <input
-                type="number"
-                value={plant.dc_capacity_kwp}
-                onChange={(event) =>
-                  setPlant({ ...plant, dc_capacity_kwp: event.target.value })
-                }
-                className={inputClass}
-              />
-            </Field>
-            <Field
-              label="Latitude"
-              hint="Decimal degrees. Used for sunrise/sunset and irradiance context."
-            >
-              <input
-                type="number"
-                step="any"
-                value={plant.latitude}
-                onChange={(event) =>
-                  setPlant({ ...plant, latitude: event.target.value })
-                }
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Longitude" hint="Decimal degrees.">
-              <input
-                type="number"
-                step="any"
-                value={plant.longitude}
-                onChange={(event) =>
-                  setPlant({ ...plant, longitude: event.target.value })
-                }
-                className={inputClass}
-              />
-            </Field>
-            <Field
-              label="Commissioned on"
-              hint="The date the Plant went live. Leave blank if it has not."
-            >
-              <input
-                type="date"
-                value={plant.commissioned_on}
-                onChange={(event) =>
-                  setPlant({ ...plant, commissioned_on: event.target.value })
-                }
-                className={inputClass}
-              />
-            </Field>
-          </div>
-
-          {/*
-            ⚠ The "planned Device counts" input was removed on 19 Sep 2026.
-
-            It asked, at the moment a Plant was created, how many Devices of
-            each Type it was *meant* to have — a figure typed from a contract
-            before a single Device existed, which began drifting from reality
-            the moment anyone registered one. Nothing downstream depended on it
-            being right, so nothing ever caught it being wrong.
-
-            The count that matters is the count of Devices that actually exist,
-            and that needs no input at all: it is `count(*)` on `devices`, shown
-            on the Plant Setup screen where Devices are registered. The table
-            and the API field remain, unused, so no history is destroyed.
-          */}
-
-          <Button
-            variant="primary"
-            className="mt-4"
-            disabled={!plant.code || !plant.name || createPlant.isPending}
-            onClick={() => createPlant.mutate()}
-          >
-            {createPlant.isPending ? "Creating…" : "Create Plant"}
-          </Button>
-        </Panel>
-      ) : null}
-
-      {step === STEP_BLOCKS ? (
-        <Panel
-          title="3 · Blocks"
-          subtitle="Optional. A Plant with zero Blocks is valid and normal — most are."
-        >
-          <p className="mb-3 max-w-2xl text-xs leading-relaxed text-ink-muted">
-            A Block is a geographic grouping used for zone-level performance.
-            Add them only if this Plant is actually divided into zones the
-            Client wants reported separately. Devices attach directly to the
-            Plant without one, and there is no "unassigned" Block.
-          </p>
-
-          {blocks.map((block, index) => (
-            <div key={index} className="mb-2 grid grid-cols-3 gap-2">
-              <input
-                placeholder="Code"
-                value={block.code}
-                onChange={(event) =>
-                  setBlocks((previous) =>
-                    previous.map((entry, i) =>
-                      i === index
-                        ? { ...entry, code: event.target.value }
-                        : entry,
-                    ),
-                  )
-                }
-                className={inputClass}
-              />
-              <input
-                placeholder="Name"
-                value={block.name}
-                onChange={(event) =>
-                  setBlocks((previous) =>
-                    previous.map((entry, i) =>
-                      i === index
-                        ? { ...entry, name: event.target.value }
-                        : entry,
-                    ),
-                  )
-                }
-                className={inputClass}
-              />
-              <input
-                placeholder="Capacity kWp (required)"
-                type="number"
-                value={block.capacity_kwp}
-                onChange={(event) =>
-                  setBlocks((previous) =>
-                    previous.map((entry, i) =>
-                      i === index
-                        ? { ...entry, capacity_kwp: event.target.value }
-                        : entry,
-                    ),
-                  )
-                }
-                className={inputClass}
-              />
-            </div>
-          ))}
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              onClick={() =>
-                setBlocks((previous) => [
-                  ...previous,
-                  { code: "", name: "", capacity_kwp: "", id: null },
-                ])
-              }
-            >
-              Add a Block
-            </Button>
-            {blocks.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button
-                variant="primary"
-                disabled={createBlocks.isPending}
-                onClick={() => createBlocks.mutate()}
+                onClick={() =>
+                  setBlocks((previous) => [
+                    ...previous,
+                    { code: "", name: "", capacity_kwp: "", id: null },
+                  ])
+                }
               >
-                {createBlocks.isPending
-                  ? "Creating…"
-                  : "Create Blocks and continue"}
+                Add a Block
               </Button>
-            ) : null}
-            {/* Skipping is the ordinary path, not an escape hatch. */}
-            <Button onClick={() => advanceTo(STEP_DEVICES)}>
-              {blocks.length === 0
-                ? "Continue without Blocks"
-                : "Skip remaining"}
-            </Button>
-          </div>
-        </Panel>
-      ) : null}
-
-      {step === STEP_DEVICES ? (
-        <Panel
-          title="4 · Devices"
-          subtitle="Imported all-or-nothing. A parent Device must be listed before its children."
-        >
-          <div className="mb-4 rounded border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] leading-relaxed text-ink-muted">
-            <strong className="text-warn">
-              Expected interval must come from observation.
-            </strong>{" "}
-            Health thresholds multiply this column: a Device registered at 60s
-            can sit silent for ten minutes and still read as healthy. Measure
-            what the Device actually publishes — the client's broker publishes
-            roughly every 2.8s — rather than accepting a default.
-          </div>
-
-          {/* Every enclosure already named on this form, offered to the next
-              row. Two Devices in the same room must end up with the same
-              spelling, or the diagram draws two boxes that look like one. */}
-          <datalist id="wizard-collector-codes">
-            {[...new Set(devices.map((d) => d.collector_code.trim()))]
-              .filter((code) => code !== "")
-              .sort((a, b) => a.localeCompare(b))
-              .map((code) => (
-                <option key={code} value={code} />
-              ))}
-          </datalist>
-
-          <div className="space-y-3">
-            {devices.map((device, index) => (
-              <div
-                key={index}
-                className="grid grid-cols-2 gap-2 rounded border border-line p-3 lg:grid-cols-4"
-              >
-                <Field label="Code" required>
-                  <input
-                    value={device.code}
-                    onChange={(event) =>
-                      updateDevice(index, { code: event.target.value })
-                    }
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Name" required>
-                  <input
-                    value={device.name}
-                    onChange={(event) =>
-                      updateDevice(index, { name: event.target.value })
-                    }
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Device Model" required>
-                  <select
-                    value={device.device_model_id ?? ""}
-                    onChange={(event) =>
-                      updateDevice(index, {
-                        device_model_id: event.target.value
-                          ? Number(event.target.value)
-                          : null,
-                      })
-                    }
-                    className={inputClass}
-                  >
-                    <option value="">Choose…</option>
-                    {modelGroups.map(({ type, models: group }) => (
-                      <optgroup
-                        key={type.code}
-                        label={`${type.name} (${type.code})`}
-                      >
-                        {group.map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {model.manufacturer ? `${model.manufacturer} ` : ""}
-                            {model.model_code}
-                            {model.variant ? ` (${model.variant})` : ""}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </Field>
-                <Field
-                  label="Expected interval (s)"
-                  required
-                  hint="From observation, not the default."
+              {blocks.length > 0 ? (
+                <Button
+                  variant="primary"
+                  disabled={createBlocks.isPending}
+                  onClick={() => createBlocks.mutate()}
                 >
-                  <input
-                    type="number"
-                    min={1}
-                    value={device.expected_interval_s}
-                    onChange={(event) =>
-                      updateDevice(index, {
-                        expected_interval_s: event.target.value,
-                      })
-                    }
-                    className={`${inputClass} border-warn/40`}
-                  />
-                </Field>
-                <Field
-                  label="MQTT topic"
-                  hint="scms/v1/{client}/{plant}/{collector}/{device}, or scms/v1/{client}/{plant}/{device} where there is no collector. The sole authority for origin."
+                  {createBlocks.isPending
+                    ? "Creating…"
+                    : "Create Blocks and continue"}
+                </Button>
+              ) : null}
+              {/* Skipping is the ordinary path, not an escape hatch. */}
+              <Button onClick={() => advanceTo(STEP_DEVICES)}>
+                {blocks.length === 0
+                  ? "Continue without Blocks"
+                  : "Skip remaining"}
+              </Button>
+            </div>
+          </Panel>
+        ) : null}
+
+        {step === STEP_DEVICES ? (
+          <Panel
+            title="4 · Devices"
+            subtitle="Imported all-or-nothing. A parent Device must be listed before its children."
+          >
+            <div className="mb-4 rounded border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] leading-relaxed text-ink-muted">
+              <strong className="text-warn">
+                Expected interval must come from observation.
+              </strong>{" "}
+              Health thresholds multiply this column: a Device registered at 60s
+              can sit silent for ten minutes and still read as healthy. Measure
+              what the Device actually publishes — the client's broker publishes
+              roughly every 2.8s — rather than accepting a default.
+            </div>
+
+            {/* Every enclosure already named on this form, offered to the next
+                row. Two Devices in the same room must end up with the same
+                spelling, or the diagram draws two boxes that look like one. */}
+            <datalist id="wizard-collector-codes">
+              {[...new Set(devices.map((d) => d.collector_code.trim()))]
+                .filter((code) => code !== "")
+                .sort((a, b) => a.localeCompare(b))
+                .map((code) => (
+                  <option key={code} value={code} />
+                ))}
+            </datalist>
+
+            <div className="space-y-3">
+              {devices.map((device, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-2 gap-2 rounded border border-line p-3 lg:grid-cols-4"
                 >
-                  <input
-                    value={device.source_address}
-                    onChange={(event) => {
-                      const topic = event.target.value;
-                      updateDevice(index, {
-                        source_address: topic,
-                        // Read out of the topic the operator just typed, but
-                        // only to fill an empty box. The topic is the sole
-                        // authority for origin, so it is the best guess
-                        // available — and overwriting a name they typed by
-                        // hand would make the field feel possessed.
-                        ...(device.collector_code.trim() === ""
-                          ? { collector_code: collectorFromTopic(topic) ?? "" }
-                          : {}),
-                      });
-                    }}
-                    className={`${inputClass} font-mono text-xs`}
-                  />
-                </Field>
-                <Field
-                  label="Collector"
-                  hint="The enclosure it sits in — an MCR, an ICR, a panel. Not a Device: nothing is wired through it, and the diagram draws it as a box around its Devices. Leave empty if it sits in none."
-                >
-                  <input
-                    list="wizard-collector-codes"
-                    value={device.collector_code}
-                    placeholder="none"
-                    onChange={(event) =>
-                      updateDevice(index, {
-                        collector_code: event.target.value,
-                      })
-                    }
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Rated capacity (kW)">
-                  <input
-                    type="number"
-                    value={device.rated_capacity_kw}
-                    onChange={(event) =>
-                      updateDevice(index, {
-                        rated_capacity_kw: event.target.value,
-                      })
-                    }
-                    className={inputClass}
-                  />
-                </Field>
-                {repeatMaxFor(device.device_model_id) > 0 ? (
-                  <Field
-                    label="PV strings on this unit"
-                    hint={`Up to ${repeatMaxFor(device.device_model_id)}. Only this many PV inputs are bound.`}
-                  >
+                  <Field label="Code" required>
                     <input
-                      type="number"
-                      min={0}
-                      max={repeatMaxFor(device.device_model_id)}
-                      value={device.string_count}
+                      value={device.code}
                       onChange={(event) =>
-                        updateDevice(index, {
-                          string_count: event.target.value,
-                        })
+                        updateDevice(index, { code: event.target.value })
                       }
                       className={inputClass}
                     />
                   </Field>
-                ) : null}
-                {blocks.length > 0 ? (
-                  <Field label="Block" hint="Where it is — not what it feeds.">
+                  <Field label="Name" required>
+                    <input
+                      value={device.name}
+                      onChange={(event) =>
+                        updateDevice(index, { name: event.target.value })
+                      }
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="Device Model" required>
                     <select
-                      value={device.block_index ?? ""}
+                      value={device.device_model_id ?? ""}
                       onChange={(event) =>
                         updateDevice(index, {
-                          block_index: event.target.value
+                          device_model_id: event.target.value
                             ? Number(event.target.value)
                             : null,
                         })
                       }
                       className={inputClass}
                     >
-                      <option value="">None</option>
-                      {blocks.map((block, blockIndex) => (
-                        <option key={blockIndex} value={blockIndex}>
-                          {block.code}
-                        </option>
+                      <option value="">Choose…</option>
+                      {modelGroups.map(({ type, models: group }) => (
+                        <optgroup
+                          key={type.code}
+                          label={`${type.name} (${type.code})`}
+                        >
+                          {group.map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.manufacturer ? `${model.manufacturer} ` : ""}
+                              {model.model_code}
+                              {model.variant ? ` (${model.variant})` : ""}
+                            </option>
+                          ))}
+                        </optgroup>
                       ))}
                     </select>
                   </Field>
-                ) : null}
-                {/*
-                  ⚠ "Feeds into" and "Reports via" were removed from Device
-                  registration on 19 Sep 2026, and their absence is deliberate.
-
-                  Both are *discovered*, not designed. Which Collector transmits
-                  a Device is already stated by its topic, and what a Device is
-                  wired into is routinely corrected after the first day of real
-                  data — so asking for either at the moment of registration
-                  invites a guess, and a guess drawn into the Single Line
-                  Diagram is indistinguishable from a fact.
-
-                  Both are still first-class (MASTER §3.4); they are simply set
-                  where they can be checked against something. The Collector
-                  comes from the topic, and the wiring is set in Plant Hierarchy
-                  beside the diagram it produces.
-                */}
-                <div className="col-span-2 flex items-center justify-between border-t border-line pt-2 lg:col-span-4">
-                  <span className="text-[11px] text-ink-faint">
-                    {modelSummary(device.device_model_id, device.string_count)}
-                  </span>
-                  {devices.length > 1 ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDevices((previous) =>
-                          previous.filter((_, i) => i !== index),
-                        )
+                  <Field
+                    label="Expected interval (s)"
+                    required
+                    hint="From observation, not the default."
+                  >
+                    <input
+                      type="number"
+                      min={1}
+                      value={device.expected_interval_s}
+                      onChange={(event) =>
+                        updateDevice(index, {
+                          expected_interval_s: event.target.value,
+                        })
                       }
-                      className="text-[11px] text-bad hover:underline"
+                      className={`${inputClass} border-warn/40`}
+                    />
+                  </Field>
+                  <Field
+                    label="MQTT topic"
+                    hint="scms/v1/{client}/{plant}/{collector}/{device}, or scms/v1/{client}/{plant}/{device} where there is no collector. The sole authority for origin."
+                  >
+                    <input
+                      value={device.source_address}
+                      onChange={(event) => {
+                        const topic = event.target.value;
+                        updateDevice(index, {
+                          source_address: topic,
+                          // Read out of the topic the operator just typed, but
+                          // only to fill an empty box. The topic is the sole
+                          // authority for origin, so it is the best guess
+                          // available — and overwriting a name they typed by
+                          // hand would make the field feel possessed.
+                          ...(device.collector_code.trim() === ""
+                            ? { collector_code: collectorFromTopic(topic) ?? "" }
+                            : {}),
+                        });
+                      }}
+                      className={`${inputClass} font-mono text-xs`}
+                    />
+                  </Field>
+                  <Field
+                    label="Collector"
+                    hint="The enclosure it sits in — an MCR, an ICR, a panel. Not a Device: nothing is wired through it, and the diagram draws it as a box around its Devices. Leave empty if it sits in none."
+                  >
+                    <input
+                      list="wizard-collector-codes"
+                      value={device.collector_code}
+                      placeholder="none"
+                      onChange={(event) =>
+                        updateDevice(index, {
+                          collector_code: event.target.value,
+                        })
+                      }
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="Rated capacity (kW)">
+                    <input
+                      type="number"
+                      value={device.rated_capacity_kw}
+                      onChange={(event) =>
+                        updateDevice(index, {
+                          rated_capacity_kw: event.target.value,
+                        })
+                      }
+                      className={inputClass}
+                    />
+                  </Field>
+                  {repeatMaxFor(device.device_model_id) > 0 ? (
+                    <Field
+                      label="PV strings on this unit"
+                      hint={`Up to ${repeatMaxFor(device.device_model_id)}. Only this many PV inputs are bound.`}
                     >
-                      Remove
-                    </button>
+                      <input
+                        type="number"
+                        min={0}
+                        max={repeatMaxFor(device.device_model_id)}
+                        value={device.string_count}
+                        onChange={(event) =>
+                          updateDevice(index, {
+                            string_count: event.target.value,
+                          })
+                        }
+                        className={inputClass}
+                      />
+                    </Field>
                   ) : null}
+                  {blocks.length > 0 ? (
+                    <Field label="Block" hint="Where it is — not what it feeds.">
+                      <select
+                        value={device.block_index ?? ""}
+                        onChange={(event) =>
+                          updateDevice(index, {
+                            block_index: event.target.value
+                              ? Number(event.target.value)
+                              : null,
+                          })
+                        }
+                        className={inputClass}
+                      >
+                        <option value="">None</option>
+                        {blocks.map((block, blockIndex) => (
+                          <option key={blockIndex} value={blockIndex}>
+                            {block.code}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  ) : null}
+                  {/*
+                    ⚠ "Feeds into" and "Reports via" were removed from Device
+                    registration on 19 Sep 2026, and their absence is deliberate.
+
+                    Both are *discovered*, not designed. Which Collector transmits
+                    a Device is already stated by its topic, and what a Device is
+                    wired into is routinely corrected after the first day of real
+                    data — so asking for either at the moment of registration
+                    invites a guess, and a guess drawn into the Single Line
+                    Diagram is indistinguishable from a fact.
+
+                    Both are still first-class (MASTER §3.4); they are simply set
+                    where they can be checked against something. The Collector
+                    comes from the topic, and the wiring is set in Plant Hierarchy
+                    beside the diagram it produces.
+                  */}
+                  <div className="col-span-2 flex items-center justify-between border-t border-line pt-2 lg:col-span-4">
+                    <span className="text-[11px] text-ink-faint">
+                      {modelSummary(device.device_model_id, device.string_count)}
+                    </span>
+                    {devices.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDevices((previous) =>
+                            previous.filter((_, i) => i !== index),
+                          )
+                        }
+                        className="text-[11px] text-bad hover:underline"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          <div className="mt-3 flex gap-2">
-            <Button
-              onClick={() =>
-                setDevices((previous) => [...previous, emptyDevice()])
-              }
-            >
-              Add a Device
-            </Button>
-            <Button
-              variant="primary"
-              disabled={!devicesValid || importDevices.isPending}
-              onClick={() => importDevices.mutate()}
-            >
-              {importDevices.isPending
-                ? "Importing…"
-                : `Register ${devices.length} Device(s)`}
-            </Button>
-          </div>
-        </Panel>
-      ) : null}
-
-      {step === STEP_COMMISSION ? (
-        <Panel
-          title="5 · Bindings, then commission"
-          subtitle="A Device decodes nothing until its Tags are bound."
-        >
-          <p className="max-w-2xl text-xs leading-relaxed text-ink-muted">
-            {createdDevices.length} Device(s) are registered. Each needs its Tag
-            bindings set before its Readings decode — that is done on the Tag
-            Mapping screen, where the current binding sits beside what is
-            actually arriving.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-1">
-            {createdDevices.map((device) => (
-              <Badge key={device.id} tone="neutral">
-                {device.code}
-              </Badge>
-            ))}
-          </div>
-
-          {/*
-            The readiness panel, not two unguarded buttons. Activating publishes
-            this Plant into every Portfolio total the Client sees, and a
-            half-mapped Plant dragging fleet PR down is the exact failure the
-            status exists to prevent.
-          */}
-          <div className="mt-4">
-            <CommissioningPanel plantId={plantId} />
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Button
-              disabled={setStatus.isPending}
-              onClick={() => setStatus.mutate({ status: "commissioning" })}
-            >
-              Move to commissioning
-            </Button>
-            <Button
-              variant="primary"
-              disabled={setStatus.isPending}
-              onClick={() => setStatus.mutate({ status: "active" })}
-              title="Only an active Plant is counted in portfolio totals."
-            >
-              Activate
-            </Button>
-          </div>
-          <p className="mt-2 text-[11px] text-ink-faint">
-            A Plant stays out of every portfolio total until it is active, so
-            activate it only once its Devices are bound and reporting. Activation
-            is refused while blocking issues remain — override deliberately from
-            the panel above if you know something the checks do not.
-          </p>
-
-          {/*
-            Without this the wizard had no exit: finishing one Plant left every
-            field populated and `plantId` pointing at the Plant just created, so
-            the only way to start another was a page reload.
-          */}
-          <div className="mt-4 border-t border-line pt-3">
-            <Button
-              onClick={() => {
-                resetWizard();
-                setMessage(`Ready for another Plant for ${clientLabel}.`);
-              }}
-              title="Keep the same Client and start a second Plant for it. One Client can have any number."
-            >
-              Another Plant for this Client
-            </Button>
-            {isPlatformAdmin ? (
+            <div className="mt-3 flex gap-2">
               <Button
-                className="ml-2"
+                onClick={() =>
+                  setDevices((previous) => [...previous, emptyDevice()])
+                }
+              >
+                Add a Device
+              </Button>
+              <Button
+                variant="primary"
+                disabled={!devicesValid || importDevices.isPending}
+                onClick={() => importDevices.mutate()}
+              >
+                {importDevices.isPending
+                  ? "Importing…"
+                  : `Register ${devices.length} Device(s)`}
+              </Button>
+            </div>
+          </Panel>
+        ) : null}
+
+        {step === STEP_COMMISSION ? (
+          <Panel
+            title="5 · Bindings, then commission"
+            subtitle="A Device decodes nothing until its Tags are bound."
+          >
+            <p className="max-w-2xl text-xs leading-relaxed text-ink-muted">
+              {createdDevices.length} Device(s) are registered. Each needs its Tag
+              bindings set before its Readings decode — that is done on the Tag
+              Mapping screen, where the current binding sits beside what is
+              actually arriving.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {createdDevices.map((device) => (
+                <Badge key={device.id} tone="neutral">
+                  {device.code}
+                </Badge>
+              ))}
+            </div>
+
+            {/*
+              The readiness panel, not two unguarded buttons. Activating publishes
+              this Plant into every Portfolio total the Client sees, and a
+              half-mapped Plant dragging fleet PR down is the exact failure the
+              status exists to prevent.
+            */}
+            <div className="mt-4">
+              <CommissioningPanel plantId={plantId} />
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                disabled={setStatus.isPending}
+                onClick={() => setStatus.mutate({ status: "commissioning" })}
+              >
+                Move to commissioning
+              </Button>
+              <Button
+                variant="primary"
+                disabled={setStatus.isPending}
+                onClick={() => setStatus.mutate({ status: "active" })}
+                title="Only an active Plant is counted in portfolio totals."
+              >
+                Activate
+              </Button>
+            </div>
+            <p className="mt-2 text-[11px] text-ink-faint">
+              A Plant stays out of every portfolio total until it is active, so
+              activate it only once its Devices are bound and reporting. Activation
+              is refused while blocking issues remain — override deliberately from
+              the panel above if you know something the checks do not.
+            </p>
+
+            {/*
+              Without this the wizard had no exit: finishing one Plant left every
+              field populated and `plantId` pointing at the Plant just created, so
+              the only way to start another was a page reload.
+            */}
+            <div className="mt-4 border-t border-line pt-3">
+              <Button
                 onClick={() => {
                   resetWizard();
-                  setStep(STEP_CLIENT);
-                  setMaxStep(STEP_CLIENT);
-                  setMessage(null);
+                  setMessage(`Ready for another Plant for ${clientLabel}.`);
                 }}
+                title="Keep the same Client and start a second Plant for it. One Client can have any number."
               >
-                A Plant for a different Client
+                Another Plant for this Client
               </Button>
-            ) : null}
-          </div>
-        </Panel>
-      ) : null}
+              {isPlatformAdmin ? (
+                <Button
+                  className="ml-2"
+                  onClick={() => {
+                    resetWizard();
+                    setStep(STEP_CLIENT);
+                    setMaxStep(STEP_CLIENT);
+                    setMessage(null);
+                  }}
+                >
+                  A Plant for a different Client
+                </Button>
+              ) : null}
+            </div>
+          </Panel>
+        ) : null}
+      </motion.div>
     </div>
   );
 }

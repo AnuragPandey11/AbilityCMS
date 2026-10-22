@@ -176,6 +176,9 @@
     --edge-top-alpha: 0.9;
     --ambient-accent: 0.05;
     --ambient-info: 0.03;
+    /* The pointer light on cards that open something (`.surface-interactive`). */
+    --pointer-light: 0.07;
+    --pointer-edge: 0.45;
 
     /* ── Equipment artwork ───────────────────────────────────────────────── */
     /* The two parts of a device drawing that must know what is behind it.
@@ -277,6 +280,8 @@
       --edge-top-alpha: 0.1;
       --ambient-accent: 0.07;
       --ambient-info: 0.05;
+      --pointer-light: 0.1;
+      --pointer-edge: 0.55;
 
       --art-rim: 226 232 250;
       --art-rim-alpha: 0.24;
@@ -364,6 +369,8 @@
     --edge-top-alpha: 0.1;
     --ambient-accent: 0.07;
     --ambient-info: 0.05;
+    --pointer-light: 0.1;
+    --pointer-edge: 0.55;
 
     --art-rim: 226 232 250;
     --art-rim-alpha: 0.24;
@@ -637,10 +644,59 @@
       inset 0 1px 0 0 rgb(var(--c-edge-top) / var(--edge-top-alpha)),
       var(--shadow-card);
   }
+  /*
+   * The pointer light (21 Oct 2026, the user's choice from a rendered preview):
+   * a soft light follows the pointer across a card that opens something, and
+   * lights the nearest stretch of its edge. `theme/pointerLight.ts` writes the
+   * position; with no mouse (a touch screen) nothing is drawn.
+   *
+   * ⚠ The light is the card's own background image, not a pseudo-element
+   * under the content: that would need a stacking context on the card, which
+   * traps any menu inside it under the next card. The edge is an `::after`
+   * ring masked to the border, which needs only `position: relative`.
+   */
+  @media (hover: hover) {
+    .surface-interactive {
+      position: relative;
+    }
+    .surface-interactive:hover {
+      background-image: radial-gradient(
+        260px circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+        rgb(var(--c-accent) / var(--pointer-light)),
+        transparent 65%
+      );
+    }
+    .surface-interactive::after {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      padding: 1px;
+      border-radius: inherit;
+      pointer-events: none;
+      background: radial-gradient(
+        180px circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+        rgb(var(--c-accent) / var(--pointer-edge)),
+        transparent 70%
+      );
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask:
+        linear-gradient(#000 0 0) content-box exclude,
+        linear-gradient(#000 0 0);
+      opacity: 0;
+      transition: opacity 200ms ease;
+    }
+    .surface-interactive:hover::after {
+      opacity: 1;
+    }
+  }
   /* Nobody wants a dashboard that moves if they asked the system not to. */
   @media (prefers-reduced-motion: reduce) {
     .surface-interactive,
-    .surface-interactive:hover {
+    .surface-interactive:hover,
+    .surface-interactive::after {
       transition: none;
       transform: none;
     }

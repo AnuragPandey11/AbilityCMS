@@ -371,6 +371,7 @@ function Trends({
                     height={chartHeight}
                     day={day}
                     markPeak={trend.markPeak}
+                    syncGroup={`device-${device.id}`}
                   />
                 ) : (
                   <OverlayTrendChart
@@ -385,6 +386,7 @@ function Trends({
                     timezone={timezone}
                     height={chartHeight}
                     day={day}
+                    syncGroup={`device-${device.id}`}
                   />
                 )}
               </section>

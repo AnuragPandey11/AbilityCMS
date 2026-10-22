@@ -11,6 +11,7 @@ import { useState, type FormEvent } from "react";
 import { useAuth } from "@/auth/AuthProvider";
 import { Button, Field, PasswordInput, inputClass } from "@/components/ui";
 import { BrandMark } from "@/components/layout/BrandMark";
+import { ShaderGround } from "@/components/layout/ShaderGround";
 import { ThemeToggle } from "@/theme/ThemeToggle";
 
 export function LoginPage(): JSX.Element {
@@ -57,14 +58,19 @@ export function LoginPage(): JSX.Element {
   };
 
   return (
-    <div className="app-ground relative flex min-h-screen items-center justify-center px-4 py-10">
+    // Navy in both themes, like the sidebar: the brand as a surface. The
+    // gradient is what shows before the first frame and wherever WebGL is not.
+    <div className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-b from-nav to-nav-deep px-4 py-10">
+      <ShaderGround />
       <div className="absolute right-4 top-4">
         <ThemeToggle />
       </div>
 
       <form
         onSubmit={submit}
-        className="w-full max-w-sm rounded-card border border-line bg-surface-raised p-6 shadow-card"
+        // A deeper shadow than a card on the page: this one floats over a
+        // moving field, and a contact shadow alone lets it sink into it.
+        className="w-full max-w-sm rounded-card border border-line bg-surface-raised p-6 shadow-[0_22px_50px_-22px_rgba(4,8,20,0.6),0_1px_3px_rgba(15,23,42,0.08)]"
       >
         <BrandMark height={54} />
         <h1 className="mt-5 text-lg font-semibold text-ink">Sign in</h1>

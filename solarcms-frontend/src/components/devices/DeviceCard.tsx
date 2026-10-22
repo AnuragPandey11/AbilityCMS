@@ -21,6 +21,7 @@
  */
 
 import type { CommStatus, DeviceListItem, DeviceTableColumn } from "@/api/schemas";
+import { ChangePulse } from "@/components/ui";
 import { DeviceArt } from "./DeviceArt";
 import { UNDEFINED_DISPLAY, formatDigital, formatNumber, isDigital } from "@/format/value";
 import { formatAge, ageSeconds } from "@/format/datetime";
@@ -62,6 +63,14 @@ export const COMM_CARD_STYLE: Record<
     label: "unknown",
     note: "No health record yet. Normal for a Device registered moments ago.",
   },
+};
+
+/** The ring `ChangePulse` draws when a Device's status changes: the new status's colour. */
+export const COMM_PULSE: Record<CommStatus, string> = {
+  online: "ring-ok",
+  degraded: "ring-warn",
+  offline: "ring-bad",
+  unknown: "ring-ink-faint",
 };
 
 export function DeviceCard({
@@ -191,13 +200,15 @@ export function DeviceCard({
   );
 
   const className =
-    `surface-tile w-[176px] rounded-card border p-2.5 text-left ` +
+    `surface-tile relative w-[176px] rounded-card border p-2.5 text-left ` +
     `${status.frame} ${selected ? "ring-2 ring-accent/40" : ""} ` +
     `${onSelect ? "surface-interactive cursor-pointer hover:border-accent/55" : ""}`;
 
-  if (!onSelect) return <div className={className}>{body}</div>;
+  const pulse = <ChangePulse value={device.comm_status ?? "unknown"} className={COMM_PULSE[device.comm_status ?? "unknown"]} />;
+  if (!onSelect) return <div className={className}>{pulse}{body}</div>;
   return (
     <button type="button" onClick={() => onSelect(device)} className={className}>
+      {pulse}
       {body}
     </button>
   );

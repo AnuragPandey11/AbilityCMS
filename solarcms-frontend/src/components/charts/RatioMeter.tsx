@@ -19,9 +19,11 @@
  *   `warn` outline — never a full bar.
  */
 
+import { motion, useTransform } from "framer-motion";
 import type { KpiFigure } from "@/api/schemas";
 import { IconWarning } from "@/components/icons";
 import { formatRatioAsPercent, implausibleRatioReason, ratioIsImplausible } from "@/format/value";
+import { useEasedValue } from "./easedValue";
 import {
   RATIO_BAD_BELOW,
   RATIO_WARN_BELOW,
@@ -58,6 +60,10 @@ export function RatioMeter({
   const tone = drawn ? ratioTone(value, banded) : "chart";
   const verdict = drawn ? ratioVerdict(tone) : null;
   const width = drawn ? W * Math.max(0, Math.min(1, value)) : 0;
+  // The fill travels to a new value; the figure above it does not.
+  const easedFill = useEasedValue(width);
+  const easedWidth = useTransform(easedFill, (w) => Math.max(w, 1.5));
+  const easedRadius = useTransform(easedWidth, (w) => Math.min(5, w / 2));
   const text = formatRatioAsPercent(value);
 
   return (
@@ -102,12 +108,12 @@ export function RatioMeter({
           <>
             <rect x={0} y={7} width={W} height={10} rx={5} className="fill-line" fillOpacity={0.8} />
             {width > 0 ? (
-              <rect
+              <motion.rect
                 x={0}
                 y={7}
-                width={Math.max(width, 1.5)}
+                width={easedWidth}
                 height={10}
-                rx={Math.min(5, Math.max(width, 1.5) / 2)}
+                rx={easedRadius}
                 className={FILL[tone]}
               />
             ) : null}

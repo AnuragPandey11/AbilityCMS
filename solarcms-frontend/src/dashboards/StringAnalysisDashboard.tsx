@@ -28,6 +28,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { usePlant, usePlantDevices, usePlantStrings } from "@/api/hooks";
 import type {
   DeviceListItem,
@@ -513,7 +514,15 @@ function InverterDetail({
           {inverter.undefined_reason ?? "This Inverter reports no PV strings."}
         </p>
       ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8">
+        // Keyed by Inverter: choosing another fades its strings in, so the
+        // tiles are seen to belong to a different machine. A refresh of the
+        // same Inverter keeps the key and does not fade.
+        <motion.div
+          key={inverter.device_id}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
+          className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8"
+        >
           {inverter.strings.map((string) => (
             <StringTile
               key={string.n}
@@ -524,7 +533,7 @@ function InverterDetail({
               highlighted={string.n === highlightedString}
             />
           ))}
-        </div>
+        </motion.div>
       )}
     </Panel>
   );

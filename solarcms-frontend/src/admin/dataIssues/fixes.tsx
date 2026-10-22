@@ -11,6 +11,7 @@
 
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import * as dataIssuesApi from "@/api/endpoints/dataIssues";
 import * as devicesApi from "@/api/endpoints/devices";
 import * as discoveryApi from "@/api/endpoints/discovery";
@@ -24,6 +25,10 @@ import {
   bool, bursts, num, numbers, plain, sample, str, strings, suggestedBindings, topics,
 } from "./kinds";
 import type { IssueActions } from "./useIssueActions";
+
+/** An inline form fades in where its button was, rather than replacing it in one frame. */
+const FORM_ENTER = { opacity: 0, y: -4 } as const;
+const FORM_SHOWN = { opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] } } as const;
 
 export interface FixContext {
   plantId: number;
@@ -700,7 +705,7 @@ function RangeFix({ issue, ctx, busy }: { issue: DataIssue; ctx: FixContext; bus
     && (parsed.valid_min === null || parsed.valid_max === null || parsed.valid_min <= parsed.valid_max);
   const unit = str(issue, "unit") ?? "";
   return (
-    <div className="flex w-full flex-wrap items-end gap-2">
+    <motion.div className="flex w-full flex-wrap items-end gap-2" initial={FORM_ENTER} animate={FORM_SHOWN}>
       <NumberField label="Scale ×" value={scale} onChange={setScale} />
       <NumberField label={`Min ${unit}`} value={min} onChange={setMin} placeholder="none" />
       <NumberField label={`Max ${unit}`} value={max} onChange={setMax} placeholder="none" />
@@ -719,7 +724,7 @@ function RangeFix({ issue, ctx, busy }: { issue: DataIssue; ctx: FixContext; bus
       <p className="w-full text-[11px] text-ink-faint">
         Applies to values from now on; values already stored keep how they were read.
       </p>
-    </div>
+    </motion.div>
   );
 }
 
@@ -893,7 +898,11 @@ export function AckControl({
     );
   }
   return (
-    <span className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+    <motion.span
+      className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
+      initial={FORM_ENTER}
+      animate={FORM_SHOWN}
+    >
       <input
         value={note}
         onChange={(event) => setNote(event.target.value)}
@@ -913,6 +922,6 @@ export function AckControl({
         {busy ? "Saving…" : issues.length > 1 ? `Mark ${issues.length} as known` : "Mark as known"}
       </Button>
       <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-    </span>
+    </motion.span>
   );
 }

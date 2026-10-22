@@ -577,6 +577,7 @@ function GroupTable({
         rows={group.rows}
         columns={columns}
         rowKey={({ row }) => row.device_id}
+        animateOrder
         filterPlaceholder="Filter Inverters…"
         onRowClick={({ row }) => onSelect(row.device_id)}
         minColumnWidth={112}

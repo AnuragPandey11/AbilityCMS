@@ -22,7 +22,7 @@ import { usePlatformHealth, useSystemHealth } from "@/api/hooks";
 import type { HealthTone, PlatformHealth, ProcessHealth } from "@/api/schemas";
 import { MANAGER_WORD, PROCESS_LABEL, STATE_WORD, agoText, problems, span } from "@/admin/platformHealth";
 import { StatTile } from "@/components/charts/KpiTile";
-import { Badge, Panel } from "@/components/ui";
+import { Badge, ChangePulse, Panel } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { usePermission } from "@/auth/usePermission";
 import { formatAge, formatDateTime } from "@/format/datetime";
@@ -78,6 +78,13 @@ function externalManager(health: PlatformHealth): string | null {
   return MANAGER_WORD[code] ?? (code || "the container platform");
 }
 
+/** The ring `ChangePulse` draws when a process's verdict changes, in its new tone. */
+const PULSE: Record<HealthTone, string> = {
+  ok: "ring-ok",
+  warn: "ring-warn",
+  bad: "ring-bad",
+};
+
 function ProcessCard({
   process,
   now,
@@ -94,8 +101,11 @@ function ProcessCard({
     <div
       data-testid={`process-${process.name}`}
       data-state={process.state}
-      className={`surface-tile rounded-card border p-4 ${FRAME[process.tone]}`}
+      className={`surface-tile relative rounded-card border p-4 ${FRAME[process.tone]}`}
     >
+      {/* One ring when the verdict changes — a worker going from working to
+          stalled is the thing on this page worth noticing. */}
+      <ChangePulse value={process.state} className={PULSE[process.tone]} />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-ink">{PROCESS_LABEL[process.name] ?? process.name}</div>

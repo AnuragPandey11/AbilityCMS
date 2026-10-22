@@ -96,6 +96,11 @@ export function TimeSeriesChart({
     sampling: "lttb" as const,
     large: true,
     lineStyle: { width: 1.5 },
+    // Pointing at a line, or its legend entry, dims the others: with eight
+    // Tags on one chart, which line is which is the first question.
+    triggerLineEvent: true,
+    emphasis: { focus: "series" as const },
+    blur: { lineStyle: { opacity: 0.15 } },
     color: theme.palette[index % theme.palette.length],
     data: entry.points.map((point) => [
       point.bucket,

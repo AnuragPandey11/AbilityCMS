@@ -126,6 +126,11 @@ export function ComparisonBars({
     backgroundColor: "transparent",
     textStyle: theme.textStyle,
     animationDuration: 320,
+    // On first load the bars grow in a short ripple; a refresh never replays it
+    // and instead eases each bar from its old length to its new one.
+    animationDelay: (index: number) => Math.min(index * 18, 360),
+    animationDurationUpdate: 450,
+    animationEasingUpdate: "cubicInOut",
     grid: { left: 4, right: 56, top: 6, bottom: 4, containLabel: true },
     tooltip: {
       trigger: "item",
@@ -195,6 +200,9 @@ export function ComparisonBars({
         })),
         barMaxWidth: gradient ? 18 : 13,
         barCategoryGap: "34%",
+        // Pointing at one bar dims the rest, so one Device of seventeen stands out.
+        emphasis: { focus: "self" },
+        blur: { itemStyle: { opacity: 0.3 }, label: { opacity: 0.45 } },
         // Direct labels at the bar end — selective by construction, since a
         // horizontal bar chart has one label per row rather than one per point.
         label: {

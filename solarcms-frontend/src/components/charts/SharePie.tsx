@@ -86,7 +86,10 @@ export function SharePie({
   const option: EChartsOption = {
     backgroundColor: "transparent",
     textStyle: theme.textStyle,
-    animationDuration: 320,
+    // The ring sweeps in once; a refresh eases each slice to its new share.
+    animationDuration: 600,
+    animationDurationUpdate: 450,
+    animationEasingUpdate: "cubicInOut",
     tooltip: {
       trigger: "item",
       backgroundColor: theme.tooltipBackground,
@@ -122,6 +125,9 @@ export function SharePie({
           borderWidth: 2,
           borderRadius: 3,
         },
+        // Pointing at one Plant lifts its slice and dims the others.
+        emphasis: { focus: "self", scale: true, scaleSize: 6 },
+        blur: { itemStyle: { opacity: 0.3 } },
         data: shown.map((slice, index) => ({
           name: slice.label,
           value: slice.value,

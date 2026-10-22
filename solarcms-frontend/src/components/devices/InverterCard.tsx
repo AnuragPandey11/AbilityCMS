@@ -43,7 +43,8 @@
  */
 
 import type { DeviceListItem, DeviceTableColumn, Tag } from "@/api/schemas";
-import { COMM_CARD_STYLE } from "./DeviceCard";
+import { COMM_CARD_STYLE, COMM_PULSE } from "./DeviceCard";
+import { ChangePulse } from "@/components/ui";
 import { DeviceArt } from "./DeviceArt";
 import { IconChevronRight } from "@/components/icons";
 import {
@@ -385,11 +386,12 @@ export function InverterCard({
     <button
       type="button"
       onClick={() => onSelect(device)}
-      className={`surface-card surface-interactive group flex h-full w-full min-w-0 flex-col rounded-card border p-4 text-left [container-type:inline-size] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+      className={`surface-card surface-interactive group relative flex h-full w-full min-w-0 flex-col rounded-card border p-4 text-left [container-type:inline-size] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
         // A frame lights up only for bad news (design rule 2).
         comm === "online" ? "border-line hover:border-accent/55" : style.frame
       } ${selected ? "ring-2 ring-accent/40" : ""}`}
     >
+      <ChangePulse value={comm} className={COMM_PULSE[comm]} />
       <div className="flex items-center gap-3.5 border-b border-line pb-4">
         {/* The drawing is the label; the status is the frame's, never the art's. */}
         <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-card [@container(min-width:20rem)]:h-[5.5rem] [@container(min-width:20rem)]:w-[5.5rem] border border-accent/25 bg-surface-sunken bg-[radial-gradient(circle_at_50%_40%,rgb(var(--c-accent)/0.16),transparent_70%)] shadow-[inset_0_1px_0_0_rgb(var(--c-edge-top)/var(--edge-top-alpha))]">

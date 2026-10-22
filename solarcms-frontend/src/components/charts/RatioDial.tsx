@@ -38,9 +38,11 @@
  * (Guardrails 31–32), and themes through the same Tailwind tokens as the page.
  */
 
+import { motion, useTransform } from "framer-motion";
 import type { KpiCoverage, KpiFigure } from "@/api/schemas";
 import { IconWarning } from "@/components/icons";
 import { formatRatioAsPercent, implausibleRatioReason, ratioIsImplausible } from "@/format/value";
+import { useEasedValue } from "./easedValue";
 
 /** Where the arc turns amber, and red. Presentation only — see the header. */
 export const RATIO_WARN_BELOW = 0.8;
@@ -213,6 +215,11 @@ export function RatioDial({
     value !== null && !implausible && previous !== null && !previousImplausible ? previous : null;
   const tone = value !== null && !implausible ? ratioTone(value, banded) : "chart";
   const verdict = value !== null && !implausible ? ratioVerdict(tone) : null;
+  // The arc and bead travel to a new value along the scale; the figure does not.
+  const eased = useEasedValue(value !== null && !implausible ? value : 0);
+  const arcPath = useTransform(eased, (fraction) => arc(R, -SWEEP, angle(fraction)));
+  const beadX = useTransform(eased, (fraction) => point(R, angle(fraction))[0]);
+  const beadY = useTransform(eased, (fraction) => point(R, angle(fraction))[1]);
 
   const aria =
     `${label} ${value === null ? "not defined" : formatRatioAsPercent(value)}` +
@@ -283,8 +290,8 @@ export function RatioDial({
               strokeLinecap="round"
             />
             {value > 0 ? (
-              <path
-                d={arc(R, -SWEEP, angle(value))}
+              <motion.path
+                d={arcPath}
                 fill="none"
                 className={`${STROKE[tone]} ${GLOW[tone]}`}
                 strokeWidth={8}
@@ -298,9 +305,9 @@ export function RatioDial({
                 <Radial inner={R - 7} outer={R + 13} degrees={angle(compared)} className="stroke-ink" width={2.2} />
               </g>
             ) : null}
-            <circle
-              cx={point(R, angle(value))[0]}
-              cy={point(R, angle(value))[1]}
+            <motion.circle
+              cx={beadX}
+              cy={beadY}
               r={5}
               strokeWidth={2.6}
               className={`fill-surface-raised ${STROKE[tone]}`}

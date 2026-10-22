@@ -77,6 +77,7 @@ function SeriesChart({
   timezone,
   day,
   markPeak,
+  syncGroup,
 }: {
   series: Series;
   unavailableReason: string | null;
@@ -86,6 +87,8 @@ function SeriesChart({
   timezone: string | undefined;
   day: WindowRange["day"];
   markPeak: boolean;
+  /** The window's charts share a crosshair; the thirty-day bars do not. */
+  syncGroup?: string;
 }): JSX.Element {
   if (unavailableReason) {
     return (
@@ -114,12 +117,14 @@ function SeriesChart({
       height={260}
       day={day}
       markPeak={markPeak}
+      syncGroup={syncGroup}
     />
   );
 }
 
 export function EnergyAnalyticsDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
+  const windowGroup = plantId === null ? undefined : `plant-${plantId}-analytics`;
   const plantQuery = usePlant(plantId);
   const devicesQuery = usePlantDevices(plantId);
   const tagsQuery = useTags();
@@ -303,6 +308,7 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title={titled("Plant power", unitOf(power.unit))} padding="p-4">
           <SeriesChart
+            syncGroup={windowGroup}
             series={power}
             unavailableReason={power.unavailableReason}
             unit={unitOf(power.unit)}
@@ -316,6 +322,7 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
 
         <Panel title={titled("Irradiance GHI", unitOf(ghiTag?.unit))} padding="p-4">
           <SeriesChart
+            syncGroup={windowGroup}
             series={ghi}
             unavailableReason={missing(stations, "Weather Station (WMS)", ghiTag, "GHI")}
             unit={unitOf(ghiTag?.unit)}
@@ -331,6 +338,7 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
 
         <Panel title={titled("Module temperature", unitOf(moduleTemperature.unit))} padding="p-4">
           <SeriesChart
+            syncGroup={windowGroup}
             series={moduleTemperature}
             unavailableReason={moduleReason}
             unit={unitOf(moduleTemperature.unit)}
@@ -368,6 +376,7 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
           padding="p-4"
         >
           <SeriesChart
+            syncGroup={windowGroup}
             series={efficiency}
             unavailableReason={missing(oneInverter, "Inverter", efficiencyTag, "INVERTER_EFFICIENCY")}
             unit={unitOf(efficiencyTag?.unit)}

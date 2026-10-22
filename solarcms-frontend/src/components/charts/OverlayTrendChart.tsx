@@ -49,6 +49,7 @@ export function OverlayTrendChart({
   height = 220,
   day = null,
   isLoading = false,
+  syncGroup,
 }: {
   series: OverlaySeries[];
   /** The one unit every series shares. Verbatim from the catalogue (§4.1). */
@@ -58,6 +59,8 @@ export function OverlayTrendChart({
   height?: number;
   day?: DayFrame | null;
   isLoading?: boolean;
+  /** Share a crosshair with the other charts of the same Device (`useEcharts`). */
+  syncGroup?: string;
 }): JSX.Element {
   const [tableView, setTableView] = useState(false);
   const { version: themeVersion } = useTheme();
@@ -176,11 +179,20 @@ export function OverlayTrendChart({
         sampling: "lttb" as const,
         lineStyle: { width: 2, color: colorOf(index) },
         itemStyle: { color: colorOf(index) },
+        // Pointing at a line, or its legend entry, dims the others.
+        triggerLineEvent: true,
+        emphasis: { focus: "series" as const },
+        blur: { lineStyle: { opacity: 0.15 } },
       };
     }),
   };
 
-  const ref = useEcharts(option, [series, unit, tier, timezone, themeVersion, tableView, day?.start, day?.end]);
+  const ref = useEcharts(
+    option,
+    [series, unit, tier, timezone, themeVersion, tableView, day?.start, day?.end],
+    undefined,
+    syncGroup,
+  );
 
   // The table's rows: every bucket any series has, in time order.
   const times = [...new Set(series.flatMap((entry) => entry.points.map((point) => point.at)))].sort(

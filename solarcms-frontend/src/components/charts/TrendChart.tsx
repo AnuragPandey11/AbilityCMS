@@ -35,6 +35,7 @@
 
 import { useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
+import { useReducedMotion } from "framer-motion";
 import type { Tier } from "@/api/schemas";
 import type { TrendPoint } from "@/api/useSlotTrend";
 import { formatAxisLabel, formatBucket, DEFAULT_TIMEZONE } from "@/format/datetime";
@@ -106,6 +107,14 @@ export interface TrendChartProps {
    * naming a tier it was never read from (§9).
    */
   resolution?: { label: string; title: string };
+  /**
+   * The newest reading pulses, softly. Passed by a caller that knows the
+   * Device is reporting now and the window runs to now — never assumed here,
+   * because a pulse on a Device that has gone quiet is a claim that it is live.
+   */
+  live?: boolean;
+  /** Share a crosshair with the other charts of the same Device (`useEcharts`). */
+  syncGroup?: string;
 }
 
 /** One Plant-local calendar day, `[start, end)` in epoch ms. */
@@ -263,9 +272,12 @@ export function TrendChart({
   day = null,
   legend,
   resolution,
+  live = false,
+  syncGroup,
 }: TrendChartProps): JSX.Element {
   const [tableView, setTableView] = useState(false);
-  const { version: themeVersion } = useTheme();
+  const { version: themeVersion, resolved } = useTheme();
+  const reduceMotion = useReducedMotion() ?? false;
   const theme = chartTheme();
 
   const { peak, peakPosition } = useMemo(() => {
@@ -307,6 +319,10 @@ export function TrendChart({
    */
   const plottable = points.filter((point) => point.value !== null).length;
   const sparse = plottable > 0 && plottable < 3;
+  const latest = live ? [...points].reverse().find((point) => point.value !== null) : undefined;
+  // A lit line in dark mode, as the dials already glow there. None in light,
+  // where a glow on a white card reads as a smudge.
+  const glow = resolved === "dark" ? { shadowBlur: 8, shadowColor: withAlpha(color, 0.5) } : {};
 
   const option: EChartsOption = {
     backgroundColor: "transparent",
@@ -425,7 +441,7 @@ export function TrendChart({
             connectNulls: false,
             smooth: 0.18,
             sampling: "lttb",
-            lineStyle: { width: 2, color },
+            lineStyle: { width: 2, color, ...glow },
             itemStyle: { color },
             areaStyle: {
               /**
@@ -498,6 +514,22 @@ export function TrendChart({
             // dense series read as a solid block.
             barCategoryGap: "32%",
           },
+      // The newest reading, pulsing while the caller says the Device is live.
+      // Still under reduced motion: the dot stays, the ripple does not.
+      ...(latest && latest.value !== null && shape === "area"
+        ? [
+            {
+              type: reduceMotion ? ("scatter" as const) : ("effectScatter" as const),
+              data: [[latest.at, latest.value]],
+              symbolSize: 6,
+              z: 4,
+              silent: true,
+              itemStyle: { color },
+              rippleEffect: { period: 2.6, scale: 3.2, brushType: "stroke" as const, number: 2 },
+              tooltip: { show: false },
+            },
+          ]
+        : []),
     ],
   };
 
@@ -513,19 +545,26 @@ export function TrendChart({
     }
   }
 
-  const ref = useEcharts(option, [
-    points,
-    unit,
-    label,
-    tier,
-    timezone,
-    shape,
-    paletteSlot,
-    themeVersion,
-    tableView,
-    day?.start,
-    day?.end,
-  ]);
+  const ref = useEcharts(
+    option,
+    [
+      points,
+      unit,
+      label,
+      tier,
+      timezone,
+      shape,
+      paletteSlot,
+      themeVersion,
+      tableView,
+      day?.start,
+      day?.end,
+      live,
+      reduceMotion,
+    ],
+    undefined,
+    syncGroup,
+  );
 
   const rows = points.filter((point) => point.value !== null);
 

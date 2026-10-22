@@ -41,6 +41,7 @@
 
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "@/auth/AuthProvider";
 import { usePermissions } from "@/auth/usePermission";
 import { useDashboards, dashboardLabel } from "@/auth/useDashboard";
@@ -63,14 +64,31 @@ function navClass(collapsed: boolean) {
   // The active row carries a left rail as well as a tint, so it stays
   // identifiable when the tint is close to a status colour. The sidebar is
   // navy in both themes, so every colour here is a `nav-*` token.
+  // The tint and rail themselves are `ActiveHighlight`, one element that slides
+  // from the link left to the link chosen; `isolate` keeps it under the label.
   return ({ isActive }: { isActive: boolean }): string =>
-    `relative flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] font-medium transition ${
+    `relative isolate flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] font-medium transition ${
       collapsed ? "lg:justify-center lg:px-0" : ""
     } ${
       isActive
-        ? "bg-nav-accent/[0.15] text-nav-accent font-semibold before:absolute before:inset-y-1.5 before:-left-2 before:w-[3px] before:rounded-full before:bg-nav-accent before:shadow-[0_0_8px_rgb(98_188_200)]"
+        ? "text-nav-accent font-semibold"
         : "text-nav-muted hover:bg-nav-ink/[0.08] hover:text-nav-ink"
     }`;
+}
+
+/** The active row's tint and left rail, shared by every link so choosing another slides it there. */
+function ActiveHighlight({ isActive }: { isActive: boolean }): JSX.Element | null {
+  if (!isActive) return null;
+  return (
+    <motion.span
+      layoutId="nav-active"
+      aria-hidden
+      className="absolute inset-0 -z-10 rounded-control bg-nav-accent/[0.15]"
+      transition={{ type: "spring", stiffness: 500, damping: 40 }}
+    >
+      <span className="absolute inset-y-1.5 -left-2 w-[3px] rounded-full bg-nav-accent shadow-[0_0_8px_rgb(98_188_200)]" />
+    </motion.span>
+  );
 }
 
 /** On the rail a label is a tooltip; `sr-only` keeps it the link's name. */
@@ -138,14 +156,20 @@ export function AppShell(): JSX.Element {
   return (
     <div className="app-ground flex min-h-screen text-ink">
       {/* The scrim. Present only while the drawer is, and only below `lg`. */}
-      {menuOpen ? (
-        <button
-          type="button"
-          aria-label="Close the menu"
-          onClick={() => setMenuOpen(false)}
-          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
-        />
-      ) : null}
+      <AnimatePresence>
+        {menuOpen ? (
+          <motion.button
+            key="scrim"
+            type="button"
+            aria-label="Close the menu"
+            onClick={() => setMenuOpen(false)}
+            className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: { duration: 0.2 } }}
+            exit={{ opacity: 0, transition: { duration: 0.18 } }}
+          />
+        ) : null}
+      </AnimatePresence>
 
       <aside
         id="app-sidebar"
@@ -191,20 +215,26 @@ export function AppShell(): JSX.Element {
                       className={navClass(collapsed)}
                       title={collapsed ? label : undefined}
                     >
-                      <Icon size={17} />
-                      <NavLabel collapsed={collapsed}>{label}</NavLabel>
-                      {code === "alarms" && openAlarms > 0 ? (
-                        // On the rail it rides on the icon's corner: this count
-                        // is the reason to glance at a menu somebody put away.
-                        <span
-                          className={`ml-auto rounded-full bg-bad px-1.5 py-px text-[10px] font-semibold tabular-nums text-white ${
-                            collapsed ? "lg:absolute lg:right-1 lg:top-0.5 lg:ml-0 lg:px-1 lg:ring-2 lg:ring-nav" : ""
-                          }`}
-                          title={`${openAlarms} Alarm(s) open and not yet acknowledged`}
-                        >
-                          {openAlarms}
-                        </span>
-                      ) : null}
+                      {({ isActive }) => (
+                        <>
+                          <Icon size={17} />
+                          <NavLabel collapsed={collapsed}>{label}</NavLabel>
+                          {code === "alarms" && openAlarms > 0 ? (
+                            // On the rail it rides on the icon's corner: this count
+                            // is the reason to glance at a menu somebody put away.
+                            <span
+                              className={`ml-auto rounded-full bg-bad px-1.5 py-px text-[10px] font-semibold tabular-nums text-white ${
+                                collapsed ? "lg:absolute lg:right-1 lg:top-0.5 lg:ml-0 lg:px-1 lg:ring-2 lg:ring-nav" : ""
+                              }`}
+                              title={`${openAlarms} Alarm(s) open and not yet acknowledged`}
+                            >
+                              {openAlarms}
+                            </span>
+                          ) : null}
+                          {/* Last, so the label stays the link's first span; drawn behind it all the same. */}
+                          <ActiveHighlight isActive={isActive} />
+                        </>
+                      )}
                     </NavLink>
                   );
                 })}
@@ -224,19 +254,25 @@ export function AppShell(): JSX.Element {
                   className={navClass(collapsed)}
                   title={collapsed ? link.label : undefined}
                 >
-                  <link.icon size={17} />
-                  <NavLabel collapsed={collapsed}>{link.label}</NavLabel>
-                  {link.to === "/admin/data-issues" && openDataIssues > 0 ? (
-                    // Amber, not red: data that needs attention, not an Alarm.
-                    <span
-                      className={`ml-auto rounded-full bg-warn px-1.5 py-px text-[10px] font-semibold tabular-nums text-black/80 ${
-                        collapsed ? "lg:absolute lg:right-1 lg:top-0.5 lg:ml-0 lg:px-1 lg:ring-2 lg:ring-nav" : ""
-                      }`}
-                      title={`${openDataIssues} data issue(s) open: data being lost or looking wrong`}
-                    >
-                      {openDataIssues}
-                    </span>
-                  ) : null}
+                  {({ isActive }) => (
+                    <>
+                      <link.icon size={17} />
+                      <NavLabel collapsed={collapsed}>{link.label}</NavLabel>
+                      {link.to === "/admin/data-issues" && openDataIssues > 0 ? (
+                        // Amber, not red: data that needs attention, not an Alarm.
+                        <span
+                          className={`ml-auto rounded-full bg-warn px-1.5 py-px text-[10px] font-semibold tabular-nums text-black/80 ${
+                            collapsed ? "lg:absolute lg:right-1 lg:top-0.5 lg:ml-0 lg:px-1 lg:ring-2 lg:ring-nav" : ""
+                          }`}
+                          title={`${openDataIssues} data issue(s) open: data being lost or looking wrong`}
+                        >
+                          {openDataIssues}
+                        </span>
+                      ) : null}
+                      {/* Last, so the label stays the link's first span; drawn behind it all the same. */}
+                      <ActiveHighlight isActive={isActive} />
+                    </>
+                  )}
                 </NavLink>
               ))}
             </>

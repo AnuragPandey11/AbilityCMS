@@ -8,6 +8,7 @@
  * a measurement, and labelled as what it is.
  */
 
+import { motion } from "framer-motion";
 import type { KpiPeriod } from "@/api/schemas";
 import { IconAlarm, IconSignal } from "@/components/icons";
 import { COMM_TITLE, PlantStatusPill, SeverityBadge } from "@/components/domain";
@@ -176,7 +177,11 @@ export function PlantCard({
         <div className="min-w-0">
           <div className="truncate text-lg font-semibold text-ink">{plant.name}</div>
           <div className="mt-0.5 truncate font-mono text-xs uppercase tracking-wide text-ink-faint">
-            {plant.code}
+            {/* Shared with the table row (`plantCodeMotion`): switching views
+                carries each code from its card to its row. */}
+            <motion.span {...plantCodeMotion(plant.id)} className="inline-block">
+              {plant.code}
+            </motion.span>
             {plant.region_code ? ` · ${plant.region_code}` : ""}
           </div>
         </div>
@@ -250,4 +255,14 @@ export function PlantCard({
       </div>
     </button>
   );
+}
+
+/**
+ * The one element a Plant's card and its table row share, so switching the
+ * Plants view between cards and table carries each Plant's code from one place
+ * to the other — the same Plants, in another shape, rather than a second list.
+ * Position only: scaling text between two sizes distorts it.
+ */
+export function plantCodeMotion(plantId: number): { layoutId: string; layout: "position" } {
+  return { layoutId: `plant-code-${plantId}`, layout: "position" };
 }

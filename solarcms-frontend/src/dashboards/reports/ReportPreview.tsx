@@ -8,6 +8,7 @@
  */
 
 import { useMemo } from "react";
+import { motion } from "framer-motion";
 import type { ReportCellValue, ReportColumn, ReportTable } from "@/api/schemas";
 import { Panel } from "@/components/ui";
 import { DataTable, type Column } from "@/components/tables/DataTable";
@@ -104,6 +105,14 @@ export function ReportPreview({
       <p className="p-4 text-xs text-ink-faint">{emptyHint}</p>
     );
   } else {
+    const identity = [
+      table.kind,
+      table.plant.id,
+      table.first_day,
+      table.last_day,
+      table.from_time ?? "",
+      table.to_time ?? "",
+    ].join("|");
     body = (
       <>
         {error ? (
@@ -116,14 +125,23 @@ export function ReportPreview({
           className={`p-4 transition-opacity ${stale ? "opacity-50" : ""}`}
           aria-busy={stale}
         >
-          <DataTable
-            rows={rows}
-            columns={columns}
-            rowKey={(row) => row.index}
-            emptyMessage="No rows for this period."
-            filterPlaceholder="Filter rows…"
-            minColumnWidth={120}
-          />
+          {/* A different report (kind, Plant or span) fades up, so the change
+              is seen; a refresh of the same one does not. Animated in place
+              rather than re-keyed, which would clear the reader's filter and sort. */}
+          <motion.div
+            initial={false}
+            animate={identity}
+            variants={{ [identity]: { opacity: [0.35, 1], transition: { duration: 0.3, ease: "easeOut" } } }}
+          >
+            <DataTable
+              rows={rows}
+              columns={columns}
+              rowKey={(row) => row.index}
+              emptyMessage="No rows for this period."
+              filterPlaceholder="Filter rows…"
+              minColumnWidth={120}
+            />
+          </motion.div>
         </div>
         {table.notes.length > 0 ? (
           <div className="border-t border-line px-4 py-3">

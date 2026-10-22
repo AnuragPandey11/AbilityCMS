@@ -1,4 +1,14 @@
 import "@testing-library/jest-dom/vitest";
+import { MotionGlobalConfig } from "framer-motion";
+
+/**
+ * Framer Motion finishes every animation at once under test.
+ *
+ * The tests assert what is on screen after an action, not how it moved there;
+ * a drawer that took a quarter of a second to leave would otherwise still be in
+ * the document when the next assertion runs.
+ */
+MotionGlobalConfig.skipAnimations = true;
 
 /**
  * A `localStorage` for the theme tests.

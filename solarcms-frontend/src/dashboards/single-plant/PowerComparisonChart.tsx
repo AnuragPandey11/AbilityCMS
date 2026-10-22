@@ -141,7 +141,7 @@ export function PowerComparisonChart({
       zoom.current = { start: range.start, end: range.end };
     }
   };
-  const { version: themeVersion } = useTheme();
+  const { version: themeVersion, resolved } = useTheme();
   const theme = chartTheme();
 
   // A radiation series with nothing to lock it to is not drawn at all — see
@@ -345,7 +345,14 @@ export function PowerComparisonChart({
         sampling: "lttb" as const,
         // Measured power on top of everything it is compared with.
         z: index === 0 ? 4 : entry.axis === "radiation" ? 2 : 3,
-        lineStyle: { width: entry.line === "solid" ? 2 : 1.8, type: DASH[entry.line], color },
+        lineStyle: {
+          width: entry.line === "solid" ? 2 : 1.8,
+          type: DASH[entry.line],
+          color,
+          // Measured power is lit in dark mode, as the dials glow there; the
+          // lines it is compared with stay plain. None in light.
+          ...(index === 0 && resolved === "dark" ? { shadowBlur: 8, shadowColor: withAlpha(color, 0.5) } : {}),
+        },
         itemStyle: { color },
         areaStyle: entry.fill
           ? {

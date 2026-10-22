@@ -22,6 +22,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -36,7 +37,7 @@ import {
 import * as devicesApi from "@/api/endpoints/devices";
 import { isApiError } from "@/api/problem";
 import { measuresGeneration } from "@/api/useSlotTrend";
-import { Button, Field, Panel, Badge, inputClass } from "@/components/ui";
+import { Button, Field, Panel, Badge, Reveal, inputClass } from "@/components/ui";
 import {
   EmptyState,
   ErrorState,
@@ -548,13 +549,19 @@ export function DeviceBindingsAdmin(): JSX.Element {
 
               {confirming ? (
                 <>
-                  <span className="text-[11px] text-warn">
+                  {/* The question fades in where the button was, so it is read
+                      as the consequence of that press. */}
+                  <motion.span
+                    className="text-[11px] text-warn"
+                    initial={{ opacity: 0, x: -4 }}
+                    animate={{ opacity: 1, x: 0, transition: { duration: 0.18 } }}
+                  >
                     Replace all {bindingsQuery.data?.length ?? 0} existing
                     binding(s) with these {draft.length}?
                     {removedCount > 0
                       ? ` ${removedCount} will be deleted and stop decoding.`
                       : ""}
-                  </span>
+                  </motion.span>
                   <Button
                     variant="danger"
                     disabled={save.isPending}
@@ -875,7 +882,8 @@ function DeviceSettings({
             </span>
           ) : null}
         </div>
-      ) : (
+      ) : null}
+      <Reveal open={open}>
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Field label="Name">
@@ -1041,7 +1049,7 @@ function DeviceSettings({
             </p>
           ) : null}
         </div>
-      )}
+      </Reveal>
     </Panel>
   );
 }

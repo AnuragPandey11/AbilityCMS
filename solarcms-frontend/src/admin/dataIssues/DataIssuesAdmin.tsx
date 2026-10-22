@@ -21,6 +21,7 @@
 
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   useDataIssues,
   useDataIssuesSummary,
@@ -48,6 +49,17 @@ import { NewTagDrawer } from "./NewTagDrawer";
 import { useIssueActions } from "./useIssueActions";
 
 type Tab = IssueCategory | "known";
+
+/**
+ * An issue fixed or marked as known slides out, and the rest close up behind
+ * it: the list changing is the confirmation that the action landed. Rows and
+ * cards share these; a list is rebuilt without any of it when the Plant or the
+ * tab changes, since a whole new list sliding in says nothing about any row.
+ */
+const ENTER = { opacity: 0, y: -6 } as const;
+const SHOWN = { opacity: 1, y: 0, x: 0, transition: { duration: 0.24, ease: [0.22, 1, 0.36, 1] } } as const;
+const LEAVE = { opacity: 0, x: 24, transition: { duration: 0.18, ease: [0.4, 0, 1, 1] } } as const;
+const GLIDE = { layout: { type: "spring", stiffness: 380, damping: 36 } } as const;
 
 const EMPTY_TAB: Record<IssueCategory, string> = {
   data_lost:
@@ -193,11 +205,24 @@ export function DataIssuesAdmin(): JSX.Element {
           ) : null}
 
           {tab === "known" ? (
-            <KnownList issues={known} ctx={ctx} />
+            <KnownList key={plantId} issues={known} ctx={ctx} />
           ) : groups.length === 0 ? (
             <AllClear text={EMPTY_TAB[tab]} />
           ) : (
-            groups.map((group) => <GroupCard key={group.kind} group={group} ctx={ctx} />)
+            <AnimatePresence key={`${plantId}-${tab}`} initial={false}>
+              {groups.map((group) => (
+                <motion.div
+                  key={group.kind}
+                  layout="position"
+                  initial={ENTER}
+                  animate={SHOWN}
+                  exit={LEAVE}
+                  transition={GLIDE}
+                >
+                  <GroupCard group={group} ctx={ctx} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
           )}
         </>
       ) : null}
@@ -384,9 +409,11 @@ function GroupCard({ group, ctx }: { group: IssueGroup; ctx: FixContext }): JSX.
       actions={<BulkActions group={group} ctx={ctx} />}
     >
       <ul className="space-y-2">
-        {shown.map((issue) => (
-          <IssueRow key={issue.key} issue={issue} ctx={ctx} />
-        ))}
+        <AnimatePresence initial={false}>
+          {shown.map((issue) => (
+            <IssueRow key={issue.key} issue={issue} ctx={ctx} />
+          ))}
+        </AnimatePresence>
       </ul>
       {collapsible ? (
         <button
@@ -407,7 +434,12 @@ function GroupCard({ group, ctx }: { group: IssueGroup; ctx: FixContext }): JSX.
 function IssueRow({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): JSX.Element {
   const error = ctx.actions.errors[issue.key];
   return (
-    <li
+    <motion.li
+      layout="position"
+      initial={ENTER}
+      animate={SHOWN}
+      exit={LEAVE}
+      transition={GLIDE}
       className={`rounded-control border p-3 ${
         error ? "border-bad/40 bg-bad/5" : "border-line bg-surface-sunken/40"
       }`}
@@ -429,7 +461,7 @@ function IssueRow({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): JSX.El
         <summary className="cursor-pointer text-[11px] text-ink-faint hover:text-ink">Why this matters</summary>
         <p className="mt-1 max-w-3xl text-xs leading-relaxed text-ink-muted">{issue.detail}</p>
       </details>
-    </li>
+    </motion.li>
   );
 }
 
@@ -801,39 +833,49 @@ function KnownList({ issues, ctx }: { issues: DataIssue[]; ctx: FixContext }): J
       subtitle="Marked as known by a person. Still true, still listed — Undo returns it to the open list."
     >
       <ul className="space-y-2">
-        {issues.map((issue) => {
-          const ack = issue.acknowledged;
-          const busy = Boolean(ctx.actions.busy[issue.key]);
-          return (
-            <li key={issue.key} className="rounded-control border border-line bg-surface-sunken/40 p-3">
-              <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
-                <div className="min-w-0 flex-1 basis-64">
-                  <p className="text-sm text-ink">{issue.title}</p>
-                  {ack ? (
-                    <p className="mt-0.5 text-xs text-ink-muted">
-                      Known since {formatDateTime(ack.created_at, ctx.timezone).slice(0, 16)}
-                      {ack.created_by ? ` · ${ack.created_by}` : ""}
-                      {ack.note ? ` — “${ack.note}”` : ""}
-                    </p>
-                  ) : null}
+        <AnimatePresence initial={false}>
+          {issues.map((issue) => {
+            const ack = issue.acknowledged;
+            const busy = Boolean(ctx.actions.busy[issue.key]);
+            return (
+              <motion.li
+                key={issue.key}
+                layout="position"
+                initial={ENTER}
+                animate={SHOWN}
+                exit={LEAVE}
+                transition={GLIDE}
+                className="rounded-control border border-line bg-surface-sunken/40 p-3"
+              >
+                <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+                  <div className="min-w-0 flex-1 basis-64">
+                    <p className="text-sm text-ink">{issue.title}</p>
+                    {ack ? (
+                      <p className="mt-0.5 text-xs text-ink-muted">
+                        Known since {formatDateTime(ack.created_at, ctx.timezone).slice(0, 16)}
+                        {ack.created_by ? ` · ${ack.created_by}` : ""}
+                        {ack.note ? ` — “${ack.note}”` : ""}
+                      </p>
+                    ) : null}
+                  </div>
+                  <Button
+                    disabled={busy || !ack}
+                    onClick={() =>
+                      ack && void ctx.actions.run([issue.key], async () => {
+                        await dataIssuesApi.unacknowledge(ack.id);
+                      }, "Back in the open list.")
+                    }
+                  >
+                    {busy ? "Undoing…" : "Undo"}
+                  </Button>
                 </div>
-                <Button
-                  disabled={busy || !ack}
-                  onClick={() =>
-                    ack && void ctx.actions.run([issue.key], async () => {
-                      await dataIssuesApi.unacknowledge(ack.id);
-                    }, "Back in the open list.")
-                  }
-                >
-                  {busy ? "Undoing…" : "Undo"}
-                </Button>
-              </div>
-              {ctx.actions.errors[issue.key] ? (
-                <p className="mt-2 text-xs text-bad">{ctx.actions.errors[issue.key]}</p>
-              ) : null}
-            </li>
-          );
-        })}
+                {ctx.actions.errors[issue.key] ? (
+                  <p className="mt-2 text-xs text-bad">{ctx.actions.errors[issue.key]}</p>
+                ) : null}
+              </motion.li>
+            );
+          })}
+        </AnimatePresence>
       </ul>
     </Panel>
   );

@@ -33,6 +33,10 @@
  * animated only while power is actually moving. An always-animated arrow is
  * decoration that says "working" on a dead plant at midnight, which is worse
  * than no arrow: it is an assertion, and it is wrong for half of every day.
+ * Since 21 Oct 2026 (the user's choice from a rendered preview) the movement is
+ * lights travelling the wire, faster and denser as the figure rises against the
+ * Plant's nameplate (`FlowConnector`); which figure decides, and why the
+ * Transformer → Grid link borrows the Grid's, is in `flow.ts`.
  */
 
 import type { ReactNode } from "react";
@@ -40,6 +44,8 @@ import type { SldStage, SldStages } from "@/api/schemas";
 import { slotText, sourceLabel } from "@/components/dashboard/SlotValue";
 import { DeviceArt } from "@/components/devices/DeviceArt";
 import { UNDEFINED_DISPLAY } from "@/format/value";
+import { FlowConnector } from "./FlowConnector";
+import { linkFlow, plantCapacityKw, type LinkFlow } from "./flow";
 
 /**
  * Health → how the stage is framed.
@@ -94,56 +100,12 @@ const STAGE_ART: Record<string, string> = {
   GRID: "GRID",
 };
 
-/**
- * The connector between two stages.
- *
- * `flowing` animates it. It is passed by the caller from a figure that is
- * actually moving, never assumed — see the note at the top of this file.
- */
-function Connector({
-  tone,
-  flowing,
-}: {
-  tone: string;
-  flowing: boolean;
-}): JSX.Element {
-  return (
-    <div
-      className={`flex shrink-0 items-center justify-center self-center ${tone}`}
-      title={flowing ? "Power is flowing in this direction" : "No power is flowing right now"}
-      aria-hidden
-    >
-      <svg width="26" height="14" viewBox="0 0 26 14" fill="none" className="overflow-visible">
-        <path
-          d="M0 7h18"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          opacity={flowing ? 0.9 : 0.35}
-          strokeDasharray={flowing ? "4 4" : undefined}
-        >
-          {flowing ? (
-            <animate
-              attributeName="stroke-dashoffset"
-              from="8"
-              to="0"
-              dur="0.9s"
-              repeatCount="indefinite"
-            />
-          ) : null}
-        </path>
-        <path
-          d="M16.5 3.4 21.5 7l-5 3.6"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          fill="none"
-          opacity={flowing ? 0.95 : 0.4}
-        />
-      </svg>
-    </div>
-  );
+/** What the link's hover says: whether power is moving, and on whose figure. */
+function linkTitle(flow: LinkFlow): string {
+  if (flow.basis === null) return "No figure here says whether power is flowing";
+  if (!flow.moving) return `No power is flowing right now (${flow.basis})`;
+  const share = flow.share === null ? "" : `, ${Math.round(flow.share * 100)}% of DC capacity`;
+  return `Power is flowing in this direction (${flow.basis}${share})`;
 }
 
 function StageBox({
@@ -250,22 +212,10 @@ export function PlantSchematic({
   selectedStage?: string | null;
   compact?: boolean;
 }): JSX.Element {
-  /**
-   * Whether power is moving out of a stage.
-   *
-   * Read from the stage's own resolved slots: any power or current figure that
-   * is present and non-zero. Deliberately **not** inferred from health — a
-   * stage can be perfectly healthy and producing nothing, which is every solar
-   * plant every night, and an arrow that animates because the comms are fine
-   * would be asserting generation from a communications fact.
-   */
-  const isFlowing = (stage: SldStage): boolean =>
-    stage.slots.some((slot) => {
-      if (slot.value === null) return false;
-      const unit = (slot.unit ?? "").toLowerCase();
-      const isRate = unit === "kw" || unit === "mw" || unit === "w" || unit === "a";
-      return isRate && Math.abs(slot.value) > 0.001;
-    });
+  // Deliberately **not** inferred from health — a stage can be perfectly
+  // healthy and producing nothing, which is every solar plant every night
+  // (see `flow.ts` for the figure each link reads).
+  const capacityKw = plantCapacityKw(sld.stages);
 
   return (
     <div className="flex h-full min-w-0 flex-col justify-center">
@@ -308,13 +258,17 @@ export function PlantSchematic({
             compact={compact}
           />,
           ...(index < sld.stages.length - 1
-            ? [
-                <Connector
-                  key={`${stage.code}-to-next`}
-                  tone={HEALTH[stage.health].rail}
-                  flowing={isFlowing(stage)}
-                />,
-              ]
+            ? (() => {
+                const flow = linkFlow(stage, sld.stages[index + 1], capacityKw);
+                return [
+                  <FlowConnector
+                    key={`${stage.code}-to-next`}
+                    tone={HEALTH[stage.health].rail}
+                    flow={flow}
+                    title={linkTitle(flow)}
+                  />,
+                ];
+              })()
             : []),
         ])}
       </div>

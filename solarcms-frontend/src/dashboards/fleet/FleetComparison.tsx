@@ -328,6 +328,7 @@ export function FleetComparison({
           rows={rows}
           columns={columns}
           rowKey={(row) => row.plant.id}
+          animateOrder
           filterPlaceholder="Filter Plants…"
           onRowClick={(row) => onOpenPlant(row.plant.id)}
         />

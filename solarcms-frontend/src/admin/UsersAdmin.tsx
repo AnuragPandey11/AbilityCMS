@@ -508,6 +508,7 @@ export function UsersAdmin(): JSX.Element {
           rows={users}
           columns={columns}
           rowKey={(user) => user.id}
+          animateArrivals
           filterPlaceholder="Filter Users…"
         />
       </Panel>

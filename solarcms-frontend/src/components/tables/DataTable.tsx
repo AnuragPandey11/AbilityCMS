@@ -18,9 +18,21 @@
  * The first column then sticks. Scrolling a Device table sideways is useless if
  * the Device code is the thing that scrolls away first — the row loses the only
  * cell that says which machine it is about.
+ *
+ * ── Rows that come and go, when the caller asks ─────────────────────────────
+ * `animateArrivals` eases in a row that is new to the *data* — an Alarm raised
+ * since the last refresh — and `leavingKeys` fades out rows the caller is about
+ * to remove, so an action is seen to land. Both follow the data, never the
+ * window: a row scrolling into a virtualised viewport is not an arrival. And a
+ * large change (a new filter, a first load) is not animated at all, because
+ * thirty rows sliding in at once says nothing about any of them.
+ * `animateOrder` lets rows glide to their new places when the order changes —
+ * a ranking re-sorted, or re-ranked by a refresh — so a change of rank is seen
+ * rather than worked out. Never while virtualised: the rows are not all there.
  */
 
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { motion } from "framer-motion";
 import { Button, inputClass } from "@/components/ui";
 
 export interface Column<T> {
@@ -39,6 +51,45 @@ export interface Column<T> {
 const VIRTUALISE_ABOVE = 200;
 const ROW_HEIGHT = 34;
 const OVERSCAN = 8;
+/** More new rows than this at once is a different list, not an arrival. */
+const ARRIVALS_AT_MOST = 5;
+/** How long a row counts as just arrived — long enough to mount and ease in. */
+const ARRIVAL_WINDOW_MS = 1000;
+
+/**
+ * Keys that are new to the data since the previous rows, stamped with when.
+ *
+ * Worked out during render, from refs, so the row is already flagged on the
+ * render that first mounts it — an effect would flag it one render too late,
+ * after it had appeared without moving.
+ */
+function useArrivals<K>(keys: K[], enabled: boolean): (key: K) => boolean {
+  const previous = useRef<Set<K> | null>(null);
+  const arrivedAt = useRef(new Map<K, number>());
+  const current = useMemo(() => new Set(keys), [keys]);
+  const seen = useRef<Set<K> | null>(null);
+
+  if (enabled && seen.current !== current) {
+    seen.current = current;
+    const before = previous.current;
+    previous.current = current;
+    if (before) {
+      const added = keys.filter((key) => !before.has(key));
+      if (added.length > 0 && added.length <= ARRIVALS_AT_MOST) {
+        const now = Date.now();
+        for (const key of added) arrivedAt.current.set(key, now);
+      }
+    }
+    for (const [key, at] of arrivedAt.current) {
+      if (Date.now() - at > ARRIVAL_WINDOW_MS) arrivedAt.current.delete(key);
+    }
+  }
+
+  return (key: K) => {
+    const at = arrivedAt.current.get(key);
+    return at !== undefined && Date.now() - at <= ARRIVAL_WINDOW_MS;
+  };
+}
 
 export function DataTable<T>({
   rows,
@@ -52,6 +103,9 @@ export function DataTable<T>({
   maxHeight = 520,
   minColumnWidth = 132,
   stickyFirstColumn = true,
+  animateArrivals = false,
+  leavingKeys,
+  animateOrder = false,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -67,8 +121,17 @@ export function DataTable<T>({
   minColumnWidth?: number;
   /** Keeps the identifying column in view while the rest scrolls. */
   stickyFirstColumn?: boolean;
+  /** Ease in a few rows that are new since the last data. */
+  animateArrivals?: boolean;
+  /** Rows about to be removed by the caller; they fade out first. */
+  leavingKeys?: ReadonlySet<string | number>;
+  /** Rows glide to their new places when the order changes. */
+  animateOrder?: boolean;
 }): JSX.Element {
   const [query, setQuery] = useState("");
+  const animated = animateArrivals || leavingKeys !== undefined || animateOrder;
+  const rowKeys = useMemo(() => rows.map(rowKey), [rows, rowKey]);
+  const justArrived = useArrivals(rowKeys, animateArrivals);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [scrollTop, setScrollTop] = useState(0);
@@ -225,32 +288,58 @@ export function DataTable<T>({
             ) : (
               <>
                 {padTop > 0 ? <tr style={{ height: padTop }} /> : null}
-                {visible.map((row) => (
-                  <tr
-                    key={rowKey(row)}
-                    onClick={() => onRowClick?.(row)}
-                    style={{ height: ROW_HEIGHT }}
-                    className={`border-b border-slate-100 dark:border-line/60 even:bg-slate-50/50 dark:even:bg-surface-sunken/30 transition-colors ${
-                      onRowClick ? "cursor-pointer hover:bg-slate-100/70 dark:hover:bg-surface-raised" : ""
-                    }`}
-                  >
-                    {columns.map((column, index) => (
-                      <td
-                        key={column.key}
-                        className={`px-3 py-1.5 text-ink ${
-                          column.align === "right" ? "text-right font-mono" : ""
-                        } ${
-                          stickyFirstColumn && index === 0
-                            ? // Opaque, or the scrolling columns show through it.
-                              "sticky left-0 z-10 bg-white dark:bg-surface-raised"
-                            : ""
-                        }`}
+                {visible.map((row) => {
+                  const key = rowKey(row);
+                  const className = `border-b border-slate-100 dark:border-line/60 even:bg-slate-50/50 dark:even:bg-surface-sunken/30 transition-colors ${
+                    onRowClick ? "cursor-pointer hover:bg-slate-100/70 dark:hover:bg-surface-raised" : ""
+                  }`;
+                  const cells = columns.map((column, index) => (
+                    <td
+                      key={column.key}
+                      className={`px-3 py-1.5 text-ink ${
+                        column.align === "right" ? "text-right font-mono" : ""
+                      } ${
+                        stickyFirstColumn && index === 0
+                          ? // Opaque, or the scrolling columns show through it.
+                            "sticky left-0 z-10 bg-white dark:bg-surface-raised"
+                          : ""
+                      }`}
+                    >
+                      {column.render(row)}
+                    </td>
+                  ));
+                  if (!animated) {
+                    return (
+                      <tr
+                        key={key}
+                        onClick={() => onRowClick?.(row)}
+                        style={{ height: ROW_HEIGHT }}
+                        className={className}
                       >
-                        {column.render(row)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                        {cells}
+                      </tr>
+                    );
+                  }
+                  const leaving = leavingKeys?.has(key) ?? false;
+                  return (
+                    <motion.tr
+                      key={key}
+                      onClick={() => onRowClick?.(row)}
+                      style={{ height: ROW_HEIGHT }}
+                      className={className}
+                      layout={animateOrder && !virtualise ? "position" : false}
+                      transition={{ layout: { type: "spring", stiffness: 380, damping: 36 } }}
+                      initial={justArrived(key) ? { opacity: 0, y: -8 } : false}
+                      animate={
+                        leaving
+                          ? { opacity: 0, x: 24, transition: { duration: 0.2, ease: [0.4, 0, 1, 1] } }
+                          : { opacity: 1, x: 0, y: 0, transition: { duration: 0.32, ease: [0.22, 1, 0.36, 1] } }
+                      }
+                    >
+                      {cells}
+                    </motion.tr>
+                  );
+                })}
                 {padBottom > 0 ? <tr style={{ height: padBottom }} /> : null}
               </>
             )}

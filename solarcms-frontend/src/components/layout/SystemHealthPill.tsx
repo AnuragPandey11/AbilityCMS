@@ -7,9 +7,15 @@
  * When anything is not fine it names the first problem and links to System
  * Health, so a dead ingest worker is on every screen, not only on the one page
  * somebody has to think of opening.
+ *
+ * It eases in when something goes wrong and out when it is put right: the
+ * header is otherwise still, and a pill that blinks into place is easy to miss
+ * while one that blinks out reads as a glitch. Already there on page load, it
+ * simply appears.
  */
 
 import { Link } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { usePlatformHealth } from "@/api/hooks";
 import { usePermission } from "@/auth/usePermission";
 import { PROCESS_LABEL, STATE_WORD, problems } from "@/admin/platformHealth";
@@ -17,8 +23,28 @@ import { PROCESS_LABEL, STATE_WORD, problems } from "@/admin/platformHealth";
 export function SystemHealthPill(): JSX.Element | null {
   const isPlatformAdmin = usePermission("system.admin");
   const query = usePlatformHealth(isPlatformAdmin);
-  const health = query.data;
   if (!isPlatformAdmin) return null;
+  const pill = healthPill(query);
+  return (
+    <AnimatePresence initial={false}>
+      {pill ? (
+        <motion.span
+          key="pill"
+          className="inline-flex"
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1, transition: { type: "spring", stiffness: 500, damping: 30 } }}
+          exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.18 } }}
+        >
+          {pill}
+        </motion.span>
+      ) : null}
+    </AnimatePresence>
+  );
+}
+
+/** The pill itself, or null when there is nothing to say. */
+function healthPill(query: ReturnType<typeof usePlatformHealth>): JSX.Element | null {
+  const health = query.data;
 
   // The API not answering at all is itself the news.
   if (query.isError) {

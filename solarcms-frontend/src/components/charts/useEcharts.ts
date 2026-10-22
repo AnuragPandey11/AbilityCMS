@@ -49,6 +49,12 @@ export function useEcharts(
    * caller may pass a fresh function every render.
    */
   events?: Record<string, (params: unknown) => void>,
+  /**
+   * Charts sharing a group share a crosshair: pointing at a time on one shows
+   * the same moment on the others (`echarts.connect`). For charts of one
+   * Device — the Inverter view's trends — never across unrelated charts.
+   */
+  group?: string,
 ): (node: HTMLDivElement | null) => void {
   const chartRef = useRef<echarts.ECharts | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
@@ -58,6 +64,8 @@ export function useEcharts(
   optionRef.current = option;
   const eventsRef = useRef(events);
   eventsRef.current = events;
+  const groupRef = useRef(group);
+  groupRef.current = group;
 
   const setContainer = useCallback((node: HTMLDivElement | null) => {
     // Tear down whatever was attached before — React calls a changed callback
@@ -79,6 +87,10 @@ export function useEcharts(
     for (const name of Object.keys(eventsRef.current ?? {})) {
       chart.on(name, (params: unknown) => eventsRef.current?.[name]?.(params));
     }
+    if (groupRef.current) {
+      chart.group = groupRef.current;
+      echarts.connect(groupRef.current);
+    }
 
     // A container inside a flex or grid panel is frequently 0×0 on the frame it
     // first attaches. ECharts sizes to the node it was given, so without this
@@ -92,6 +104,14 @@ export function useEcharts(
     chartRef.current?.setOption(optionRef.current, { notMerge: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
+
+  // A group that changes after the chart attached (another Device chosen).
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.group = group ?? "";
+    if (group) echarts.connect(group);
+  }, [group]);
 
   /*
     ⚠ **There is deliberately no unmount effect disposing the chart**, and

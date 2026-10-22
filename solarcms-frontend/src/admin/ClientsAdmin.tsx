@@ -33,6 +33,7 @@
  */
 
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as discoveryApi from "@/api/endpoints/discovery";
 import * as clientsApi from "@/api/endpoints/clients";
@@ -40,7 +41,7 @@ import { qk } from "@/api/queryKeys";
 import { isApiError } from "@/api/problem";
 import { usePermission } from "@/auth/usePermission";
 import {
-  Badge, Button, Field, Panel, PasswordInput, SegmentedControl, inputClass,
+  Badge, Button, Field, Panel, PasswordInput, Reveal, SegmentedControl, inputClass,
 } from "@/components/ui";
 import { EmptyState, ErrorState, ForbiddenState, SkeletonPanel } from "@/components/state";
 import { JsonTree } from "@/components/json/JsonTree";
@@ -491,7 +492,20 @@ export function ClientsAdmin(): JSX.Element {
             )}
           </Panel>
 
-          <div className="min-w-0 space-y-4">
+          {/* Choosing another Client fades its detail up, in place: re-keyed, the
+              publishing panel beside it would lose whether it was open. */}
+          <motion.div
+            className="min-w-0 space-y-4"
+            initial={false}
+            animate={current?.code ?? "none"}
+            variants={{
+              [current?.code ?? "none"]: {
+                opacity: [0.35, 1],
+                y: [4, 0],
+                transition: { duration: 0.25, ease: [0.22, 1, 0.36, 1] },
+              },
+            }}
+          >
             {current === null ? (
               <Panel title="Choose a Client">
                 <p className="text-xs leading-relaxed text-ink-faint">
@@ -528,7 +542,7 @@ export function ClientsAdmin(): JSX.Element {
                 </Button>
               </Panel>
             )}
-          </div>
+          </motion.div>
         </div>
       )}
     </div>
@@ -780,115 +794,118 @@ function BrokerActivity({ clientCode }: { clientCode: string }): JSX.Element {
           Hidden by default — open it when you are checking whether data is
           arriving, rather than editing the Client.
         </p>
-      ) : plants.isLoading ? (
-        <SkeletonPanel lines={4} title={false} />
-      ) : plants.isError ? (
-        <ErrorState error={plants.error} retry={() => void plants.refetch()} />
-      ) : (plants.data ?? []).length === 0 ? (
-        <p className="text-xs leading-relaxed text-ink-faint">
-          Nothing has arrived under this code in the last 7 days. That is what
-          ingest received, not what the broker holds — if ingest cannot reach the
-          broker, this stays empty whatever is being sent.
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {plants.data!.map((plant) => (
-            <div key={plant.plant_code} className="rounded border border-line">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
-                <span className="font-mono text-xs font-medium text-ink">
-                  {plant.plant_code}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  {plant.registered_plant_id ? (
-                    <Badge tone="ok">registered</Badge>
-                  ) : (
-                    <Badge tone="warn">not registered</Badge>
-                  )}
-                  <Badge tone="neutral">{plant.device_count} device(s)</Badge>
-                  {plant.unregistered_count > 0 ? (
-                    <Badge tone="warn">{plant.unregistered_count} unregistered</Badge>
-                  ) : null}
-                </span>
-              </div>
-              <ul className="divide-y divide-line">
-                {plant.devices.map((device) => (
-                  <li key={device.topic} className="px-3 py-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {device.collector_code ? (
-                        <span
-                          className="rounded border border-dashed border-line-strong px-1.5 py-0.5 text-[10px] text-ink-muted"
-                          title="The enclosure this Device publishes from — a box, never a Device."
-                        >
-                          {device.collector_code}
-                        </span>
-                      ) : (
-                        <span
-                          className="px-1.5 text-[10px] text-ink-faint"
-                          title="Five-segment topic: this Device sits in no enclosure. A real answer, not a gap."
-                        >
-                          no collector
-                        </span>
-                      )}
-                      <span className="truncate text-xs text-ink">{device.device_code}</span>
-                      {device.registered_device_id ? (
-                        <Badge tone="ok">registered</Badge>
-                      ) : (
-                        <Badge tone="warn">new</Badge>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setOpenTopic(openTopic === device.topic ? null : device.topic)
-                        }
-                        className="ml-auto text-[11px] text-accent hover:underline"
-                      >
-                        {openTopic === device.topic ? "hide payload" : "view payload"}
-                      </button>
-                    </div>
-                    {openTopic === device.topic ? (
-                      <div className="mt-2">
-                        {topic.isLoading ? (
-                          <SkeletonPanel lines={4} title={false} />
-                        ) : topic.isError ? (
-                          <ErrorState error={topic.error} retry={() => void topic.refetch()} />
-                        ) : topic.data ? (
-                          <>
-                            <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                              <Badge tone="neutral">{topic.data.messages} message(s)</Badge>
-                              {topic.data.interval_s ? (
-                                <Badge
-                                  tone="info"
-                                  title="Measured from the gaps between messages. This is what a Device's expected interval should be set to — health thresholds multiply it."
-                                >
-                                  every ~{topic.data.interval_s}s
-                                </Badge>
-                              ) : null}
-                              {topic.data.quarantined ? (
-                                <Badge tone="warn" title={topic.data.reason ?? undefined}>
-                                  quarantined — no Device registered
-                                </Badge>
-                              ) : null}
-                              {topic.data.last_seen ? (
-                                <span className="text-ink-faint">
-                                  last heard {AGE(topic.data.last_seen)}
-                                </span>
-                              ) : null}
-                            </div>
-                            <JsonTree
-                              value={topic.data.last_payload}
-                              empty="No payload recorded for this topic."
-                            />
-                          </>
-                        ) : null}
-                      </div>
+      ) : null}
+      <Reveal open={open}>
+        {plants.isLoading ? (
+          <SkeletonPanel lines={4} title={false} />
+        ) : plants.isError ? (
+          <ErrorState error={plants.error} retry={() => void plants.refetch()} />
+        ) : (plants.data ?? []).length === 0 ? (
+          <p className="text-xs leading-relaxed text-ink-faint">
+            Nothing has arrived under this code in the last 7 days. That is what
+            ingest received, not what the broker holds — if ingest cannot reach the
+            broker, this stays empty whatever is being sent.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {plants.data!.map((plant) => (
+              <div key={plant.plant_code} className="rounded border border-line">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
+                  <span className="font-mono text-xs font-medium text-ink">
+                    {plant.plant_code}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    {plant.registered_plant_id ? (
+                      <Badge tone="ok">registered</Badge>
+                    ) : (
+                      <Badge tone="warn">not registered</Badge>
+                    )}
+                    <Badge tone="neutral">{plant.device_count} device(s)</Badge>
+                    {plant.unregistered_count > 0 ? (
+                      <Badge tone="warn">{plant.unregistered_count} unregistered</Badge>
                     ) : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
+                  </span>
+                </div>
+                <ul className="divide-y divide-line">
+                  {plant.devices.map((device) => (
+                    <li key={device.topic} className="px-3 py-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {device.collector_code ? (
+                          <span
+                            className="rounded border border-dashed border-line-strong px-1.5 py-0.5 text-[10px] text-ink-muted"
+                            title="The enclosure this Device publishes from — a box, never a Device."
+                          >
+                            {device.collector_code}
+                          </span>
+                        ) : (
+                          <span
+                            className="px-1.5 text-[10px] text-ink-faint"
+                            title="Five-segment topic: this Device sits in no enclosure. A real answer, not a gap."
+                          >
+                            no collector
+                          </span>
+                        )}
+                        <span className="truncate text-xs text-ink">{device.device_code}</span>
+                        {device.registered_device_id ? (
+                          <Badge tone="ok">registered</Badge>
+                        ) : (
+                          <Badge tone="warn">new</Badge>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenTopic(openTopic === device.topic ? null : device.topic)
+                          }
+                          className="ml-auto text-[11px] text-accent hover:underline"
+                        >
+                          {openTopic === device.topic ? "hide payload" : "view payload"}
+                        </button>
+                      </div>
+                      {openTopic === device.topic ? (
+                        <div className="mt-2">
+                          {topic.isLoading ? (
+                            <SkeletonPanel lines={4} title={false} />
+                          ) : topic.isError ? (
+                            <ErrorState error={topic.error} retry={() => void topic.refetch()} />
+                          ) : topic.data ? (
+                            <>
+                              <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                                <Badge tone="neutral">{topic.data.messages} message(s)</Badge>
+                                {topic.data.interval_s ? (
+                                  <Badge
+                                    tone="info"
+                                    title="Measured from the gaps between messages. This is what a Device's expected interval should be set to — health thresholds multiply it."
+                                  >
+                                    every ~{topic.data.interval_s}s
+                                  </Badge>
+                                ) : null}
+                                {topic.data.quarantined ? (
+                                  <Badge tone="warn" title={topic.data.reason ?? undefined}>
+                                    quarantined — no Device registered
+                                  </Badge>
+                                ) : null}
+                                {topic.data.last_seen ? (
+                                  <span className="text-ink-faint">
+                                    last heard {AGE(topic.data.last_seen)}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <JsonTree
+                                value={topic.data.last_payload}
+                                empty="No payload recorded for this topic."
+                              />
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </Reveal>
     </Panel>
   );
 }

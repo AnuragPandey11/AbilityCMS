@@ -35,7 +35,7 @@ import * as clientsApi from "@/api/endpoints/clients";
 import type { AlarmRule } from "@/api/schemas";
 import { OPERATORS, operatorNeedsThreshold } from "@/api/schemas";
 import { isApiError } from "@/api/problem";
-import { Button, Field, Panel, Badge, inputClass } from "@/components/ui";
+import { Button, Field, Panel, Badge, Reveal, inputClass } from "@/components/ui";
 import { ErrorState, ForbiddenState, LoadingState } from "@/components/state";
 import { DataTable, type Column } from "@/components/tables/DataTable";
 import { SeverityBadge } from "@/components/domain";
@@ -368,7 +368,7 @@ export function AlarmRulesAdmin(): JSX.Element {
         </Button>
       </div>
 
-      {creating || editing ? (
+      <Reveal open={creating || editing !== null}>
         <Panel
           title={editing ? `Edit ${editing.code}` : "New rule"}
           subtitle={
@@ -656,7 +656,7 @@ export function AlarmRulesAdmin(): JSX.Element {
                 : "Create rule"}
           </Button>
         </Panel>
-      ) : null}
+      </Reveal>
 
       {saved ? (
         <p
@@ -680,6 +680,7 @@ export function AlarmRulesAdmin(): JSX.Element {
           rows={rules}
           columns={columns}
           rowKey={(rule) => rule.id}
+          animateArrivals
           filterPlaceholder="Filter rules…"
         />
       </Panel>

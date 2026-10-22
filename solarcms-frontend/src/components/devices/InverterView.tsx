@@ -832,6 +832,11 @@ export function InverterView({
                     // A peak means something for output; for a temperature or a
                     // power factor it is just the largest number.
                     markPeak={index === 0}
+                    // One crosshair across the six: 13:05 on power is 13:05 on
+                    // temperature. The newest reading pulses only while this
+                    // Inverter is reporting and the window runs to now.
+                    syncGroup={`device-${device.id}`}
+                    live={trendWindow === "today" && device.comm_status === "online"}
                   />
                 )}
               </section>

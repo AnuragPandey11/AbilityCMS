@@ -38,6 +38,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePlantDevices, usePlantSld } from "@/api/hooks";
 import * as devicesApi from "@/api/endpoints/devices";
@@ -614,13 +615,28 @@ export function PlantHierarchyEditor(): JSX.Element {
                     ⏚ Drop here to feed into nothing — the grid connection point
                   </div>
 
+                  {/* Rebuilt without motion for another Plant: a whole tree folding in says nothing. */}
+                  <AnimatePresence key={plantId ?? "none"} initial={false}>
                   {visibleRows.map(({ device, depth, childCount }) => {
                     const isForbidden = dragging !== null && forbidden.has(device.id);
                     const isHovered = hovered === device.id && !isForbidden;
                     const blocked = descendants.get(device.id) ?? new Set<number>();
                     return (
-                      <div
+                      <motion.div
                         key={device.id}
+                        // Collapsing a branch folds its rows away and opening it
+                        // unfolds them; a Device re-wired by a drop glides to its
+                        // new place in the tree.
+                        layout="position"
+                        initial={{ opacity: 0, height: 0, overflow: "hidden" }}
+                        animate={{
+                          opacity: 1,
+                          height: "auto",
+                          transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+                          transitionEnd: { overflow: "visible" },
+                        }}
+                        exit={{ opacity: 0, height: 0, overflow: "hidden", transition: { duration: 0.16 } }}
+                        transition={{ layout: { type: "spring", stiffness: 380, damping: 36 } }}
                         className="flex items-center"
                         style={{ paddingLeft: `${depth * 18}px` }}
                       >
@@ -797,9 +813,10 @@ export function PlantHierarchyEditor(): JSX.Element {
                               ))}
                           </select>
                         </div>
-                      </div>
+                      </motion.div>
                     );
                   })}
+                  </AnimatePresence>
                   </div>
 
                   {unreachable.length > 0 ? (

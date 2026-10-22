@@ -216,6 +216,7 @@ function MeterTrend({
   timezone,
   day,
   markPeak,
+  syncGroup,
 }: {
   series: Series;
   unit: string | null;
@@ -225,6 +226,8 @@ function MeterTrend({
   timezone: string | undefined;
   day: { start: number; end: number } | null;
   markPeak: boolean;
+  /** One meter's trends share a crosshair. */
+  syncGroup?: string;
 }): JSX.Element {
   if (reason) {
     return <p className="flex h-[260px] items-center justify-center px-6 text-center text-xs text-ink-faint">{reason}</p>;
@@ -249,6 +252,7 @@ function MeterTrend({
       height={260}
       day={day}
       markPeak={markPeak}
+      syncGroup={syncGroup}
     />
   );
 }
@@ -437,6 +441,7 @@ export function GridMonitoringDashboard(): JSX.Element {
             label="Active power"
             reason={catalogueReason("AC_ACTIVE_POWER", activeTag)}
             provenance={headline.code}
+            syncGroup={`device-${headline.id}`}
             timezone={timezone}
             day={day}
             markPeak
@@ -459,6 +464,7 @@ export function GridMonitoringDashboard(): JSX.Element {
             label="Frequency"
             reason={catalogueReason("FREQUENCY", frequencyTag)}
             provenance={headline.code}
+            syncGroup={`device-${headline.id}`}
             timezone={timezone}
             day={day}
             // The highest instant of grid frequency is not a fact anyone acts on.

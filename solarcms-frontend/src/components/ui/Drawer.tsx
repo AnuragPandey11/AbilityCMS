@@ -21,9 +21,20 @@
  * scroll while it is up. `role="dialog"` + `aria-modal` + a labelled heading,
  * so a screen reader announces it as a panel rather than reading it as more
  * page.
+ *
+ * ── It slides, and leaving takes a moment ───────────────────────────────────
+ * The panel slides in from the right and back out; the backdrop fades. A closed
+ * drawer therefore stays in the document while it leaves (AnimatePresence holds
+ * it), and everything that belongs to *being open* — the Escape listener, the
+ * scroll lock, giving focus back — is released when it **starts** to leave, not
+ * when it finally unmounts. In a handover the next drawer takes focus in the
+ * same commit; a release that waited for the slide to finish would take focus
+ * back from it a quarter of a second later. A leaving drawer is also inert to
+ * the pointer and hidden from assistive technology.
  */
 
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { AnimatePresence, motion, useIsPresent } from "framer-motion";
 import { IconClose } from "@/components/icons";
 
 /**
@@ -59,15 +70,11 @@ function lockPageScroll(): () => void {
   };
 }
 
-export function Drawer({
-  open,
-  onClose,
-  title,
-  subtitle,
-  children,
-  footer,
-  size = "narrow",
-}: {
+/** In: decelerating, so the panel arrives rather than stops. Out: quicker. */
+const PANEL_IN = { type: "tween", ease: [0.22, 1, 0.36, 1], duration: 0.26 } as const;
+const PANEL_OUT = { type: "tween", ease: [0.4, 0, 1, 1], duration: 0.18 } as const;
+
+interface DrawerProps {
   open: boolean;
   onClose: () => void;
   title: ReactNode;
@@ -82,7 +89,24 @@ export function Drawer({
    * because what sits in it is cards.
    */
   size?: "narrow" | "wide";
-}): JSX.Element | null {
+}
+
+export function Drawer(props: DrawerProps): JSX.Element {
+  return (
+    <AnimatePresence>{props.open ? <DrawerPanel key="drawer" {...props} /> : null}</AnimatePresence>
+  );
+}
+
+function DrawerPanel({
+  onClose,
+  title,
+  subtitle,
+  children,
+  footer,
+  size = "narrow",
+}: DrawerProps): JSX.Element {
+  // False from the moment the drawer starts to leave.
+  const isPresent = useIsPresent();
   const panelRef = useRef<HTMLDivElement>(null);
   // Labelled by its own heading, so a title made of markup — a code beside a
   // name — still names the dialog for a screen reader.
@@ -91,14 +115,18 @@ export function Drawer({
   // drawer that drops focus to <body> sends a keyboard user back to the top of
   // the document for every glance at a detail panel.
   const returnFocusTo = useRef<HTMLElement | null>(null);
+  // The latest handler, so a caller passing a fresh function each render does
+  // not re-run the effect — which would hand focus back and take it again.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
-    if (!open) return;
+    if (!isPresent) return;
     returnFocusTo.current = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
+    panelRef.current?.focus({ preventScroll: true });
 
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
 
@@ -111,24 +139,33 @@ export function Drawer({
       releaseScroll();
       returnFocusTo.current?.focus?.();
     };
-  }, [open, onClose]);
-
-  if (!open) return null;
+  }, [isPresent]);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <button
+    <div
+      className={`fixed inset-0 z-50 flex justify-end overflow-hidden ${
+        isPresent ? "" : "pointer-events-none"
+      }`}
+      aria-hidden={isPresent ? undefined : true}
+    >
+      <motion.button
         type="button"
         aria-label="Close the detail panel"
         onClick={onClose}
         className="absolute inset-0 bg-black/45 backdrop-blur-[1px]"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1, transition: { duration: 0.2 } }}
+        exit={{ opacity: 0, transition: PANEL_OUT }}
       />
-      <div
+      <motion.div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={headingId}
         tabIndex={-1}
+        initial={{ x: "100%" }}
+        animate={{ x: 0, transition: PANEL_IN }}
+        exit={{ x: "100%", transition: PANEL_OUT }}
         className={`relative flex h-full w-full ${
           size === "wide" ? "max-w-[min(78rem,100vw)]" : "max-w-[min(30rem,100vw)]"
         } flex-col border-l border-line bg-surface-raised shadow-card outline-none`}
@@ -167,7 +204,7 @@ export function Drawer({
         {footer ? (
           <footer className="shrink-0 border-t border-line px-4 py-2.5">{footer}</footer>
         ) : null}
-      </div>
+      </motion.div>
     </div>
   );
 }

@@ -32,6 +32,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as discoveryApi from "@/api/endpoints/discovery";
@@ -45,7 +46,7 @@ import * as clientsApi from "@/api/endpoints/clients";
 import { usePlantScope } from "@/state/usePlantScope";
 import { CommStatusBadge, PlantPicker } from "@/components/domain";
 import { RegionSelect } from "@/admin/RegionSelect";
-import { Badge, Button, Field, Panel, SegmentedControl, inputClass } from "@/components/ui";
+import { Badge, Button, Field, Panel, Reveal, SegmentedControl, inputClass } from "@/components/ui";
 import { EmptyState, ErrorState, ForbiddenState, SkeletonPanel } from "@/components/state";
 import { JsonTree } from "@/components/json/JsonTree";
 import { formatAge } from "@/format/datetime";
@@ -630,55 +631,57 @@ export function PlantEditor(): JSX.Element {
                     />
                   ) : (
                     <ul className="space-y-1">
-                      {rows.map((row) => (
-                        <DeviceRow
-                          key={row.key}
-                          row={row}
-                          open={expanded === row.key}
-                          onToggle={() =>
-                            setExpanded(expanded === row.key ? null : row.key)
-                          }
-                          observed={expanded === row.key ? observed : null}
-                          models={modelsQuery.data ?? []}
-                          modelId={modelFor[row.key] ?? null}
-                          onModel={(id) => setModelFor({ ...modelFor, [row.key]: id })}
-                          onRegister={() => register.mutate(row)}
-                          registering={register.isPending}
-                          onAttach={(ownerId, topic) => attach.mutate({ ownerId, topic })}
-                          attaching={attach.isPending}
-                          onDetach={(topic) => {
-                            if (!row.device) return;
-                            const ok = window.confirm(
-                              `Detach ${topic}?\n\nIts readings so far are kept. Its next ` +
-                                `messages are thrown away until it is attached again.`,
-                            );
-                            if (ok) detach.mutate({ deviceId: row.device.id, topic });
-                          }}
-                          onStatus={(status) =>
-                            row.device && changeStatus.mutate({ id: row.device.id, status })
-                          }
-                          canDiscover={canDiscover}
-                          ownerPending={ownerPendingFor(row)}
-                          misplaced={misplacedFor(row)}
-                          stranded={strandedFor(row)}
-                          onMove={(bindings) => {
-                            const device = misplacedFor(row);
-                            if (device && row.found) {
-                              move.mutate({ device, ownTopic: row.found.topic, bindings });
+                      <AnimatePresence initial={false}>
+                        {rows.map((row) => (
+                          <DeviceRow
+                            key={row.key}
+                            row={row}
+                            open={expanded === row.key}
+                            onToggle={() =>
+                              setExpanded(expanded === row.key ? null : row.key)
                             }
-                          }}
-                          moving={move.isPending}
-                          onRemove={() => {
-                            if (!row.device) return;
-                            const ok = window.confirm(
-                              `Remove ${row.device.code}?\n\nIf it has stored Readings you are ` +
-                                `asked again before they are deleted. To keep its history, ` +
-                                `decommission it instead.`,
-                            );
-                            if (ok) remove.mutate({ id: row.device.id, force: false });
-                          }}
-                        />
-                      ))}
+                            observed={expanded === row.key ? observed : null}
+                            models={modelsQuery.data ?? []}
+                            modelId={modelFor[row.key] ?? null}
+                            onModel={(id) => setModelFor({ ...modelFor, [row.key]: id })}
+                            onRegister={() => register.mutate(row)}
+                            registering={register.isPending}
+                            onAttach={(ownerId, topic) => attach.mutate({ ownerId, topic })}
+                            attaching={attach.isPending}
+                            onDetach={(topic) => {
+                              if (!row.device) return;
+                              const ok = window.confirm(
+                                `Detach ${topic}?\n\nIts readings so far are kept. Its next ` +
+                                  `messages are thrown away until it is attached again.`,
+                              );
+                              if (ok) detach.mutate({ deviceId: row.device.id, topic });
+                            }}
+                            onStatus={(status) =>
+                              row.device && changeStatus.mutate({ id: row.device.id, status })
+                            }
+                            canDiscover={canDiscover}
+                            ownerPending={ownerPendingFor(row)}
+                            misplaced={misplacedFor(row)}
+                            stranded={strandedFor(row)}
+                            onMove={(bindings) => {
+                              const device = misplacedFor(row);
+                              if (device && row.found) {
+                                move.mutate({ device, ownTopic: row.found.topic, bindings });
+                              }
+                            }}
+                            moving={move.isPending}
+                            onRemove={() => {
+                              if (!row.device) return;
+                              const ok = window.confirm(
+                                `Remove ${row.device.code}?\n\nIf it has stored Readings you are ` +
+                                  `asked again before they are deleted. To keep its history, ` +
+                                  `decommission it instead.`,
+                              );
+                              if (ok) remove.mutate({ id: row.device.id, force: false });
+                            }}
+                          />
+                        ))}
+                      </AnimatePresence>
                     </ul>
                   )}
                 </Panel>
@@ -1031,7 +1034,11 @@ function AddDeviceByTopic({
 
   const info = parsed.data;
   return (
-    <div className="rounded border border-accent/40 bg-accent/5 p-3">
+    <motion.div
+      className="rounded border border-accent/40 bg-accent/5 p-3"
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0, transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] } }}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-ink">Add a Device</h3>
         <button
@@ -1126,7 +1133,7 @@ function AddDeviceByTopic({
           </Button>
         </div>
       ) : null}
-    </div>
+    </motion.div>
   );
 }
 
@@ -1173,7 +1180,16 @@ function DeviceRow({
   );
 
   return (
-    <li className={`rounded border ${device ? "border-line" : "border-warn/40 bg-warn/5"}`}>
+    // A Device registered here eases in, and one removed slides out, so the
+    // action is seen to land; the rest close up behind it.
+    <motion.li
+      layout="position"
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0, x: 0, transition: { duration: 0.24, ease: [0.22, 1, 0.36, 1] } }}
+      exit={{ opacity: 0, x: 24, transition: { duration: 0.18, ease: [0.4, 0, 1, 1] } }}
+      transition={{ layout: { type: "spring", stiffness: 380, damping: 36 } }}
+      className={`rounded border ${device ? "border-line" : "border-warn/40 bg-warn/5"}`}
+    >
       <button
         type="button"
         onClick={onToggle}
@@ -1227,7 +1243,7 @@ function DeviceRow({
         </span>
       </button>
 
-      {open ? (
+      <Reveal open={open}>
         <div className="space-y-3 border-t border-line px-3 py-3">
           <dl className="grid gap-x-4 gap-y-1 text-[11px] sm:grid-cols-2">
             <Fact
@@ -1473,8 +1489,8 @@ function DeviceRow({
             </div>
           ) : null}
         </div>
-      ) : null}
-    </li>
+      </Reveal>
+    </motion.li>
   );
 }
 
