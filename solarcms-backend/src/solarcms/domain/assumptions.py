@@ -1131,6 +1131,10 @@ DEFAULT_GRID_EMISSION_FACTOR_KG_PER_KWH: Final = 0.82  # CEA all-India average, 
 # "poa_uncorrected" — plane-of-array — while the source was the horizontal
 # GHI_CUMULATIVE, and every screen printed "plane-of-array" beneath a figure
 # that was not (14 Oct 2026).
+# ── PR is never shown above this — the client's instruction (22 Oct 2026).
+# Applied where PR is worked out, so every screen, report and download agrees.
+PR_DISPLAY_CAP: Final = 1.0
+
 PR_VARIANT: Final = "ghi_uncorrected"  # not temperature-corrected
 CUF_VARIANT: Final = "ac_capacity_calendar_hours"  # no exclusions
 AVAILABILITY_VARIANT: Final = "time_based_excluding_comms"

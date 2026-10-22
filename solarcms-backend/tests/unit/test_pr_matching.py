@@ -132,9 +132,9 @@ class TestAnOrdinaryDay:
         assert result.result.value == pytest.approx(0.3, rel=1e-6)
 
     def test_a_flat_sensor_on_a_tilted_array_is_not_a_fault(self) -> None:
-        # KULAR_GREEN reads 100.5% for a day on its horizontal sensor.
+        # KULAR_GREEN reads 100.5% for a day on its horizontal sensor; shown as 100%.
         result = _pr([_meter(1.4, ALL_DAY)], live=[_live(ALL_DAY)])
-        assert result.result.value == pytest.approx(1.4, rel=1e-6)
+        assert result.result.value == pytest.approx(1.0)
         assert result.basis is not None and result.basis.stations_set_aside == ()
 
 

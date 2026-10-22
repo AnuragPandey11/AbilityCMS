@@ -254,7 +254,7 @@ class TestMonthlyPlant:
         assert [(row["month"], row["days"]) for row in table.rows] == [
             ("2026-08", 2), ("2026-09", 28)]
 
-    def test_pr_is_a_percentage_and_an_impossible_one_is_flagged_not_clamped(self) -> None:
+    def test_pr_is_a_percentage_and_never_above_100(self) -> None:
         window = report_window("custom", NOW, IST, date(2026, 9, 24), date(2026, 9, 24))
         station = _register("WMS", "GHI_CUMULATIVE",
                             [(_local(24, 6), 0.0), (_local(24, 18), 0.5)],
@@ -263,8 +263,8 @@ class TestMonthlyPlant:
         table = build_monthly_plant(PLANT, window, [_meter((24, 1_200.0)), station], {},
                                     **TIERS)
         row = table.rows[0]
-        assert row["performance_ratio"] == 200.0
-        assert (0, "performance_ratio") in [(i, k) for i, k, _ in table.flags]
+        assert row["performance_ratio"] == 100.0
+        assert (0, "performance_ratio") not in [(i, k) for i, k, _ in table.flags]
 
     def test_a_dead_station_does_not_halve_the_sun_and_double_the_pr(self) -> None:
         window = report_window("custom", NOW, IST, date(2026, 9, 24), date(2026, 9, 24))
