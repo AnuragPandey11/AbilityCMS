@@ -285,6 +285,21 @@ export function provenanceOf(slot: ResolvedSlot | undefined): string | null {
 }
 
 /**
+ * Why a slot's figure cannot be drawn as its register's curve, or null.
+ *
+ * A `counter_today` figure is a lifetime register less its midnight reading;
+ * the register's own series is a different claim, so no curve is drawn under
+ * it. Its hourly *steps* are the same claim, though — each hour's advance sums
+ * to the figure — which is why this lives with the curve hooks and not in
+ * `useSlotSource`: there it hid the Today's Energy sun clock too (22 Oct 2026).
+ */
+export function curveRefusal(source: ResolvedSlot["source"]): string | null {
+  return source?.kind === "counter_today"
+    ? "This figure is a register's advance since midnight, which no single series answers."
+    : null;
+}
+
+/**
  * What a slot resolved to on this Plant, and every Device and Tag that answers
  * it — the half of a trend that is not about time.
  *
@@ -356,11 +371,6 @@ export function useSlotSource(plantId: number | null, slotCode: string): SlotSou
         ? "No Device at this Plant can answer this figure."
         : "This slot declares no source.";
     }
-    if (source.kind === "counter_today") {
-      // The figure is a lifetime register less its midnight reading; the
-      // register's own series is a different claim, so none is drawn.
-      return "This figure is a register's advance since midnight, which no single series answers.";
-    }
     if (!tag && source.tag_code) return `Tag ${source.tag_code} is not in the catalogue.`;
     if (deviceIds.length === 0) {
       return `No ${source.device_type_code ?? "Device"} is registered at this Plant.`;
@@ -420,8 +430,12 @@ export function useSlotTrend(
   };
   // `today` waits for the Plant's zone rather than asking for a UTC day first
   // and then the right one — two requests, the first answering nothing asked.
+  const refusal = curveRefusal(source);
   const enabled =
-    deviceIds.length > 0 && tag !== undefined && (range !== "today" || timeZone !== undefined);
+    refusal === null &&
+    deviceIds.length > 0 &&
+    tag !== undefined &&
+    (range !== "today" || timeZone !== undefined);
 
   const readingsQuery = useQuery({
     queryKey: qk.readings(query),
@@ -455,7 +469,7 @@ export function useSlotTrend(
     label: slot?.label ?? slotCode,
     tier: readingsQuery.data?.tier ?? null,
     provenance: provenanceOf(slot),
-    unavailableReason,
+    unavailableReason: unavailableReason ?? refusal,
     day,
     isLoading: isLoading || (enabled && readingsQuery.isLoading),
     isError: readingsQuery.isError,
