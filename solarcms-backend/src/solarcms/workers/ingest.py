@@ -203,6 +203,10 @@ class IngestWorker:
         # Last-heard times not yet written: one pipeline per tick, not one SET
         # per message. The health sweep reads them once a minute.
         self._seen: dict[int, datetime] = {}
+        # When each topic's messages arrived, written with the same tick: how
+        # often a Device sends is measured from these, never from stored rows,
+        # which a throttle thins out (`keys.TOPIC_ARRIVALS`).
+        self._arrivals: dict[str, list[datetime]] = {}
         # What the System Health page reads: alive, flushing, and whether the
         # broker is connected and delivering. The broker is the one thing only
         # this process can see — a subscription that matches nothing looks, from
@@ -399,17 +403,27 @@ class IngestWorker:
                 if tag_id in by_id}
 
     async def _write_seen(self) -> None:
-        """Write the pending last-heard times. Kept for the next tick on failure."""
-        if not self._seen:
-            return
-        pending, self._seen = self._seen, {}
-        try:
-            await live.touch_devices_seen(pending)
-        except Exception as exc:
-            for device_id, at in pending.items():
-                if self._seen.get(device_id, at) <= at:
-                    self._seen[device_id] = at
-            log.warning("last-heard times not written; retrying next tick", error=str(exc))
+        """Write the pending last-heard and arrival times. Kept for the next tick on failure."""
+        if self._seen:
+            pending, self._seen = self._seen, {}
+            try:
+                await live.touch_devices_seen(pending)
+            except Exception as exc:
+                for device_id, at in pending.items():
+                    if self._seen.get(device_id, at) <= at:
+                        self._seen[device_id] = at
+                log.warning("last-heard times not written; retrying next tick", error=str(exc))
+        if self._arrivals:
+            arrivals, self._arrivals = self._arrivals, {}
+            try:
+                await live.record_topic_arrivals(arrivals)
+            except Exception as exc:
+                # In front of anything heard meanwhile, and no more than the
+                # list keeps, so an outage cannot grow this without bound.
+                for topic, times in arrivals.items():
+                    held = [*times, *self._arrivals.get(topic, [])]
+                    self._arrivals[topic] = held[-keys.TOPIC_ARRIVALS_KEPT:]
+                log.warning("arrival times not written; retrying next tick", error=str(exc))
 
     async def _accept(
         self, topic: str, payload: dict[str, Any], now: datetime,
@@ -423,6 +437,7 @@ class IngestWorker:
         # nothing to write, but the Device still spoke, and the health sweep's
         # only question is whether it did. Written with the next tick (§4.5).
         self._seen[device_id] = now
+        self._arrivals.setdefault(topic, []).append(now)
         if not readings:
             if unmapped:
                 await live.record_unmapped_keys(device_id, unmapped)

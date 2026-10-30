@@ -29,6 +29,18 @@ LIVE_REJECTED_FIELD_PREFIX: Final = "_rejected:"
 SEEN_DEVICE: Final = "seen:device:{device_id}"
 SEEN_DEVICE_TTL_S: Final = LIVE_DEVICE_TTL_S
 
+# When each of a topic's latest messages *arrived* (epoch seconds, newest
+# first) — what "how often does it send" is measured from. Written before
+# throttling, for the same reason as `seen:device`: the gaps between stored rows
+# measure the throttle, not the publisher. A meter sending every 30 s with every
+# Tag throttled to 60 s leaves an `mqtt_raw` row every third message, and Data
+# Issues told the client their meters sent every ~90 s (OASIS_2MW, 30 Oct 2026).
+# Per topic, never per Device: an Inverter's string topics arrive a second
+# after its own, and interleaved they read as a Device sending every second.
+TOPIC_ARRIVALS: Final = "arrivals:topic:{topic}"
+TOPIC_ARRIVALS_KEPT: Final = 21  # twenty gaps
+TOPIC_ARRIVALS_TTL_S: Final = 2 * 3600
+
 # The Plant KPI Device's figures for its day — start, stop, today's peak and its
 # time. Kept for the day, not for the live hash's 15 minutes: each is a comparison
 # against everything since the Plant's day began, and losing them to a quiet
@@ -107,6 +119,10 @@ def live_device(device_id: int) -> str:
 
 def seen_device(device_id: int) -> str:
     return SEEN_DEVICE.format(device_id=device_id)
+
+
+def topic_arrivals(topic: str) -> str:
+    return TOPIC_ARRIVALS.format(topic=topic)
 
 
 def plant_kpi_day(device_id: int) -> str:
