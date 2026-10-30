@@ -334,6 +334,38 @@ async def touch_devices_seen(seen: dict[int, datetime]) -> None:
         await pipe.execute()
 
 
+async def record_topic_arrivals(arrivals: Mapping[str, list[datetime]]) -> None:
+    """Add each topic's arrival times, keeping the newest `TOPIC_ARRIVALS_KEPT`.
+
+    Every topic heard since the last tick in one pipeline. Oldest pushed first,
+    so the list reads newest first.
+    """
+    if not arrivals:
+        return
+    async with get_redis().pipeline(transaction=False) as pipe:
+        for topic, times in arrivals.items():
+            key = keys.topic_arrivals(topic)
+            pipe.lpush(key, *(f"{at.timestamp():.3f}" for at in times))
+            pipe.ltrim(key, 0, keys.TOPIC_ARRIVALS_KEPT - 1)
+            pipe.expire(key, keys.TOPIC_ARRIVALS_TTL_S)
+        await pipe.execute()
+
+
+async def read_topic_arrivals(topics: Collection[str]) -> dict[str, list[datetime]]:
+    """Each topic's recent arrival times, oldest first; absent where none are kept."""
+    if not topics:
+        return {}
+    ordered = list(topics)
+    async with get_redis().pipeline(transaction=False) as pipe:
+        for topic in ordered:
+            pipe.lrange(keys.topic_arrivals(topic), 0, -1)
+        raw: list[list[str]] = await pipe.execute()
+    return {
+        topic: sorted(datetime.fromtimestamp(float(value), UTC) for value in values)
+        for topic, values in zip(ordered, raw, strict=True) if values
+    }
+
+
 async def publish_to_alarm_stream(entries: list[dict[str, Any]]) -> None:
     """Hand decoded Readings to the alarm worker.
 

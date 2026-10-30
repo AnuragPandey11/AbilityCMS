@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solarcms.cache import live
 from solarcms.domain.absence import classify_topic_liveness
 from solarcms.domain.assumptions import (
     DATA_ISSUE_FLAGGED_WINDOW_S,
@@ -58,8 +59,11 @@ from solarcms.domain.data_issues import (
     UnregisteredTopic,
 )
 from solarcms.domain.decoding import TopicPattern, normalise_payload, parse_topic
+from solarcms.logging import get_logger
 from solarcms.services import scope, snapshots
 from solarcms.services.kpis import plant_pr_today
+
+log = get_logger("data_issues")
 
 # The same look-back discovery uses, so a topic offered there is offered here.
 UNREGISTERED_WINDOW = "interval '7 days'"
@@ -106,7 +110,7 @@ async def gather(
     keys: dict[int, dict[str, Any]] = defaultdict(dict)
     messages: dict[int, int] = defaultdict(int)
     heard: dict[int, datetime] = {}
-    primary_times: dict[int, list[datetime]] = defaultdict(list)
+    arrivals: dict[str, list[datetime]] = {}
     health: dict[int, list[TagHealth]] = defaultdict(list)
     string_max: dict[int, dict[int, float]] = defaultdict(dict)
     peak_power: dict[int, float] = {}
@@ -135,7 +139,19 @@ async def gather(
                 SELECT topic, device_id FROM registered_topics WHERE device_id = ANY(:ids)
             """), {"ids": device_ids})).all()
         }
-        primary = {row.source_address: row.id for row in device_rows if row.source_address}
+        # How often each Device sends, from when its primary topic's messages
+        # *arrived* — never from the gaps between stored rows, which measure
+        # the throttle: a meter sending every 30 s with every Tag throttled to
+        # 60 s leaves a raw row every 90 s, and this screen told the client so
+        # (OASIS_2MW, 30 Oct 2026). Primary only, since string topics arrive a
+        # second after it. Where ingest has kept none, nothing is measured —
+        # and an unreachable Redis is the same, never a failed page.
+        try:
+            arrivals = await live.read_topic_arrivals(
+                [row.source_address for row in device_rows if row.source_address])
+        except Exception as exc:
+            log.warning("arrival times unreadable; intervals not judged",
+                        plant_id=plant_id, error=str(exc))
 
         # The newest messages on every registered topic, newest first. A lateral
         # LIMIT walks `ix_mqtt_raw_topic_time` once per topic rather than
@@ -158,8 +174,6 @@ async def gather(
                 device_id = topics[row.topic]
                 messages[device_id] += 1
                 heard[device_id] = max(heard.get(device_id, row.time), row.time)
-                if primary.get(row.topic) == device_id:
-                    primary_times[device_id].append(row.time)
                 payload = row.payload if isinstance(row.payload, dict) else {}
                 flat, _ = normalise_payload(payload)
                 for key, value in flat.items():
@@ -273,7 +287,7 @@ async def gather(
     own_by_device = {device_id: own for own, device_id in own_of.items()}
     devices = []
     for row in device_rows:
-        times = sorted(primary_times.get(row.id, []))
+        times = arrivals.get(row.source_address, []) if row.source_address else []
         gaps = [(b - a).total_seconds() for a, b in pairwise(times)]
         own = own_by_device.get(row.id)
         seen = own_seen.get(own, _OwnSeen()) if own else _OwnSeen()

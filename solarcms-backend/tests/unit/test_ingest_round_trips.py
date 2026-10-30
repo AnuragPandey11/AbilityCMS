@@ -41,6 +41,8 @@ class Calls:
         self.redis_reads = 0
         self.pipelines: list[dict[str, Any]] = []
         self.fail_next_write = False
+        self.arrivals: list[dict[str, list[datetime]]] = []
+        self.fail_arrivals = False
 
 
 @pytest.fixture
@@ -66,7 +68,13 @@ def worker(monkeypatch: pytest.MonkeyPatch) -> tuple[IngestWorker, Calls]:
             raise ConnectionError("redis went away")
         calls.pipelines.append(kwargs)
 
+    async def record_arrivals(arrivals: dict[str, list[datetime]]) -> None:
+        if calls.fail_arrivals:
+            raise ConnectionError("redis went away")
+        calls.arrivals.append({topic: list(times) for topic, times in arrivals.items()})
+
     monkeypatch.setattr(ingest_module, "resolve_cached", cached)
+    monkeypatch.setattr(ingest_module.live, "record_topic_arrivals", record_arrivals)
     monkeypatch.setattr(ingest_module, "scoped_session", session)
     monkeypatch.setattr(ingest_module.live, "read_current_values", read_state)
     monkeypatch.setattr(ingest_module.live, "read_throttle_state", read_state)
@@ -92,6 +100,7 @@ def worker(monkeypatch: pytest.MonkeyPatch) -> tuple[IngestWorker, Calls]:
     w._topics = {}
     w._devices = {}
     w._seen = {}
+    w._arrivals = {}
     return w, calls
 
 
@@ -150,6 +159,49 @@ async def test_last_heard_is_written_with_the_next_tick(
     assert list(touched[0]) == [7]
     await w._write_seen()
     assert len(touched) == 1, "nothing new was heard, so nothing is written"
+
+
+async def test_a_message_the_throttle_stores_nothing_from_still_counts_as_an_arrival(
+        worker: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # OASIS_2MW's meters, 30 Oct 2026: sent every 30 s, every Tag throttled to
+    # 60 s, so only every third message left a raw row — and the gaps between
+    # raw rows were reported as the meter sending every ~90 s.
+    w, calls = worker
+    throttled = DeviceResolution(
+        device_id=7, client_id=1, plant_id=2, expected_interval_s=30,
+        bindings={"P": TagBinding(source_key="P", tag_id=10, tag_code="AC_ACTIVE_POWER",
+                                  min_interval_s=60)},
+    )
+
+    async def cached(_topic: str) -> DeviceResolution:
+        return throttled
+
+    monkeypatch.setattr(ingest_module, "resolve_cached", cached)
+    topic = "scms/v1/C/P/M/MFM"
+    await w.handle(topic, json.dumps({"P": 1.0}).encode())
+    await w.handle(topic, json.dumps({"P": 2.0}).encode())
+    assert len(w.batch.raw) == 1, "the second message is inside the throttle"
+    await w._write_seen()
+    [written] = calls.arrivals
+    assert len(written[topic]) == 2, "both messages arrived"
+    await w._write_seen()
+    assert len(calls.arrivals) == 1, "nothing new arrived, so nothing is written"
+
+
+async def test_arrivals_not_written_are_kept_for_the_next_tick_and_bounded(
+        worker: Any) -> None:
+    w, calls = worker
+    topic = "scms/v1/C/P/M/INV1"
+    base = datetime(2026, 10, 30, 12, tzinfo=UTC)
+    sent = [base.replace(second=s) for s in range(keys.TOPIC_ARRIVALS_KEPT + 5)]
+    w._arrivals = {topic: list(sent)}
+    calls.fail_arrivals = True
+    await w._write_seen()
+    assert w._arrivals[topic] == sent[-keys.TOPIC_ARRIVALS_KEPT:], "the newest are kept"
+    calls.fail_arrivals = False
+    await w._write_seen()
+    assert calls.arrivals == [{topic: sent[-keys.TOPIC_ARRIVALS_KEPT:]}]
+    assert w._arrivals == {}
 
 
 async def test_an_announced_change_drops_the_remembered_resolution(worker: Any) -> None:

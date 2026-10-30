@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import statistics
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -49,12 +50,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.cache import live
 from solarcms.domain.absence import classify_topic_liveness
 from solarcms.domain.assumptions import TAG_SPECS, alias_for
 from solarcms.domain.commissioning import string_topic_owner
 from solarcms.domain.decoding import TopicPattern, normalise_payload, parse_topic
+from solarcms.logging import get_logger
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
+log = get_logger("discovery")
 
 # How far back a topic still counts as "being published". Generous on purpose:
 # a Plant commissioned on Friday should still be discoverable on Monday, and the
@@ -343,10 +347,27 @@ async def discover_topic(
 
     # Median, not mean: one outage between two messages would otherwise make a
     # Device publishing every three seconds look like it publishes hourly.
-    gaps = [
-        (rows[i].time - rows[i + 1].time).total_seconds()
-        for i in range(len(rows) - 1)
-    ]
+    #
+    # ⚠ From when messages *arrived*, which ingest keeps per topic. Stored rows
+    # measure it only while nothing is registered (every quarantined message
+    # is stored): once a Device is, a message whose Tags are all inside their
+    # throttle stores nothing, and a meter sending every 30 s read "~90s"
+    # (OASIS_2MW, 30 Oct 2026). A registered topic with no arrivals kept is
+    # not measured, and the screen shows the recorded interval instead.
+    try:
+        arrivals = (await live.read_topic_arrivals([topic])).get(topic, [])
+    except Exception as exc:
+        log.warning("arrival times unreadable; interval not measured",
+                    topic=topic, error=str(exc))
+        arrivals = []
+    times: list[datetime]
+    if arrivals:
+        times = arrivals
+    elif registered_device_id is None:
+        times = [row.time for row in reversed(rows)]
+    else:
+        times = []
+    gaps = [(b - a).total_seconds() for a, b in pairwise(times)]
     interval = round(statistics.median(gaps)) if gaps else None
 
     return {
