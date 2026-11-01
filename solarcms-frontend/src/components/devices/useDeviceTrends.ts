@@ -34,6 +34,7 @@ export interface TrendSeries {
 }
 
 const NO_SERIES: TrendSeries = { points: [], flaggedCount: 0 };
+const NO_ITEMS: ReadingPoint[] = [];
 
 export interface DeviceTrends {
   /** Null until the Plant's zone is known. */
@@ -45,6 +46,8 @@ export interface DeviceTrends {
   error: unknown;
   refetch: () => void;
   seriesOf: (tag: Tag | undefined) => TrendSeries;
+  /** The buckets as the server sent them — min, max and last too — for a contact's steps. */
+  itemsOf: (tag: Tag | undefined) => ReadingPoint[];
 }
 
 export function useDeviceTrends(
@@ -81,13 +84,18 @@ export function useDeviceTrends(
     placeholderData: (previous) => previous,
   });
 
-  const seriesByTag = useMemo(() => {
+  const itemsByTag = useMemo(() => {
     const byTag = new Map<number, ReadingPoint[]>();
     for (const point of (query.data?.items ?? []) as ReadingPoint[]) {
       const list = byTag.get(point.tag_id);
       if (list) list.push(point);
       else byTag.set(point.tag_id, [point]);
     }
+    return byTag;
+  }, [query.data]);
+
+  const seriesByTag = useMemo(() => {
+    const byTag = itemsByTag;
     const out = new Map<number, TrendSeries>();
     const servedTier = query.data?.tier ?? null;
     for (const [tagId, items] of byTag) {
@@ -98,7 +106,7 @@ export function useDeviceTrends(
       out.set(tagId, seriesFromReadings(items, "first", servedTier, (Math.max(throttle, cycle) + cycle) * 1000));
     }
     return out;
-  }, [query.data, tagsById, device?.expected_interval_s]);
+  }, [itemsByTag, query.data?.tier, tagsById, device?.expected_interval_s]);
 
   return {
     range,
@@ -108,5 +116,6 @@ export function useDeviceTrends(
     error: query.error,
     refetch: () => void query.refetch(),
     seriesOf: (tag) => (tag ? seriesByTag.get(tag.id) : undefined) ?? NO_SERIES,
+    itemsOf: (tag) => (tag ? itemsByTag.get(tag.id) : undefined) ?? NO_ITEMS,
   };
 }

@@ -147,7 +147,7 @@ export interface SlotTrend {
 }
 
 /** Bucket width per aggregate tier. The raw tier is irregular and has none. */
-const BUCKET_MS: Partial<Record<Tier, number>> = {
+export const BUCKET_MS: Partial<Record<Tier, number>> = {
   agg_1m: 60_000,
   agg_15m: 15 * 60_000,
   agg_1h: 3_600_000,
