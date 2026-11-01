@@ -15,7 +15,13 @@
 
 import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { PlantKpisSchema, type KpiComparison, type KpiFigure, type PlantKpis } from "@/api/schemas";
+import {
+  PlantKpisSchema,
+  type AvailabilityLevels,
+  type KpiComparison,
+  type KpiFigure,
+  type PlantKpis,
+} from "@/api/schemas";
 import { partialCoverage, pointsChange, ratioTone } from "@/components/charts/RatioDial";
 import {
   PerformanceDetailsButton,
@@ -83,10 +89,11 @@ describe("Performance tiles", () => {
     band();
     expect(screen.getByText("Performance Ratio")).toBeInTheDocument();
     expect(screen.getByText("CUF")).toBeInTheDocument();
-    expect(screen.getByText("Availability")).toBeInTheDocument();
+    // A stored copy without the three levels: the one figure it has, by its name.
+    expect(screen.getByText("Data availability")).toBeInTheDocument();
     expect(drawing("Performance Ratio")).toBeInTheDocument();
     expect(drawing("CUF")).toBeInTheDocument();
-    expect(drawing("Availability")).toBeInTheDocument();
+    expect(drawing("Data availability")).toBeInTheDocument();
   });
 
   it("says in words what each figure is measured against", () => {
@@ -228,9 +235,111 @@ describe("Figures a dial must not draw as an arc", () => {
 
   it("gives Availability a figure over a meter, flagged the same way", () => {
     band({ kpis: { ...kpis, availability: figure(0.574, "time_based_excluding_comms") } });
-    const meter = drawing("Availability");
+    const meter = drawing("Data availability");
     expect(meter.querySelector("rect.fill-bad:not([fill-opacity])")).not.toBeNull();
     expect(screen.getByText("Below 60%")).toBeInTheDocument();
+  });
+});
+
+const level = (value: number | null, reason: string | null = null) => ({
+  value,
+  variant: "grid_plant_inverter_proposed",
+  undefined_reason: reason,
+  judged_minutes: 600,
+  down_minutes: 0,
+  no_data_minutes: 0,
+});
+
+/** The worked example from the mockup the user chose (option B, 1 Nov 2026). */
+const levels: AvailabilityLevels = {
+  variant: "grid_plant_inverter_proposed",
+  grid: { ...level(0.9), down_minutes: 60, source: { device_type_code: "ABT_METER", device_count: 1 } },
+  plant: { ...level(0.944), judged_minutes: 540, down_minutes: 30, without_grid_minutes: 0 },
+  inverter: {
+    ...level(0.979),
+    weighted_by: "capacity",
+    inverter_count: 17,
+    worst: { device_id: 7, device_code: "INVERTER_7", down_minutes: 180 },
+  },
+  daylight_minutes: 600,
+  no_sun_minutes: 0,
+  unattributed_minutes: 0,
+  curtailed_minutes: 0,
+  planned_minutes: 0,
+  days_counted: 0,
+  days_pending: 0,
+  days_beyond_retention: 0,
+};
+
+describe("The Availability tile", () => {
+  it("leads with the Plant, then Grid and Inverter, with Data availability at the foot", () => {
+    band({ kpis: { ...kpis, availability: figure(0.989), availability_levels: levels } });
+    expect(screen.getByText("Availability")).toBeInTheDocument();
+    expect(drawing("Plant availability")).toHaveAccessibleName(/94\.4%/);
+    expect(screen.getByText("Stopped 30 min")).toBeInTheDocument();
+    expect(screen.getByText("Grid")).toBeInTheDocument();
+    expect(screen.getByText("Down 1 h")).toBeInTheDocument();
+    expect(screen.getByText("INVERTER_7 down 3 h")).toBeInTheDocument();
+    expect(screen.getByText(/Data availability 98\.9%/)).toBeInTheDocument();
+    expect(screen.getByText(/10 h of daylight/)).toBeInTheDocument();
+  });
+
+  it("says Not Available for a Plant with no grid meter, and what that leaves out", () => {
+    band({
+      kpis: {
+        ...kpis,
+        availability_levels: {
+          ...levels,
+          grid: { ...levels.grid, value: null, undefined_reason: "no grid meter measuring HV voltage or frequency is registered", source: null },
+          plant: { ...levels.plant, without_grid_minutes: 540 },
+        },
+      },
+    });
+    expect(screen.getByText("Not Available")).toBeInTheDocument();
+    expect(screen.getByText(/No grid meter measuring HV voltage/)).toBeInTheDocument();
+    expect(screen.getByText(/grid outages not set aside/)).toBeInTheDocument();
+  });
+
+  it("never says Not Available before dawn, when nothing has been judged yet", () => {
+    band({
+      kpis: {
+        ...kpis,
+        availability_levels: {
+          ...levels,
+          daylight_minutes: 0,
+          grid: { ...levels.grid, value: null, undefined_reason: "no daylight in this period yet" },
+          plant: { ...levels.plant, value: null, undefined_reason: "no daylight in this period yet" },
+          inverter: { ...levels.inverter, value: null, worst: null, undefined_reason: "no minute yet in which the Plant was generating" },
+        },
+      },
+    });
+    expect(screen.queryByText("Not Available")).toBeNull();
+    expect(screen.getAllByText(/No daylight in this period yet/).length).toBeGreaterThan(0);
+  });
+
+  it("never says Not Available when the figures could not be worked out", () => {
+    const reason = "could not be worked out — the error is in the API log";
+    band({
+      kpis: {
+        ...kpis,
+        availability_levels: {
+          ...levels,
+          failed: true,
+          grid: { ...levels.grid, value: null, undefined_reason: reason, source: null },
+          plant: { ...levels.plant, value: null, undefined_reason: reason },
+          inverter: { ...levels.inverter, value: null, worst: null, inverter_count: 0, undefined_reason: reason },
+        },
+      },
+    });
+    expect(screen.queryByText("Not Available")).toBeNull();
+  });
+
+  it("says how many earlier days are still to be worked out", () => {
+    band({
+      kpis: { ...kpis, period: "month", availability_levels: { ...levels, days_counted: 12, days_pending: 19 } },
+      period: "month",
+    });
+    expect(screen.getByText(/12 of 31 earlier days worked out so far/)).toBeInTheDocument();
   });
 });
 

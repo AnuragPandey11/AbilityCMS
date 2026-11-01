@@ -43,6 +43,7 @@ import {
 } from "@/dashboards/reports/format";
 import {
   MEASURES,
+  atLeast,
   MEASURE_ORDER,
   defaultMeasure,
   rankWithinVariants,
@@ -111,7 +112,7 @@ export function InverterRankingPanel({
   const tariff = data?.tariff_inr_per_kwh ?? null;
   const zone = data?.timezone ?? timezone;
 
-  const missingSetup = sums.unsized > 0 || tariff === null;
+  const missingSetup = sums.unsized > 0 || sums.unrated > 0 || tariff === null;
 
   return (
     <>
@@ -194,12 +195,18 @@ export function InverterRankingPanel({
             />
             <Stat
               label="Energy lost"
-              value={formatEnergy(sums.lostKwh.value)}
-              foot={partial(sums.lostKwh.missing, "not worked out") ?? "During downtime only"}
+              value={atLeast(sums.lostKwh, formatEnergy) ?? UNDEFINED_DISPLAY}
+              foot={
+                sums.unrated > 0
+                  ? `${sums.unrated} Inverter${sums.unrated === 1 ? "" : "s"} down with no AC rating recorded`
+                  : partial(sums.lostKwh.missing, "not worked out") ?? "AC rating × hours down"
+              }
             />
             <Stat
               label="Loss"
-              value={tariff === null ? UNDEFINED_DISPLAY : formatRupees(sums.lossInr.value)}
+              value={
+                tariff === null ? UNDEFINED_DISPLAY : (atLeast(sums.lossInr, formatRupees) ?? UNDEFINED_DISPLAY)
+              }
               foot={
                 tariff === null
                   ? "No tariff recorded"
@@ -212,6 +219,7 @@ export function InverterRankingPanel({
           {missingSetup ? (
             <SetupCallout
               unsized={sums.unsized}
+              unrated={sums.unrated}
               total={rows.length}
               tariffMissing={tariff === null}
               canManage={canManage}
@@ -315,18 +323,23 @@ function Stat({
 
 function SetupCallout({
   unsized,
+  unrated,
   total,
   tariffMissing,
   canManage,
   onSetup,
 }: {
   unsized: number;
+  unrated: number;
   total: number;
   tariffMissing: boolean;
   canManage: boolean;
   onSetup: () => void;
 }): JSX.Element {
   const needs: string[] = [];
+  if (unrated > 0) {
+    needs.push(`the AC rating of ${unrated} Inverter${unrated === 1 ? "" : "s"} that went down`);
+  }
   if (unsized > 0) {
     needs.push(
       unsized === total
@@ -338,7 +351,7 @@ function SetupCallout({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-line bg-surface-sunken/70 px-4 py-3">
       <p className="min-w-0 text-sm text-ink-muted">
-        <span className="font-medium text-ink">PR and loss need {needs.join(" and ")}.</span>{" "}
+        <span className="font-medium text-ink">Loss and PR need {needs.join(" and ")}.</span>{" "}
         They are never estimated, so until then those cells read "—".
         {canManage ? "" : " An administrator records them under Tag Mapping and the Plant's settings."}
       </p>
@@ -549,7 +562,7 @@ function GroupTable({
             text={tariffKnown && inr !== null ? formatRupees(inr) : formatEnergy(kwh)}
             sub={tariffKnown && inr !== null ? formatEnergy(kwh) : "no tariff recorded"}
             tone={kwh > 0 ? "warn" : undefined}
-            title="Energy lost while it stood still: in each down minute, what the typical generating neighbour made per kWp, times this Inverter's DC size — priced at the Plant's tariff."
+            title="Estimated energy lost while it stood still: its AC rating times the hours it was down — priced at the Plant's tariff. A ceiling: it assumes full rated output for every down minute."
             bar={barFor("loss", row)}
           />
         );
@@ -699,9 +712,9 @@ function Method({
           were not downtime. Planned maintenance is set aside.
         </li>
         <li>
-          <span className="text-ink">Energy lost</span>: during downtime only, the typical generating
-          neighbour&apos;s output per kWp times this Inverter&apos;s DC size. <span className="text-ink">Loss</span>{" "}
-          prices it at the Plant&apos;s tariff.
+          <span className="text-ink">Energy lost</span>: an estimate — each Inverter&apos;s AC rating times the
+          hours it was down. It assumes full rated output for every down minute, so it is a ceiling.{" "}
+          <span className="text-ink">Loss</span> prices it at the Plant&apos;s tariff.
         </li>
         <li>
           <span className="text-ink">Generation</span> and <span className="text-ink">PR</span>: each

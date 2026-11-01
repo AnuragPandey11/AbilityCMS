@@ -11,6 +11,7 @@ import { InverterRankingSchema, type InverterRanking } from "@/api/schemas";
 import {
   defaultMeasure,
   rankWithinVariants,
+  atLeast,
   totals,
 } from "@/dashboards/inverters/ranking";
 
@@ -111,8 +112,8 @@ function body(over: Record<string, unknown> = {}, rows?: Record<string, unknown>
             ongoing: false,
           },
         ],
-        lost_kwh: explained(null, "no DC size is recorded for this Inverter"),
-        loss_inr: explained(null, "no DC size is recorded for this Inverter"),
+        lost_kwh: explained(null, "no rated capacity is recorded for this Inverter"),
+        loss_inr: explained(null, "no rated capacity is recorded for this Inverter"),
       }),
       inverter({ device_id: 10, code: "INVERTER_10", generation_kwh: 1150 }),
     ],
@@ -189,7 +190,17 @@ describe("ranking within variants", () => {
     expect(sums.generationKwh).toEqual({ value: 3250, missing: 0 });
     expect(sums.lostKwh).toEqual({ value: 0, missing: 1 });
     expect(sums.unsized).toBe(3);
+    expect(sums.unrated).toBe(1);
     expect(sums.stops).toBe(1);
+  });
+
+  it("a total with an Inverter left out is a floor, never the total", () => {
+    const fmt = (value: number) => `${value} kWh`;
+    expect(atLeast({ value: 120, missing: 0 }, fmt)).toBe("120 kWh");
+    expect(atLeast({ value: 120, missing: 1 }, fmt)).toBe("≥ 120 kWh");
+    // The 0.0 kWh beside 6.9 h of downtime: only the Inverters that never stopped were summed.
+    expect(atLeast({ value: 0, missing: 1 }, fmt)).toBeNull();
+    expect(atLeast({ value: null, missing: 3 }, fmt)).toBeNull();
   });
 });
 
@@ -222,12 +233,18 @@ describe("the panel", () => {
     expect(within(row).getByText("75.0%")).toBeTruthy();
     expect(within(row).getByText("2.0 h")).toBeTruthy();
     expect(within(row).getByText("1 stop")).toBeTruthy();
-    expect(screen.getByText(/PR and loss need each Inverter's DC size \(none is recorded\) and this Plant's tariff/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Loss and PR need the AC rating of 1 Inverter that went down and each Inverter's DC size \(none is recorded\) and this Plant's tariff/,
+      ),
+    ).toBeTruthy();
+    // Energy lost is not 0.0 when the Inverter that went down could not be counted.
+    expect(screen.getByText("1 Inverter down with no AC rating recorded")).toBeTruthy();
     // A stop it cannot size is "—", with the reason on hover — never ₹0.
     const cells = row.querySelectorAll("td");
     const loss = cells[cells.length - 1] as HTMLElement;
     expect(within(loss).getByText("—")).toBeTruthy();
-    expect(within(loss).getByTitle(/Not worked out: no DC size is recorded/)).toBeTruthy();
+    expect(within(loss).getByTitle(/Not worked out: no rated capacity is recorded/)).toBeTruthy();
   });
 
   it("ranks by availability while no sizes are recorded, and orders INVERTER_2 last", () => {
@@ -250,7 +267,8 @@ describe("the panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sizes & tariff" }));
     fireEvent.change(screen.getByPlaceholderText("e.g. 3.45"), { target: { value: "3.5" } });
     fireEvent.change(screen.getByLabelText("Same size for all"), { target: { value: "1200" } });
-    fireEvent.click(screen.getByRole("button", { name: "Fill all" }));
+    // The second "Fill all" is the DC sizes'; the first fills the AC ratings.
+    fireEvent.click(screen.getAllByRole("button", { name: "Fill all" })[1]);
     expect(screen.getByText(/Sizes add up to 3,600 kWp/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(devices.updateDevice).toHaveBeenCalledTimes(3));

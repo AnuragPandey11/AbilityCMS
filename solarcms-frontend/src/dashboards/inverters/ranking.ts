@@ -161,7 +161,12 @@ export function rankWithinVariants(
   return out.sort((a, b) => order(a.variant) - order(b.variant) || a.variant.localeCompare(b.variant));
 }
 
-/** A column total, and how many Inverters it had to leave out. */
+/**
+ * A column total, and how many Inverters it had to leave out. ⚠ A total with
+ * any left out is a floor, never the total: shown as "≥", or "—" when nothing
+ * was counted (`atLeast`). 0.0 kWh lost beside 6.9 h of downtime was a sum of
+ * the Inverters that never stopped (1 Nov 2026).
+ */
 export interface Total {
   value: number | null;
   missing: number;
@@ -185,8 +190,10 @@ export interface RankingTotals {
   stops: number;
   lostKwh: Total;
   lossInr: Total;
-  /** Inverters whose PR and loss wait on a DC size. */
+  /** Inverters whose PR waits on a DC size. */
   unsized: number;
+  /** Inverters that went down with no AC rating recorded: their loss is unknown. */
+  unrated: number;
 }
 
 export function totals(rows: RankedInverterRow[]): RankingTotals {
@@ -197,5 +204,15 @@ export function totals(rows: RankedInverterRow[]): RankingTotals {
     lostKwh: total(rows, (row) => row.lost_kwh.value),
     lossInr: total(rows, (row) => row.loss_inr.value),
     unsized: rows.filter((row) => row.dc_capacity_kwp === null).length,
+    unrated: rows.filter(
+      (row) => row.rated_capacity_kw === null && (row.downtime_hours ?? 0) > 0,
+    ).length,
   };
+}
+
+/** A total as a sentence-ready figure: whole, a floor ("≥ …"), or nothing known. */
+export function atLeast(total: Total, format: (value: number) => string): string | null {
+  if (total.value === null) return null;
+  if (total.missing === 0) return format(total.value);
+  return total.value > 0 ? `≥ ${format(total.value)}` : null;
 }

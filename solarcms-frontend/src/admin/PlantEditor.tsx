@@ -32,7 +32,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { PageLink } from "@/components/layout/PageLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as discoveryApi from "@/api/endpoints/discovery";
 import * as devicesApi from "@/api/endpoints/devices";
@@ -567,20 +567,22 @@ export function PlantEditor(): JSX.Element {
                     ) : null}
                   </button>
                 ))}
-                <Link
+                <PageLink
+                  page="admin_data_issues"
                   to="/admin/data-issues"
                   className="ml-auto rounded-control border border-line bg-surface-raised px-3 py-1.5 text-xs text-ink-muted hover:text-ink"
                   title="Everything this Plant's equipment sends that is not being kept or not trusted."
                 >
                   Data Issues →
-                </Link>
-                <Link
+                </PageLink>
+                <PageLink
+                  page="admin_hierarchy"
                   to="/admin/hierarchy"
                   className="rounded-control border border-line bg-surface-raised px-3 py-1.5 text-xs text-ink-muted hover:text-ink"
                   title="Say what each Device feeds into, beside the diagram it produces."
                 >
                   Wiring &amp; Diagram →
-                </Link>
+                </PageLink>
               </div>
 
               {tab === "details" ? (
@@ -1394,13 +1396,14 @@ function DeviceRow({
                   </span>
                 ) : null}
                 {device ? (
-                  <Link
+                  <PageLink
+                    page="admin_bindings"
                     to="/admin/bindings"
                     className="ml-auto normal-case text-accent hover:underline"
                     title="Correct a mapping, a scale or an offset."
                   >
                     edit bindings →
-                  </Link>
+                  </PageLink>
                 ) : null}
               </p>
               <div className="grid max-h-48 gap-1 overflow-auto sm:grid-cols-2">

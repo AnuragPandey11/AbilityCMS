@@ -25,6 +25,7 @@ from solarcms.db.rls import SCHEDULER_ROLE, SecurityContext
 from solarcms.db.session import scoped_session
 from solarcms.services.notifications import queue_alarm_notifications
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -58,6 +59,7 @@ async def _user(s, email: str, client_id: int, role: str) -> int:  # type: ignor
         INSERT INTO memberships (user_id, client_id, role_id)
         SELECT :u, :c, id FROM roles WHERE code = :r
     """), {"u": user_id, "c": client_id, "r": role})
+    await grant_admin_tabs(s)
     return user_id
 
 

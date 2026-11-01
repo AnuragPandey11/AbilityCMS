@@ -95,14 +95,18 @@ import { DeviceFigureCard } from "@/components/devices/DeviceFigureCard";
 import { DeviceArt } from "@/components/devices/DeviceArt";
 import { DeviceInspector } from "@/components/devices/DeviceInspector";
 import { SummaryCard, type SummaryFigure } from "@/components/dashboard/SummaryCard";
-import { SlotRow, slotText } from "@/components/dashboard/SlotValue";
+import { SlotRow, isNotAvailable, slotText } from "@/components/dashboard/SlotValue";
 import {
   PerformanceDetailsButton,
   PerformancePanel,
   PerformanceTiles,
 } from "./single-plant/PerformancePanel";
 import { RailTile } from "@/components/charts/RailTile";
-import { OperatingDetail, PlantStatusCard } from "./single-plant/PlantStatusCard";
+import {
+  OperatingDetail,
+  PlantStatusCard,
+  type SlotsStatus,
+} from "./single-plant/PlantStatusCard";
 import { EnergySummaryCard } from "./single-plant/EnergySummaryCard";
 import { PowerSummary } from "./single-plant/PowerSummary";
 import { fullyDuplicated } from "./single-plant/duplication";
@@ -143,6 +147,7 @@ import {
   formatCapacity,
   formatNumber,
   formatValue,
+  NOT_AVAILABLE_DISPLAY,
   UNDEFINED_DISPLAY,
 } from "@/format/value";
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
@@ -256,7 +261,11 @@ function toFigures(slots: ResolvedSlot[], n: number): SummaryFigure[] {
     .slice(0, n)
     .map((slot) => ({
       label: slot.label,
-      value: slot.value === null ? UNDEFINED_DISPLAY : slotText(slot),
+      value: isNotAvailable(slot)
+        ? NOT_AVAILABLE_DISPLAY
+        : slot.value === null
+          ? UNDEFINED_DISPLAY
+          : slotText(slot),
       unit: slot.value === null ? null : slot.unit,
       tone: slot.value === null ? ("muted" as const) : ("default" as const),
       title: slot.source?.is_aggregated
@@ -615,6 +624,9 @@ export function SinglePlantDashboard(): JSX.Element {
   const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data]);
   const dash = dashboardQuery.data;
   const panel = (code: string): ResolvedSlot[] => dash?.panels[code] ?? [];
+  // A slot missing from an answer is "Not Available"; one missing because
+  // there is no answer yet, or none coming, is not.
+  const slotsStatus: SlotsStatus = dash ? "ready" : dashboardQuery.isError ? "failed" : "loading";
   const headline = byPosition(panel("kpi_row"));
 
   /**
@@ -1063,6 +1075,7 @@ export function SinglePlantDashboard(): JSX.Element {
             status={operatingQuery.data}
             isLoading={operatingQuery.isLoading}
             environment={panel("environment")}
+            slots={slotsStatus}
             devices={devices}
             health={healthCounts}
             timeZone={timezone}
@@ -1070,6 +1083,7 @@ export function SinglePlantDashboard(): JSX.Element {
           />
           <EnergySummaryCard
             headline={headline}
+            slots={slotsStatus}
             today={kpisTodayQuery.data}
             yesterday={yesterdayEnergy}
             onOpen={() => setOpen({ kind: "energy" })}

@@ -1,6 +1,8 @@
 /**
- * Sizes & tariff — the two facts the Inverter ranking needs and nothing
- * recorded: each Inverter's DC size and the Plant's tariff.
+ * Sizes & tariff — the facts the Inverter ranking needs and nothing else
+ * records: each Inverter's AC rating (energy lost while down is rating times
+ * hours, the user's formula of 1 Nov 2026) and DC size (PR divides by it), and
+ * the Plant's tariff.
  *
  * Saved through the routes that already own them (`PATCH /devices/{id}`,
  * `PATCH /plants/{id}`), so the server's permission check and audit apply as
@@ -68,6 +70,8 @@ export function RankingSetupDrawer({
   const queryClient = useQueryClient();
   const sorted = useMemo(() => [...inverters].sort(byCode), [inverters]);
   const [sizes, setSizes] = useState<Record<number, string>>({});
+  const [ratings, setRatings] = useState<Record<number, string>>({});
+  const [ratingFill, setRatingFill] = useState("");
   const [tariffText, setTariffText] = useState("");
   const [fill, setFill] = useState("");
   const [saving, setSaving] = useState(false);
@@ -79,6 +83,8 @@ export function RankingSetupDrawer({
   useEffect(() => {
     if (!open) return;
     setSizes(Object.fromEntries(sorted.map((row) => [row.device_id, text(row.dc_capacity_kwp)])));
+    setRatings(Object.fromEntries(sorted.map((row) => [row.device_id, text(row.rated_capacity_kw)])));
+    setRatingFill("");
     setTariffText(text(tariff));
     setFill("");
     setNote(null);
@@ -91,11 +97,24 @@ export function RankingSetupDrawer({
     row,
     ...parseSize(sizes[row.device_id] ?? ""),
   }));
+  const parsedRatings = sorted.map((row) => ({ row, ...parseSize(ratings[row.device_id] ?? "") }));
   const tariffParsed = parseTariff(tariffText);
-  const invalid = parsed.some((entry) => entry.error !== null) || tariffParsed.error !== null;
+  const invalid =
+    parsed.some((entry) => entry.error !== null) ||
+    parsedRatings.some((entry) => entry.error !== null) ||
+    tariffParsed.error !== null;
   const changedSizes = parsed.filter((entry) => entry.error === null && entry.value !== entry.row.dc_capacity_kwp);
+  // A rating is set here, never cleared: an empty box leaves the recorded one.
+  const changedRatings = parsedRatings.filter(
+    (entry) => entry.error === null && entry.value !== null && entry.value !== entry.row.rated_capacity_kw,
+  );
   const tariffChanged = tariffParsed.error === null && tariffParsed.value !== tariff;
-  const dirty = changedSizes.length > 0 || tariffChanged;
+  const changedDevices = new Set([
+    ...changedSizes.map((entry) => entry.row.device_id),
+    ...changedRatings.map((entry) => entry.row.device_id),
+  ]);
+  const dirty = changedDevices.size > 0 || tariffChanged;
+  const rated = parsedRatings.filter((entry) => entry.value !== null).length;
 
   const entered = parsed.filter((entry) => entry.value !== null);
   const sum = entered.reduce((total, entry) => total + (entry.value ?? 0), 0);
@@ -106,6 +125,19 @@ export function RankingSetupDrawer({
       : null;
 
   const fillParsed = parseSize(fill);
+  const ratingFillParsed = parseSize(ratingFill);
+  const applyRatingFill = (onlyEmpty: boolean) => {
+    if (ratingFillParsed.value === null) return;
+    setRatings((current) => {
+      const next = { ...current };
+      for (const row of sorted) {
+        if (!onlyEmpty || !(current[row.device_id] ?? "").trim()) {
+          next[row.device_id] = String(ratingFillParsed.value);
+        }
+      }
+      return next;
+    });
+  };
   const applyFill = (onlyEmpty: boolean) => {
     if (fillParsed.value === null) return;
     setSizes((current) => {
@@ -124,18 +156,27 @@ export function RankingSetupDrawer({
     setNote(null);
     setFailures([]);
     const failed: string[] = [];
+    // One request per Inverter, carrying whichever of its two figures changed.
+    const updates = sorted
+      .filter((row) => changedDevices.has(row.device_id))
+      .map((row) => {
+        const size = changedSizes.find((entry) => entry.row.device_id === row.device_id);
+        const rating = changedRatings.find((entry) => entry.row.device_id === row.device_id);
+        const body: Parameters<typeof devicesApi.updateDevice>[1] = {};
+        if (rating) body.rated_capacity_kw = rating.value;
+        if (size) {
+          if (size.value === null) body.clear = ["dc_capacity_kwp"];
+          else body.dc_capacity_kwp = size.value;
+        }
+        return { row, body };
+      });
     const results = await Promise.allSettled(
-      changedSizes.map((entry) =>
-        devicesApi.updateDevice(
-          entry.row.device_id,
-          entry.value === null ? { clear: ["dc_capacity_kwp"] } : { dc_capacity_kwp: entry.value },
-        ),
-      ),
+      updates.map(({ row, body }) => devicesApi.updateDevice(row.device_id, body)),
     );
     results.forEach((result, index) => {
       if (result.status === "rejected") {
         const reason = isApiError(result.reason) ? result.reason.displayMessage : "could not be saved";
-        failed.push(`${changedSizes[index].row.code}: ${reason}`);
+        failed.push(`${updates[index].row.code}: ${reason}`);
       }
     });
     if (tariffChanged) {
@@ -150,10 +191,10 @@ export function RankingSetupDrawer({
     await queryClient.invalidateQueries({ queryKey: ["devices"] });
     setSaving(false);
     setFailures(failed);
-    const savedCount = changedSizes.length - failed.filter((line) => !line.startsWith("Tariff")).length;
+    const savedCount = updates.length - failed.filter((line) => !line.startsWith("Tariff")).length;
     if (failed.length === 0) {
       setNote(
-        `Saved${savedCount > 0 ? ` ${savedCount} size${savedCount === 1 ? "" : "s"}` : ""}` +
+        `Saved${savedCount > 0 ? ` ${savedCount} Inverter${savedCount === 1 ? "" : "s"}` : ""}` +
           `${tariffChanged ? `${savedCount > 0 ? " and" : ""} the tariff` : ""}. The ranking has been worked out again.`,
       );
     }
@@ -164,11 +205,11 @@ export function RankingSetupDrawer({
       open={open}
       onClose={onClose}
       title="Sizes & tariff"
-      subtitle={`${plantName} · what PR and loss are worked out from`}
+      subtitle={`${plantName} · what loss and PR are worked out from`}
       footer={
         <div className="flex items-center justify-between gap-3">
           <span className="text-xs text-ink-muted">
-            {dirty ? `${changedSizes.length + (tariffChanged ? 1 : 0)} change(s) not saved` : "Nothing changed"}
+            {dirty ? `${changedDevices.size + (tariffChanged ? 1 : 0)} change(s) not saved` : "Nothing changed"}
           </span>
           <div className="flex gap-2">
             <Button onClick={onClose}>Close</Button>
@@ -201,14 +242,75 @@ export function RankingSetupDrawer({
 
         <section>
           <div className="mb-2 flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold text-ink">AC rating of each Inverter (kW)</h3>
+            <span className="text-xs text-ink-muted">
+              {rated} of {sorted.length} recorded
+            </span>
+          </div>
+          <p className="mb-3 text-xs leading-relaxed text-ink-muted">
+            The nameplate AC output. Energy lost while an Inverter is down is its rating times the hours it was
+            down, so without one that Inverter&apos;s loss reads &quot;—&quot;.
+          </p>
+          <div className="mb-3 flex flex-wrap items-end gap-2 rounded-card border border-line bg-surface-sunken/60 p-3">
+            <div className="w-36">
+              <Field
+                label="Same rating for all"
+                error={ratingFill.trim() ? ratingFillParsed.error ?? undefined : undefined}
+              >
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  value={ratingFill}
+                  onChange={(event) => setRatingFill(event.target.value)}
+                  className={inputClass}
+                  placeholder="kW"
+                />
+              </Field>
+            </div>
+            <Button disabled={ratingFillParsed.value === null} onClick={() => applyRatingFill(true)}>
+              Fill empty
+            </Button>
+            <Button disabled={ratingFillParsed.value === null} onClick={() => applyRatingFill(false)}>
+              Fill all
+            </Button>
+          </div>
+          <div className="divide-y divide-line overflow-hidden rounded-card border border-line">
+            {parsedRatings.map(({ row, error }) => (
+              <label key={row.device_id} className="flex items-center justify-between gap-3 px-3 py-2">
+                <span className="min-w-0 truncate text-sm font-medium text-ink">{row.code}</span>
+                <span className="flex shrink-0 flex-col items-end">
+                  <span className="w-32">
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      aria-label={`${row.code} AC rating in kW`}
+                      value={ratings[row.device_id] ?? ""}
+                      onChange={(event) =>
+                        setRatings((current) => ({ ...current, [row.device_id]: event.target.value }))
+                      }
+                      className={`${inputClass} text-right ${error ? "border-bad" : ""}`}
+                      placeholder="kW"
+                    />
+                  </span>
+                  {error ? <span className="mt-0.5 text-[11px] text-bad">{error}</span> : null}
+                </span>
+              </label>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-2 flex items-baseline justify-between gap-3">
             <h3 className="text-sm font-semibold text-ink">DC size of each Inverter (kWp)</h3>
             <span className="text-xs text-ink-muted">
               {entered.length} of {sorted.length} recorded
             </span>
           </div>
           <p className="mb-3 text-xs leading-relaxed text-ink-muted">
-            The panels connected to each Inverter, from the design — not its AC rating. PR divides by it and
-            the energy lost scales with it, so it is never estimated from the Plant&apos;s total.
+            The panels connected to each Inverter, from the design — not its AC rating. PR divides by it, so
+            it is never estimated from the Plant&apos;s total.
           </p>
 
           <div className="mb-3 flex flex-wrap items-end gap-2 rounded-card border border-line bg-surface-sunken/60 p-3">
@@ -236,14 +338,7 @@ export function RankingSetupDrawer({
           <div className="divide-y divide-line overflow-hidden rounded-card border border-line">
             {parsed.map(({ row, error }) => (
               <label key={row.device_id} className="flex items-center justify-between gap-3 px-3 py-2">
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-ink">{row.code}</span>
-                  {row.rated_capacity_kw !== null ? (
-                    <span className="block text-[11px] text-ink-faint">
-                      AC rating {formatNumber(row.rated_capacity_kw, { digits: 0 })} kW
-                    </span>
-                  ) : null}
-                </span>
+                <span className="min-w-0 truncate text-sm font-medium text-ink">{row.code}</span>
                 <span className="flex shrink-0 flex-col items-end">
                   <span className="w-32">
                     <input

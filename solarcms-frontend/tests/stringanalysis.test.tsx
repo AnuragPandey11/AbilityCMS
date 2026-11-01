@@ -3,7 +3,7 @@
  * header never counts a zero nobody measured.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { PlantStringsSchema, type PlantStrings, type StringCounts } from "@/api/schemas";
@@ -14,6 +14,10 @@ import {
   byCode,
   stringSummary,
 } from "@/dashboards/StringAnalysisDashboard";
+
+// The Tag Mapping link renders only where that page is ticked (migration 0046);
+// with no session to say otherwise, nothing is filtered.
+vi.mock("@/auth/AuthProvider", () => ({ useAuth: () => ({ me: null }) }));
 
 const counts = (over: Partial<StringCounts> = {}): StringCounts => ({
   normal: 0,

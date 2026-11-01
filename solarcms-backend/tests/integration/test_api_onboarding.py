@@ -24,6 +24,7 @@ from solarcms.api.auth import hash_password
 from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -50,6 +51,7 @@ async def _admin_client():  # type: ignore[no-untyped-def]
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'admin'
         """), {"u": user_id, "c": client_id})
+        await grant_admin_tabs(setup)
 
     # The token is minted with a throwaway client so the one handed back is
     # still unopened: httpx refuses to enter `async with` on a client that has

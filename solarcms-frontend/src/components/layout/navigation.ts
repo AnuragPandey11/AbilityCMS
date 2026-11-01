@@ -192,6 +192,8 @@ export interface AdminLink {
   to: string;
   label: string;
   permission: Permission;
+  /** The tab that must be ticked for the User (migration 0046); none for platform-only pages. */
+  page?: string;
   icon: IconComponent;
 }
 
@@ -208,17 +210,17 @@ export const ADMIN_LINKS: AdminLink[] = [
   { to: "/admin/clients", label: "Clients", permission: "system.admin", icon: IconClient },
   // The hub for everything the broker sends that is not being kept or not
   // trusted; first after Clients, because it is where the work is listed.
-  { to: "/admin/data-issues", label: "Data Issues", permission: "config.modify", icon: IconDataIssues },
+  { to: "/admin/data-issues", label: "Data Issues", permission: "config.modify", page: "admin_data_issues", icon: IconDataIssues },
   // The guided path through a whole Plant — Client, Plant, Blocks, Devices,
   // commissioning — beside the screen that edits a Plant afterwards. It was
   // reachable only from a Data Issues link or by typing its address.
-  { to: "/admin/onboarding", label: "Plant Onboarding", permission: "plant.manage", icon: IconOnboarding },
-  { to: "/admin/plant-setup", label: "Plants & Devices", permission: "plant.manage", icon: IconDevices },
-  { to: "/admin/hierarchy", label: "Wiring & Diagram", permission: "plant.manage", icon: IconWiring },
-  { to: "/admin/bindings", label: "Tag Mapping", permission: "config.modify", icon: IconMapping },
-  { to: "/admin/alarm-rules", label: "Alarm Rules", permission: "config.modify", icon: IconAlarm },
-  { to: "/admin/users", label: "Users", permission: "user.manage", icon: IconUsers },
-  { to: "/admin/alarm-emails", label: "Alarm Emails", permission: "user.manage", icon: IconMail },
+  { to: "/admin/onboarding", label: "Plant Onboarding", permission: "plant.manage", page: "admin_onboarding", icon: IconOnboarding },
+  { to: "/admin/plant-setup", label: "Plants & Devices", permission: "plant.manage", page: "admin_plant_setup", icon: IconDevices },
+  { to: "/admin/hierarchy", label: "Wiring & Diagram", permission: "plant.manage", page: "admin_hierarchy", icon: IconWiring },
+  { to: "/admin/bindings", label: "Tag Mapping", permission: "config.modify", page: "admin_bindings", icon: IconMapping },
+  { to: "/admin/alarm-rules", label: "Alarm Rules", permission: "config.modify", page: "admin_alarm_rules", icon: IconAlarm },
+  { to: "/admin/users", label: "Users", permission: "user.manage", page: "admin_users", icon: IconUsers },
+  { to: "/admin/alarm-emails", label: "Alarm Emails", permission: "user.manage", page: "admin_alarm_emails", icon: IconMail },
   { to: "/admin/health", label: "System Health", permission: "system.admin", icon: IconHealth },
   { to: "/admin/system", label: "System", permission: "system.admin", icon: IconSystem },
 ];

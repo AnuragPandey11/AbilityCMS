@@ -22,6 +22,7 @@ from solarcms.api.auth import hash_password
 from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -77,6 +78,7 @@ async def _token_for(role_code: str) -> str:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = :role
         """), {"u": user_id, "c": client_id, "role": role_code})
+        await grant_admin_tabs(setup)
 
     async with httpx.AsyncClient(transport=ASGITransport(app=_app()),
                                  base_url="http://test") as http:
@@ -136,6 +138,7 @@ async def test_a_refresh_token_is_not_accepted_as_an_access_token() -> None:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'admin'
         """), {"u": user_id, "c": client_id})
+        await grant_admin_tabs(setup)
 
     async with httpx.AsyncClient(transport=ASGITransport(app=_app()),
                                  base_url="http://test") as http:
@@ -164,6 +167,7 @@ async def test_a_deactivated_user_loses_access_immediately() -> None:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'admin'
         """), {"u": user_id, "c": client_id})
+        await grant_admin_tabs(setup)
 
     async with httpx.AsyncClient(transport=ASGITransport(app=_app()),
                                  base_url="http://test") as http:

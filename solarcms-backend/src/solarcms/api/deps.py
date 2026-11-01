@@ -168,26 +168,39 @@ def require_permission(code: str) -> Callable[[CurrentUser], CurrentUser]:
 
 
 def require_dashboard(code: str) -> Callable[..., object]:
-    """Guard dashboard access (A-3).
+    """Guard dashboard access (A-3). One tab; see `require_page` for several."""
+    return require_page(code)
 
-    Deny by default, mirroring I-5: no rows plus role 'admin' means every
-    dashboard; no rows otherwise means none.
+
+def require_page(*codes: str) -> Callable[..., object]:
+    """Guard a route by the tabs ticked for the User (A-3): any one of `codes`.
+
+    Deny by default: only a platform administrator passes unticked. Since
+    migration 0046 a Client Admin is given tabs like anyone else — the role no
+    longer opens every screen — and an admin page is a tab too. A route used by
+    several screens lists each of them, so a page that calls it keeps working
+    for whoever may open that page. It never replaces `require_permission`: a
+    tick does not grant a permission, and both must pass.
     """
 
     async def guard(user: CurrentUserDep, session: SessionDep) -> CurrentUser:
-        if user.is_platform_admin or user.role_code == "admin":
+        if user.is_platform_admin:
             return user
         rows = await session.execute(text("""
             SELECT 1
               FROM user_dashboard_access uda
               JOIN memberships m ON m.id = uda.membership_id
               JOIN dashboards d  ON d.id = uda.dashboard_id
-             WHERE m.user_id = :user_id AND m.client_id = :client_id AND d.code = :code
-        """), {"user_id": user.user_id, "client_id": user.client_id, "code": code})
+             WHERE m.user_id = :user_id AND m.client_id = :client_id
+               AND d.code = ANY(:codes)
+             LIMIT 1
+        """), {"user_id": user.user_id, "client_id": user.client_id, "codes": list(codes)})
         if rows.first() is None:
+            names = " or ".join(codes)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"dashboard {code} not assigned",
+                detail=f"this needs a tab you have not been given ({names}). "
+                       "A platform administrator gives tabs under Users.",
             )
         return user
 

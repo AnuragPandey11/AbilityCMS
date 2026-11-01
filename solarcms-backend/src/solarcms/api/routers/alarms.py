@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from solarcms.api import pages
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.cache.live import bump_alarm_rules_version
 from solarcms.schemas.alarming import AlarmRuleWrite
@@ -85,7 +86,7 @@ async def acknowledge(
     return {"id": row.id, "state": row.state, "acknowledged_at": row.acknowledged_at}
 
 
-@router.get("/alarm-rules")
+@router.get("/alarm-rules", dependencies=[pages.ALARM_RULES_PAGE])
 async def list_rules(
     session: SessionDep,
     _: CurrentUser = Depends(require_permission("config.modify")),
@@ -176,7 +177,8 @@ async def _signal_rules_changed() -> None:
                     "five minutes", error=str(exc))
 
 
-@router.post("/alarm-rules", status_code=status.HTTP_201_CREATED)
+@router.post("/alarm-rules", status_code=status.HTTP_201_CREATED,
+             dependencies=[pages.ALARM_RULES_PAGE])
 async def create_alarm_rule(
     body: AlarmRuleWrite, session: SessionDep, background: BackgroundTasks,
     user: CurrentUser = Depends(require_permission("config.modify")),
@@ -250,7 +252,7 @@ async def create_alarm_rule(
     return dict(row._mapping)
 
 
-@router.patch("/alarm-rules/{rule_id}")
+@router.patch("/alarm-rules/{rule_id}", dependencies=[pages.ALARM_RULES_PAGE])
 async def update_alarm_rule(
     rule_id: int, body: AlarmRuleWrite, session: SessionDep, background: BackgroundTasks,
     user: CurrentUser = Depends(require_permission("config.modify")),

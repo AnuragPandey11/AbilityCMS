@@ -31,6 +31,7 @@ from solarcms.api.auth import hash_password
 from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -75,6 +76,7 @@ async def _fixture(roles: dict[str, str]) -> Fixture:
                 INSERT INTO memberships (user_id, client_id, role_id)
                 SELECT :u, :c, id FROM roles WHERE code = :role
             """), {"u": user_id, "c": client_id, "role": role})
+            await grant_admin_tabs(setup)
             users[name] = (user_id, email)
     return Fixture(client_id=client_id, plant_ids=plant_ids, users=users)
 
@@ -125,7 +127,34 @@ async def test_users_list_carries_current_plants_and_dashboards() -> None:
     # In the screens' own order (sort_order), whatever order they were sent in.
     assert ravi["dashboards"] == ["single_plant", "alarms"]
     admin_row = next(row for row in listed.json() if row["id"] == f.users["admin"][0])
-    assert admin_row["plant_ids"] == [] and admin_row["dashboards"] == []
+    # A Client Admin is given tabs like anyone else (migration 0046); the
+    # fixture gives every one, admin pages included.
+    assert admin_row["plant_ids"] == [] and "admin_users" in admin_row["dashboards"]
+
+
+async def test_a_client_admin_gives_only_tabs_they_have_and_never_another_admins() -> None:
+    f = await _fixture({"admin": "admin", "other": "admin", "ravi": "employee"})
+    ravi_id, other_id = f.users["ravi"][0], f.users["other"][0]
+    async with _as(await _token(f.users["admin"][1])) as admin:
+        # An admin page an Employee's role cannot use is refused, not stored.
+        unusable = await admin.put(f"/users/{ravi_id}/dashboards", json=["admin_bindings"])
+        assert unusable.status_code == 422, unusable.text
+        # Another Client Admin's tabs are the platform administrator's to set.
+        other = await admin.put(f"/users/{other_id}/dashboards", json=["alarms"])
+        assert other.status_code == 403, other.text
+        # A Client Admin is created by the platform administrator.
+        created = await admin.post("/users", params={
+            "email": f"new-admin-{f.client_id}@test.local", "password": "a-password-1",
+            "full_name": "New", "role_code": "admin"})
+        assert created.status_code == 403, created.text
+        # An Employee created with tabs has them at once.
+        made = await admin.post(
+            "/users",
+            params={"email": f"new-emp-{f.client_id}@test.local", "password": "a-password-1",
+                    "full_name": "New", "role_code": "employee"},
+            json={"dashboard_codes": ["single_plant", "alarms"]})
+        assert made.status_code == 201, made.text
+        assert made.json()["dashboards"] == ["single_plant", "alarms"]
 
 
 async def test_role_change_takes_effect_on_the_next_request() -> None:
@@ -213,6 +242,7 @@ async def test_a_client_admin_cannot_reset_a_platform_administrator() -> None:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'employee'
         """), {"u": super_id, "c": f.client_id})
+        await grant_admin_tabs(setup)
     async with _as(await _token(f.users["admin"][1])) as admin:
         refused = await admin.patch(f"/users/{super_id}",
                                     json={"password": "taken-over-password"})

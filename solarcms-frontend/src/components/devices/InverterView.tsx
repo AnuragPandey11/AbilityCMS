@@ -142,6 +142,13 @@ export interface Filled {
   tag: Tag | undefined;
   value: number | null;
   reason: string | null;
+  /**
+   * True where this session can read the Device's bindings and none of the
+   * position's Tags is bound and switched on: the Device does not measure
+   * this, so a screen says "Not Available" rather than "no reading". Unknown
+   * (absent) where bindings are not readable.
+   */
+  unavailable?: boolean;
 }
 
 /**
@@ -174,16 +181,31 @@ export function fillPosition(
   }
   const boundCode = bound ? position.codes.find((code) => bound.has(code)) : undefined;
   const tag = tagsByCode.get(boundCode ?? position.codes[0] ?? "");
-  const Subject = subject.charAt(0).toUpperCase() + subject.slice(1);
   let reason: string;
   if (isLoading) reason = "Loading…";
   else if (bound && boundCode) reason = `Bound to ${boundCode}, but nothing received in the last ${LOOKBACK_MINUTES} minutes.`;
-  else if (bound) reason = `${Subject} is not bound to ${position.codes.join(" or ")}, so it does not report this.`;
+  else if (bound)
+    reason =
+      `Not available: ${subject} is not bound to ${position.codes.join(" or ")}, so it does not ` +
+      "report this. Where it has the input but no sensor is fitted, the mapping is switched off " +
+      "in Tag Mapping.";
   else
     reason =
       `Nothing received in the last ${LOOKBACK_MINUTES} minutes — ${subject} may not report ` +
       `${position.codes.join(" or ")}, or it has gone quiet.`;
-  return { label: position.label, tag, value: null, reason };
+  return {
+    label: position.label,
+    tag,
+    value: null,
+    reason,
+    // A calculated Tag is never bound — it is worked out from Tags that are —
+    // so being unbound says nothing about whether this Device has it.
+    unavailable:
+      !isLoading &&
+      bound !== null &&
+      boundCode === undefined &&
+      position.codes.every((code) => !tagsByCode.get(code)?.formula),
+  };
 }
 
 // ── Presentation ─────────────────────────────────────────────────────────────

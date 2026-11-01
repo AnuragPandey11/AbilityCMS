@@ -412,7 +412,12 @@ export function DeviceBindingsAdmin(): JSX.Element {
                     <th className="px-2 py-1.5">Offset</th>
                     <th className="px-2 py-1.5">Valid min</th>
                     <th className="px-2 py-1.5">Valid max</th>
-                    <th className="px-2 py-1.5">On</th>
+                    <th
+                      className="cursor-help px-2 py-1.5"
+                      title="Switch off a reading the Device sends but no sensor is fitted for — screens then say Not Available instead of the value it sends (often 0)."
+                    >
+                      On
+                    </th>
                     <th className="px-2 py-1.5 text-right">Live</th>
                     <th />
                   </tr>
@@ -501,6 +506,12 @@ export function DeviceBindingsAdmin(): JSX.Element {
                         <td className="px-2 py-1">
                           <input
                             type="checkbox"
+                            aria-label={`Read ${binding.source_key || "this key"}`}
+                            title={
+                              binding.enabled
+                                ? "Read. Untick if no sensor is fitted for it."
+                                : "Not read: no sensor fitted. Screens say Not Available."
+                            }
                             checked={binding.enabled}
                             onChange={(event) =>
                               update(index, { enabled: event.target.checked })

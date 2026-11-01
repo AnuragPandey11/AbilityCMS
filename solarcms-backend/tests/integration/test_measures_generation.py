@@ -27,6 +27,7 @@ from solarcms.domain.counters import plant_energy
 from solarcms.domain.tiering import Tier
 from solarcms.services.energy import read_counter_series
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -61,6 +62,7 @@ async def _plant_with_two_meters() -> dict[str, Any]:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'admin'
         """), {"u": user_id, "c": client_id})
+        await grant_admin_tabs(s)
         models = {
             type_code: (await s.execute(text("""
                 INSERT INTO device_models (device_type_id, manufacturer, model_code)

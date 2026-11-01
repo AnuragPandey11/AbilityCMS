@@ -32,7 +32,7 @@ import { DataTable, type Column } from "@/components/tables/DataTable";
 import { formatDateTime } from "@/format/datetime";
 import { usePermission } from "@/auth/usePermission";
 import { useAuth } from "@/auth/AuthProvider";
-import { DASHBOARD_CODES, dashboardLabel } from "@/auth/useDashboard";
+import { TabChecklist } from "./TabChecklist";
 
 /** Deliberately excludes super_admin: a Client Admin cannot mint a platform admin. */
 const ASSIGNABLE_ROLES = ["admin", "employee", "guest"] as const;
@@ -55,13 +55,6 @@ export const PASSWORD_MIN = 12;
  * is held, and granting or revoking both together.
  */
 const PLANTS_SCREEN = ["plant_overview", "plant_list"];
-const DASHBOARD_BOXES: { label: string; codes: string[] }[] = DASHBOARD_CODES.filter(
-  (code) => code !== "plant_list",
-).map((code) =>
-  code === "plant_overview"
-    ? { label: dashboardLabel(code), codes: PLANTS_SCREEN }
-    : { label: dashboardLabel(code), codes: [code] },
-);
 
 /** What saving `next` over `current` would do, said before it is done. */
 export function describeChange<T>(current: T[], next: T[]): {
@@ -103,6 +96,15 @@ export function UsersAdmin(): JSX.Element {
     enabled: canManage && isPlatformAdmin,
   });
   const [clientId, setClientId] = useState<number | "">("");
+  // Every tab, which a role can use and which this caller may give (A-3).
+  const catalogueQuery = useQuery({
+    queryKey: [...qk.users(), "access-catalogue"],
+    queryFn: usersApi.accessCatalogue,
+    enabled: canManage,
+  });
+  const catalogue = catalogueQuery.data;
+  const setsAdminTabs = catalogue?.sets_client_admin_tabs ?? isPlatformAdmin;
+  const [newTabs, setNewTabs] = useState<string[]>([]);
 
   const [creating, setCreating] = useState(false);
   // The id, not the row: the row is re-read after every save, and a copy held
@@ -142,12 +144,17 @@ export function UsersAdmin(): JSX.Element {
       usersApi.createUser({
         ...form,
         ...(isPlatformAdmin && clientId !== "" ? { client_id: clientId } : {}),
+        dashboard_codes: newTabs,
       }),
     onSuccess: () => {
       setCreating(false);
+      const tabCount = new Set(newTabs.map(boxOf)).size;
       done(
-        `${form.email} created with no Plant Assignments — they can see nothing until Plants are assigned. Press Manage on their row.`,
+        form.role_code === "admin"
+          ? `${form.email} created as Client Admin with ${tabCount} tab(s). They see every Plant of this Client.`
+          : `${form.email} created with ${tabCount} tab(s) and no Plant Assignments — they see no Plant until one is assigned. Press Manage on their row.`,
       );
+      setNewTabs([]);
       setForm({
         email: "",
         password: "",
@@ -171,9 +178,8 @@ export function UsersAdmin(): JSX.Element {
 
   const saveDashboards = useMutation({
     mutationFn: () => usersApi.setDashboardAccess(selected!.id, dashboards),
-    onSuccess: () =>
-      done(`Dashboard access saved: ${new Set(dashboards.map(boxOf)).size} screen(s).`),
-    onError: (err) => fail(err, "Could not save dashboard access."),
+    onSuccess: () => done(`Tabs saved: ${new Set(dashboards.map(boxOf)).size} tab(s).`),
+    onError: (err) => fail(err, "Could not save the tabs."),
   });
 
   const saveDetails = useMutation({
@@ -381,7 +387,7 @@ export function UsersAdmin(): JSX.Element {
       {creating ? (
         <Panel
           title="New User"
-          subtitle="Starts with zero Plants and zero dashboards."
+          subtitle="Starts with zero Plants and the tabs ticked below."
         >
           <div className="grid max-w-3xl grid-cols-2 gap-3 lg:grid-cols-4">
             {isPlatformAdmin ? (
@@ -443,18 +449,44 @@ export function UsersAdmin(): JSX.Element {
             >
               <select
                 value={form.role_code}
-                onChange={(event) =>
-                  setForm({ ...form, role_code: event.target.value })
-                }
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setForm({ ...form, role_code: next });
+                  // Keep only ticks the new role can use: an Employee cannot
+                  // use an admin page, so it is not silently carried over.
+                  const usable = new Set(catalogue?.offered_by_role[next] ?? []);
+                  setNewTabs((previous) => previous.filter((code) => usable.has(code)));
+                }}
                 className={inputClass}
               >
                 {ASSIGNABLE_ROLES.map((code) => (
-                  <option key={code} value={code}>
+                  <option
+                    key={code}
+                    value={code}
+                    disabled={code === "admin" && !setsAdminTabs}
+                  >
                     {roleLabel(code)}
+                    {code === "admin" && !setsAdminTabs ? " (platform administrator only)" : ""}
                   </option>
                 ))}
               </select>
             </Field>
+          </div>
+          <div className="mt-4 max-w-3xl">
+            <h3 className="mb-2 text-xs font-semibold text-ink">
+              Tabs <span className="text-ink-faint">(A-3) — what this person can open</span>
+            </h3>
+            <TabChecklist
+              catalogue={catalogue}
+              role={form.role_code}
+              selected={newTabs}
+              onChange={setNewTabs}
+            />
+            {form.role_code === "admin" && newTabs.length === 0 ? (
+              <p className="mt-2 text-[11px] text-warn">
+                Tick at least one tab: a Client Admin sees only what is ticked.
+              </p>
+            ) : null}
           </div>
           <Button
             variant="primary"
@@ -464,6 +496,7 @@ export function UsersAdmin(): JSX.Element {
               !form.password ||
               !form.full_name ||
               (isPlatformAdmin && clientId === "") ||
+              (form.role_code === "admin" && newTabs.length === 0) ||
               createUser.isPending
             }
             onClick={() => createUser.mutate()}
@@ -483,6 +516,8 @@ export function UsersAdmin(): JSX.Element {
           setPlantIds={setPlantIds}
           dashboards={dashboards}
           setDashboards={setDashboards}
+          catalogue={catalogue}
+          setsAdminTabs={setsAdminTabs}
           fullName={fullName}
           setFullName={setFullName}
           role={role}
@@ -529,6 +564,8 @@ function ManagePanel({
   setPlantIds,
   dashboards,
   setDashboards,
+  catalogue,
+  setsAdminTabs,
   fullName,
   setFullName,
   role,
@@ -555,6 +592,9 @@ function ManagePanel({
   setPlantIds: (update: (previous: number[]) => number[]) => void;
   dashboards: string[];
   setDashboards: (update: (previous: string[]) => string[]) => void;
+  catalogue: usersApi.AccessCatalogue | undefined;
+  /** A platform administrator: the only one who sets a Client Admin's tabs. */
+  setsAdminTabs: boolean;
   fullName: string;
   setFullName: (value: string) => void;
   role: string;
@@ -585,12 +625,7 @@ function ManagePanel({
   const passwordShort = newPassword.length > 0 && newPassword.length < PASSWORD_MIN;
   const blocked = actsOnNoClient;
 
-  const toggleBox = (codes: string[], on: boolean) =>
-    setDashboards((previous) =>
-      on
-        ? [...new Set([...previous, ...codes])]
-        : previous.filter((code) => !codes.includes(code)),
-    );
+  const tabsEditable = setsAdminTabs || user.role_code !== "admin";
 
   return (
     <Panel
@@ -626,7 +661,7 @@ function ManagePanel({
             hint={
               isSelf
                 ? "You cannot change your own role — ask another administrator."
-                : "Takes effect on their next click. A Client Admin sees every Plant and screen."
+                : "Takes effect on their next click. A Client Admin sees every Plant of this Client, and the tabs ticked below."
             }
           >
             <select
@@ -660,8 +695,14 @@ function ManagePanel({
         </div>
         {roleChanged && role !== "admin" && user.role_code === "admin" ? (
           <p className="mt-2 text-[11px] leading-snug text-warn">
-            As {roleLabel(role)} they will see only the Plants and screens ticked below — tick
-            them before or right after saving, or they will see nothing.
+            As {roleLabel(role)} they will see only the Plants ticked below, and no admin page —
+            their role cannot use one.
+          </p>
+        ) : null}
+        {roleChanged && role === "admin" ? (
+          <p className="mt-2 text-[11px] leading-snug text-warn">
+            As Client Admin they keep only the tabs ticked below; no admin page is given by the
+            role. {setsAdminTabs ? "Tick the admin pages they should open after saving." : "A platform administrator ticks those."}
           </p>
         ) : null}
       </section>
@@ -743,31 +784,26 @@ function ManagePanel({
 
         <div>
           <h3 className="text-xs font-semibold text-ink">
-            Dashboards <span className="text-ink-faint">(A-3)</span>
+            Tabs <span className="text-ink-faint">(A-3)</span>
           </h3>
-          <p className="mt-1 text-[11px] leading-snug text-ink-faint">
-            {user.role_code === "admin"
-              ? "A Client Admin sees every screen whatever is ticked; this list matters only if their role changes."
-              : "The screens this person can open, shown ticked. A screen they lack does not appear in their menu at all."}
+          <p className="mt-1 mb-2 text-[11px] leading-snug text-ink-faint">
+            What this person can open, shown ticked — a Client Admin as much as anyone. A tab not
+            ticked does not appear in their menu at all.
           </p>
-          <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded border border-line p-2">
-            {DASHBOARD_BOXES.map((box) => (
-              <label key={box.codes[0]} className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={box.codes.some((code) => dashboards.includes(code))}
-                  onChange={(event) => toggleBox(box.codes, event.target.checked)}
-                />
-                {box.label}
-              </label>
-            ))}
-          </div>
+          <TabChecklist
+            catalogue={catalogue}
+            role={user.role_code}
+            selected={dashboards}
+            onChange={(next) => setDashboards(() => next)}
+            editable={tabsEditable}
+            lockedReason="A Client Admin's tabs are set by the platform administrator."
+          />
           <Button
             className="mt-2"
-            disabled={blocked || savingDashboards || !dashboardChange.changed}
+            disabled={blocked || !tabsEditable || savingDashboards || !dashboardChange.changed}
             onClick={onSaveDashboards}
           >
-            {savingDashboards ? "Saving…" : saveLabel("screens", dashboardChange)}
+            {savingDashboards ? "Saving…" : saveLabel("tabs", dashboardChange)}
           </Button>
         </div>
       </div>

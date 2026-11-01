@@ -6,7 +6,8 @@
  * about one Device put nine or fourteen of these in a row, and at the size of
  * a headline `RailTile` they read as a wall of boxes rather than an instrument
  * panel. A missing value is a faint dash with "no reading" where the unit
- * would be and the reason one hover away — a footnote line would make that
+ * would be — or "Not Available" where the Device is known not to measure it —
+ * and the reason one hover away — a footnote line would make that
  * tile taller than its neighbours, and a long reason would stretch the row.
  */
 
@@ -14,7 +15,12 @@ import type { IconComponent } from "@/components/layout/navigation";
 import { iconWell } from "@/components/icons/wells";
 import { FittedFigure } from "@/components/charts/FittedFigure";
 import { InfoHint } from "@/components/ui";
-import { UNDEFINED_DISPLAY, digitsForUnit, formatHeadline } from "@/format/value";
+import {
+  NOT_AVAILABLE_DISPLAY,
+  UNDEFINED_DISPLAY,
+  digitsForUnit,
+  formatHeadline,
+} from "@/format/value";
 import { NOT_A_UNIT, type Filled } from "./InverterView";
 
 export function ReadingTile({
@@ -50,7 +56,12 @@ export function ReadingTile({
         </span>
       </div>
       <div className="mt-1">
-        {missing ? (
+        {missing && filled.unavailable ? (
+          // Nothing here measures it — a different fact from a sensor gone quiet.
+          <span className="block py-1 text-sm font-semibold leading-tight text-ink-faint">
+            {NOT_AVAILABLE_DISPLAY}
+          </span>
+        ) : missing ? (
           <span className="flex items-baseline gap-1.5">
             <span className="figure text-xl font-semibold leading-tight text-ink-faint">{UNDEFINED_DISPLAY}</span>
             <span className="text-xs text-ink-faint">no reading</span>

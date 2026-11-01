@@ -71,6 +71,11 @@ export const KINDS: Record<string, KindInfo> = {
     label: "Device stopped sending",
     explain: "Nothing has arrived from these Devices recently, while the rest of the Plant is sending.",
   },
+  reading_constant: {
+    label: "Readings that never change",
+    explain:
+      "These have read the same value for a week while the Device's other readings changed — often an input with no sensor wired to it. If none is fitted, mark it not installed and screens say Not Available instead of the value.",
+  },
   values_rejected: {
     label: "Values being rejected",
     explain:
