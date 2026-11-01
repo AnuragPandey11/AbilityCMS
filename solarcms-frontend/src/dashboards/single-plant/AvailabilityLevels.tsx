@@ -94,9 +94,17 @@ function LevelRow({
   const text = formatRatioAsPercent(value);
   return (
     <div className="flex flex-col gap-1">
+      {/* What it lost sits beside the name, not under the meter: on its own
+          line it cost the headline strip two lines (the user's request,
+          1 Nov 2026). Truncated, with the whole of it on the tooltip. */}
       <div className="flex items-baseline justify-between gap-2">
-        <span className="cursor-help text-[13px] font-medium text-ink-muted" title={title}>
-          {name}
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="shrink-0 cursor-help text-[13px] font-medium text-ink-muted" title={title}>
+            {name}
+          </span>
+          <span className="min-w-0 truncate text-[11.5px] text-ink-faint" title={line}>
+            {line}
+          </span>
         </span>
         {value === null ? (
           // "Not Available" only where nothing measures it; before dawn, or
@@ -135,7 +143,6 @@ function LevelRow({
             ))
           : null}
       </div>
-      <span className="text-[11.5px] leading-snug text-ink-faint">{line}</span>
     </div>
   );
 }
@@ -157,17 +164,21 @@ const TITLES = {
 /** The tile's drawing: Plant large, then Grid and Inverter. */
 export function AvailabilityLevelsVisual({ levels }: { levels: AvailabilityLevels }): JSX.Element {
   return (
-    <div className="flex w-full flex-col gap-3">
+    <div className="flex w-full flex-col gap-2">
       <div className="flex flex-col gap-1">
-        <span className="cursor-help text-[13px] font-medium text-ink-muted" title={TITLES.plant}>
-          Plant
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="shrink-0 cursor-help text-[13px] font-medium text-ink-muted" title={TITLES.plant}>
+            Plant
+          </span>
+          {levels.plant.value !== null ? (
+            <span className="min-w-0 truncate text-[11.5px] text-ink-faint" title={plantLine(levels)}>
+              {plantLine(levels)}
+            </span>
+          ) : null}
         </span>
         <RatioMeter figure={levels.plant} label="Plant availability" />
-        {levels.plant.value !== null ? (
-          <span className="text-[11.5px] leading-snug text-ink-faint">{plantLine(levels)}</span>
-        ) : null}
       </div>
-      <div className="flex flex-col gap-2.5 border-t border-line pt-2.5">
+      <div className="flex flex-col gap-2 border-t border-line pt-2">
         <LevelRow
           name="Grid"
           figure={levels.grid}
@@ -210,10 +221,10 @@ export function availabilityFoot(
   return (
     <span className="flex flex-col gap-0.5">
       <span
-        title="The share of time the Plant's Devices were reporting. Silent time is never counted as down above; it is shown here instead."
+        className="cursor-help text-ink-muted"
+        title="Data availability: the share of time the Plant's Devices were reporting. Silent time is never counted as down above; it is shown here instead."
       >
-        <span className="text-ink-muted">Data availability {formatRatioAsPercent(data.value)}</span>
-        {" · Devices reporting"}
+        Data availability {formatRatioAsPercent(data.value)}
       </span>
       <span>
         {period}

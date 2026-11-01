@@ -39,6 +39,12 @@ export interface OverlaySeries {
   flaggedCount?: number;
   /** Set when this line cannot be drawn at all, and why — kept in the legend, visibly off. */
   unavailableReason?: string | null;
+  /**
+   * A commanded value — a setpoint — held until it changes: drawn as a dashed
+   * step, never a smoothed curve, which would show a command easing between
+   * two values it jumped between.
+   */
+  commanded?: boolean;
 }
 
 export function OverlayTrendChart({
@@ -172,9 +178,10 @@ export function OverlayTrendChart({
         symbolSize: 7,
         // ⚠ Never `connectNulls` (Guardrail 23).
         connectNulls: false,
-        smooth: 0.18,
-        sampling: "lttb" as const,
-        lineStyle: { width: 2, color: colorOf(index) },
+        ...(entry.commanded
+          ? { step: "end" as const, smooth: false }
+          : { smooth: 0.18, sampling: "lttb" as const }),
+        lineStyle: { width: 2, color: colorOf(index), type: entry.commanded ? ("dashed" as const) : ("solid" as const) },
         itemStyle: { color: colorOf(index) },
       };
     }),
@@ -203,11 +210,19 @@ export function OverlayTrendChart({
               className={`flex items-center gap-1.5 ${entry.unavailableReason ? "text-ink-faint" : "font-medium text-ink"}`}
               title={entry.unavailableReason ?? undefined}
             >
-              <span
-                aria-hidden
-                className="h-0.5 w-4 shrink-0 rounded-full"
-                style={{ backgroundColor: entry.unavailableReason ? token("ink-faint") : colorOf(index) }}
-              />
+              {entry.commanded ? (
+                <span
+                  aria-hidden
+                  className="w-4 shrink-0 border-t-2 border-dashed"
+                  style={{ borderColor: entry.unavailableReason ? token("ink-faint") : colorOf(index) }}
+                />
+              ) : (
+                <span
+                  aria-hidden
+                  className="h-0.5 w-4 shrink-0 rounded-full"
+                  style={{ backgroundColor: entry.unavailableReason ? token("ink-faint") : colorOf(index) }}
+                />
+              )}
               {entry.label}
               {entry.unavailableReason ? <span className="font-normal">· not reported</span> : null}
             </span>

@@ -32,6 +32,7 @@ import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/compone
 import { CommStatusPill, PlantPicker, SeverityBadge } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { OverlayTrendChart } from "@/components/charts/OverlayTrendChart";
+import { StateTrendChart } from "@/components/charts/StateTrendChart";
 import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
 import { ReadingTile } from "@/components/devices/ReadingTile";
 import { useDeviceReadings, type DeviceReadings } from "@/components/devices/useDeviceReadings";
@@ -39,7 +40,20 @@ import { TREND_WINDOWS, useDeviceTrends } from "@/components/devices/useDeviceTr
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
 import { flagState, openAlarmsByTag, type FlagState, type FlagTone } from "./equipment/flags";
-import { PPC, TRANSFORMER, VCB, type EquipmentSpec, type FigureSpec, type TrendSpec } from "./equipment/specs";
+import {
+  PPC,
+  TRANSFORMER,
+  VCB,
+  type EquipmentSpec,
+  type FigureSpec,
+  type TrendSpec,
+  type VersusSpec,
+} from "./equipment/specs";
+import { useSlotSeries } from "@/api/useSeries";
+import { TIERS, type Tier } from "@/api/schemas";
+import type { WindowRange } from "@/api/trendWindow";
+import type { TrendSeries } from "@/components/devices/useDeviceTrends";
+import { stateSeries } from "./equipment/stateSeries";
 
 /** INVERTER_2 before INVERTER_10 — codes carry numbers, and people count. */
 const byTypeThenCode = (types: string[]) => (a: DeviceListItem, b: DeviceListItem) =>
@@ -266,6 +280,9 @@ function DeviceSection({
               {readings.heard ? formatDateTime(readings.heard, timezone) : "never"}
             </span>
           </p>
+          {spec.flagTrends ? (
+            <FlagTrends spec={spec} device={device} readings={readings} timezone={timezone} embedded />
+          ) : null}
         </div>
       </Panel>
     );
@@ -396,6 +413,304 @@ function Trends({
   );
 }
 
+// ── Setpoint against actual ──────────────────────────────────────────────────
+
+/** The coarser of two tiers — the resolution both lines on one chart share. */
+function coarser(a: Tier | null, b: Tier | null): Tier | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return TIERS.indexOf(a) >= TIERS.indexOf(b) ? a : b;
+}
+
+/**
+ * One setpoint and what the Plant did, on one axis in one unit (Guardrail 22:
+ * a single scale, so the gap between the lines is a real difference). "Actual"
+ * is the slot's own resolution — the same meter the Plant's screens read — and
+ * where it answers in another unit than the setpoint (an LT meter's V against a
+ * kV setpoint) it is not drawn, and the legend says why.
+ */
+function VersusChart({
+  pair,
+  setpoint,
+  setpointTag,
+  setpointTier,
+  control,
+  plantId,
+  range,
+  live,
+  timezone,
+}: {
+  pair: VersusSpec;
+  setpoint: TrendSeries;
+  setpointTag: Tag | undefined;
+  setpointTier: Tier | null;
+  control: Filled;
+  plantId: number;
+  range: WindowRange | null;
+  live: boolean;
+  timezone: string | undefined;
+}): JSX.Element {
+  const actual = useSlotSeries(plantId, pair.actualSlot, range, { live });
+  const unit = unitOf(setpointTag);
+  const actualUnit = actual.unit && !NOT_A_UNIT.has(actual.unit) ? actual.unit : null;
+  const mismatch = actual.unavailableReason === null && actualUnit !== unit && !actual.isLoading;
+  const actualReason =
+    actual.unavailableReason ??
+    (mismatch ? `measured in ${actualUnit ?? "no unit"}, the setpoint in ${unit ?? "no unit"} — not drawn on one axis` : null);
+  const controlWord = control.value === null ? null : control.value >= 0.5 ? "TRUE" : "FALSE";
+
+  return (
+    <section className="min-w-0">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="field-label">
+          {pair.title}: setpoint vs actual{unit ? ` (${unit})` : ""}
+        </h3>
+        <span className="text-[11px] text-ink-faint" title={control.tag ? `${control.tag.name} · ${control.tag.code}` : undefined}>
+          {pair.control.label} now{" "}
+          <span className="figure font-semibold text-ink-muted">{controlWord ?? "—"}</span>
+        </span>
+      </div>
+      {!setpointTag ? (
+        <p className="py-8 text-center text-xs text-ink-faint">{control.reason ?? "This setpoint is not in the catalogue."}</p>
+      ) : (
+        <OverlayTrendChart
+          series={[
+            {
+              key: "setpoint",
+              label: "Setpoint",
+              points: setpoint.points,
+              flaggedCount: setpoint.flaggedCount,
+              commanded: true,
+            },
+            {
+              key: "actual",
+              label: actual.provenance ? `Actual · ${actual.provenance}` : "Actual",
+              points: actualReason ? [] : actual.points,
+              flaggedCount: actualReason ? 0 : actual.flaggedCount,
+              unavailableReason: actualReason,
+            },
+          ]}
+          unit={unit}
+          tier={coarser(setpointTier, actualReason ? null : actual.tier)}
+          isLoading={actual.isLoading}
+          timezone={timezone}
+          height={220}
+          day={range?.day ?? null}
+        />
+      )}
+      {actualReason ? (
+        <p className="mt-1 text-[11px] text-ink-faint">No actual line: {actualReason.replace(/[.\s]+$/, "")}.</p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * Every setpoint of the spec against what the Plant did, over one window. The
+ * setpoints come in one request (`useDeviceTrends`); each "actual" through its
+ * slot (`useSlotSeries`).
+ */
+function SetpointTrends({
+  spec,
+  device,
+  readings,
+  timezone,
+  plantId,
+}: {
+  spec: EquipmentSpec;
+  device: DeviceListItem;
+  readings: DeviceReadings;
+  timezone: string | undefined;
+  plantId: number;
+}): JSX.Element {
+  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
+  const pairs = (spec.versus ?? []).map((pair) => ({
+    pair,
+    filled: readings.fill(pair.setpoint),
+    control: readings.fill(pair.control),
+  }));
+  const trends = useDeviceTrends(
+    device,
+    pairs.map(({ filled }) => filled.tag),
+    trendWindow,
+    timezone,
+    readings.tagsById,
+  );
+  return (
+    <Panel
+      title={<span className="text-base">Setpoint vs actual</span>}
+      subtitle={
+        <span className="text-sm">
+          Each setpoint {spec.subject} commanded (dashed) against what the meter at the point of connection
+          measured. While a control is FALSE its setpoint is not in force, and 0 there means "not commanded".
+        </span>
+      }
+      actions={
+        <SegmentedControl
+          label={`${spec.noun} setpoint window`}
+          value={trendWindow}
+          onChange={setTrendWindow}
+          options={TREND_WINDOWS}
+        />
+      }
+      padding="p-4"
+    >
+      {trends.isError ? (
+        <ErrorState error={trends.error} retry={trends.refetch} />
+      ) : (
+        <div className="grid gap-x-6 gap-y-6 lg:grid-cols-2">
+          {pairs.map(({ pair, filled, control }) => (
+            <VersusChart
+              key={pair.key}
+              pair={pair}
+              setpoint={trends.seriesOf(filled.tag)}
+              setpointTag={filled.tag}
+              setpointTier={trends.tier}
+              control={control}
+              plantId={plantId}
+              range={trends.range}
+              live={trendWindow !== "yesterday"}
+              timezone={timezone}
+            />
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+// ── Contacts over time ───────────────────────────────────────────────────────
+
+/**
+ * Every contact of the spec as a step trend, TRUE/FALSE over the window — the
+ * client's reference (1 Nov 2026). One request for all of them
+ * (`useDeviceTrends`), one window, and every chart on the same x-axis so a
+ * trip on one lines up with a change on the next. `embedded` inside a
+ * breaker's own panel, where several breakers share the page.
+ */
+function FlagTrends({
+  spec,
+  device,
+  readings,
+  timezone,
+  embedded,
+}: {
+  spec: EquipmentSpec;
+  device: DeviceListItem;
+  readings: DeviceReadings;
+  timezone: string | undefined;
+  embedded: boolean;
+}): JSX.Element {
+  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
+  const flags = spec.flags.map((position: Position) => readings.fill(position));
+  const trends = useDeviceTrends(
+    device,
+    flags.map((filled) => filled.tag),
+    trendWindow,
+    timezone,
+    readings.tagsById,
+  );
+  const range = trends.range;
+  const from = range ? Date.parse(range.from) : 0;
+  const to = range ? Date.parse(range.to) : 0;
+  // A contact is never throttled, so it is due every Device cycle.
+  const cycleMs = (device.expected_interval_s ?? 0) * 1000;
+
+  const control = (
+    <SegmentedControl
+      label={`${spec.noun} signal trend window`}
+      value={trendWindow}
+      onChange={setTrendWindow}
+      options={TREND_WINDOWS}
+    />
+  );
+  const subtitle =
+    "Each signal as the equipment sent it, held until it changed. A dot marks a change; a ring marks a " +
+    "stretch that saw both states. A break is a stretch with nothing received — never drawn as FALSE.";
+
+  const body = trends.isError ? (
+    <ErrorState error={trends.error} retry={trends.refetch} />
+  ) : (
+    <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+      {flags.map((filled) => {
+        const series = stateSeries(trends.itemsOf(filled.tag), trends.tier, cycleMs);
+        const empty = series.points.every((point) => point.state === null);
+        return (
+          <section key={filled.label} className="min-w-0">
+            <div className="flex items-baseline justify-between gap-2">
+              <h3
+                className="field-label truncate"
+                title={filled.tag ? `${filled.tag.name} · ${filled.tag.code}` : undefined}
+              >
+                {filled.label}
+              </h3>
+              {series.changes.length > 0 ? (
+                <span className="shrink-0 text-[11px] text-ink-faint">
+                  {series.changes.length} change{series.changes.length === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </div>
+            {!filled.tag ? (
+              // Guardrail 26: the reason, never an empty frame.
+              <p className="py-6 text-center text-xs text-ink-faint">{filled.reason}</p>
+            ) : trends.isLoading ? (
+              <div className="h-[132px] animate-pulse rounded bg-surface-sunken" />
+            ) : empty ? (
+              <p className="flex h-[132px] items-center justify-center text-center text-xs text-ink-faint">
+                {series.flaggedCount > 0
+                  ? `${series.flaggedCount} reading(s) arrived but were flagged unreadable, so none is drawn.`
+                  : `Nothing received from ${spec.subject} for this signal in this window.`}
+              </p>
+            ) : (
+              <>
+                <StateTrendChart
+                  series={series}
+                  label={filled.label}
+                  tier={trends.tier}
+                  from={from}
+                  to={to}
+                  day={range?.day ?? null}
+                  timezone={timezone}
+                />
+                {series.flaggedCount > 0 ? (
+                  <p className="text-[11px] text-ink-faint">
+                    {series.flaggedCount} flagged reading(s) not drawn.
+                  </p>
+                ) : null}
+              </>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex flex-col gap-3 border-t border-line pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-ink">Signal trends</h3>
+            <p className="mt-0.5 text-xs text-ink-muted">{subtitle}</p>
+          </div>
+          {control}
+        </div>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Panel
+      title={<span className="text-base">Status flag trends</span>}
+      subtitle={<span className="text-sm">{subtitle}</span>}
+      actions={control}
+      padding="p-4"
+    >
+      {body}
+    </Panel>
+  );
+}
+
 // ── The screen ───────────────────────────────────────────────────────────────
 
 /** One Device on screen: its section, its trends and the header share one set of readings. */
@@ -404,17 +719,25 @@ function OneDevice({
   device,
   readings,
   timezone,
+  plantId,
 }: {
   spec: EquipmentSpec;
   device: DeviceListItem;
   readings: DeviceReadings;
   timezone: string | undefined;
+  plantId: number;
 }): JSX.Element {
   return (
     <>
       <DeviceSection spec={spec} device={device} readings={readings} timezone={timezone} headed={false} />
       {spec.trends.length > 0 ? (
         <Trends spec={spec} device={device} readings={readings} timezone={timezone} />
+      ) : null}
+      {spec.versus && spec.versus.length > 0 ? (
+        <SetpointTrends spec={spec} device={device} readings={readings} timezone={timezone} plantId={plantId} />
+      ) : null}
+      {spec.flagTrends ? (
+        <FlagTrends spec={spec} device={device} readings={readings} timezone={timezone} embedded={false} />
       ) : null}
     </>
   );
@@ -558,7 +881,14 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
       ) : (
         // Keyed on the Device, so a switch starts its trend window afresh
         // rather than carrying one Device's state onto another.
-        <OneDevice key={chosen.id} spec={spec} device={chosen} readings={readings} timezone={timezone} />
+        <OneDevice
+          key={chosen.id}
+          spec={spec}
+          device={chosen}
+          readings={readings}
+          timezone={timezone}
+          plantId={plantId ?? 0}
+        />
       )}
     </div>
   );

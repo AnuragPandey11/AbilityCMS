@@ -43,6 +43,23 @@ export interface TrendSpec {
   markPeak: boolean;
 }
 
+/**
+ * A setpoint against what the Plant actually did — the PPC's command beside
+ * the meter at the point of connection it acts on (the user's request,
+ * 1 Nov 2026). "Actual" is a dashboard **slot**, never a named Device, so it
+ * is the same claim — and the same meter — as the figure on the Plant's own
+ * screens (Guardrail 2): the ABT Meter, else the solar MFMs.
+ */
+export interface VersusSpec {
+  key: string;
+  title: string;
+  setpoint: FigureSpec;
+  /** The slot whose resolved source is "actual". */
+  actualSlot: string;
+  /** The control enable that says whether the setpoint is in force. */
+  control: Position;
+}
+
 export interface EquipmentSpec {
   /** The page title. */
   title: string;
@@ -59,6 +76,14 @@ export interface EquipmentSpec {
   /** Full Tailwind class names, never assembled (Tailwind emits only literals). */
   flagGrid: string;
   trends: TrendSpec[];
+  /** Setpoint-against-actual charts, one per pair. */
+  versus?: VersusSpec[];
+  /**
+   * A step trend of every contact in `flags` — TRUE/FALSE over the window, as
+   * the client's reference draws it (1 Nov 2026: the VCB's signals and the
+   * Transformer's status flags).
+   */
+  flagTrends: boolean;
   /**
    * Every Device of the Type at once, each in its own panel, instead of one
    * chosen from a picker. For a Type a Plant holds one per feeder (MASTER §3:
@@ -119,6 +144,7 @@ export const TRANSFORMER: EquipmentSpec = {
       markPeak: true,
     },
   ],
+  flagTrends: true,
   showEvery: false,
   empty: {
     title: "No Transformer at this Plant",
@@ -171,12 +197,49 @@ export const PPC: EquipmentSpec = {
     { label: "Frequency control", codes: ["FREQUENCY_CONTROL_ENABLE"] },
   ],
   flagGrid: "grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5",
-  trends: [
-    // The highest setpoint of the day is not a fact anyone acts on; when it
-    // changed is, and the line shows that.
-    { key: "active", title: "Active power setpoint", lines: [ACTIVE_POWER_SETPOINT], markPeak: false },
-    { key: "reactive", title: "Reactive power setpoint", lines: [REACTIVE_POWER_SETPOINT], markPeak: false },
+  // The setpoints are drawn against what the Plant did (`versus`), which
+  // replaced the two setpoint-only trends.
+  trends: [],
+  versus: [
+    {
+      key: "active",
+      title: "Active power",
+      setpoint: ACTIVE_POWER_SETPOINT,
+      // The meters only — what the Plant exports, not what the Inverters make.
+      actualSlot: "sld.grid.export_power",
+      control: { label: "Active power control", codes: ["ACTIVE_POWER_CONTROL_ENABLE"] },
+    },
+    {
+      key: "reactive",
+      title: "Reactive power",
+      setpoint: REACTIVE_POWER_SETPOINT,
+      // The meters first; the Inverters' sum where no meter reports it, named.
+      actualSlot: "status.reactive_power",
+      control: { label: "Reactive power control", codes: ["REACTIVE_POWER_CONTROL_ENABLE"] },
+    },
+    {
+      key: "voltage",
+      title: "Voltage",
+      setpoint: { label: "Voltage setpoint", codes: ["VOLTAGE_SETPOINT"], icon: IconVoltage },
+      actualSlot: "sld.grid.voltage",
+      control: { label: "Voltage control", codes: ["VOLTAGE_CONTROL_ENABLE"] },
+    },
+    {
+      key: "power_factor",
+      title: "Power factor",
+      setpoint: { label: "Power factor setpoint", codes: ["POWER_FACTOR_SETPOINT"], icon: IconGauge },
+      actualSlot: "sld.grid.power_factor",
+      control: { label: "Power factor control", codes: ["POWER_FACTOR_CONTROL_ENABLE"] },
+    },
+    {
+      key: "frequency",
+      title: "Frequency",
+      setpoint: { label: "Frequency setpoint", codes: ["FREQUENCY_SETPOINT"], icon: IconFrequency },
+      actualSlot: "sld.grid.frequency",
+      control: { label: "Frequency control", codes: ["FREQUENCY_CONTROL_ENABLE"] },
+    },
   ],
+  flagTrends: true,
   showEvery: false,
   empty: {
     title: "No Power Plant Controller at this Plant",
@@ -212,6 +275,7 @@ export const VCB: EquipmentSpec = {
   ],
   flagGrid: "grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4",
   trends: [],
+  flagTrends: true,
   showEvery: true,
   empty: {
     title: "No VCB at this Plant",

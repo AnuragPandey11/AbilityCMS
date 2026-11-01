@@ -226,7 +226,7 @@ export function RatioDial({
     <div className="flex w-full flex-col items-center gap-1">
       <svg
         viewBox="0 0 200 138"
-        className="block w-full max-w-[220px] overflow-visible"
+        className="block w-full max-w-[190px] overflow-visible"
         role="img"
         aria-label={aria}
       >
@@ -318,10 +318,12 @@ export function RatioDial({
         )}
       </svg>
 
-      {/* Held open when empty, so every tile's footnote sits on one line.
-          14px and bold, white in dark mode (`.tile-note`), like the tile's own
-          footnote; the amber warning below keeps its colour. */}
-      <div className="tile-note flex min-h-5 flex-col items-center text-center text-sm font-semibold leading-snug text-ink-faint">
+      {/* Only when there is something to say: the tile's flex already keeps
+          every footnote in the row on one line, and an empty slot held open
+          cost the whole strip a line. 14px and bold, white in dark mode
+          (`.tile-note`), like the tile's own footnote. */}
+      {value === null || implausible || verdict ? (
+      <div className="tile-note flex flex-col items-center text-center text-sm font-semibold leading-snug text-ink-faint">
         {value === null ? (
           <span>{sentence(figure?.undefined_reason) ?? "Not defined for this period."}</span>
         ) : implausible ? (
@@ -345,6 +347,7 @@ export function RatioDial({
           </span>
         ) : null}
       </div>
+      ) : null}
 
       {comparison ? <ComparisonLine comparison={comparison} label={label} /> : null}
     </div>

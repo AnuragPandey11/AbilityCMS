@@ -10,6 +10,7 @@
 import type { AlarmQuery } from "./endpoints/alarms";
 import type { InverterRankingQuery } from "./endpoints/plants";
 import type { ReadingsQuery } from "./endpoints/readings";
+import type { RevenueGranularity, RevenuePeriodCode } from "./endpoints/revenue";
 import type { KpiPeriod } from "./schemas";
 
 export const qk = {
@@ -54,6 +55,11 @@ export const qk = {
   // Under the Plant: what its status codes mean, and its forecast.
   statusCodes: (id: number) => ["plants", id, "status-codes"] as const,
   forecast: (id: number) => ["plants", id, "forecast"] as const,
+  // Under the Plant, so a tariff edit refreshes them.
+  plantRevenue: (id: number) => ["plants", id, "revenue"] as const,
+  revenueTrend: (id: number, granularity: RevenueGranularity) =>
+    ["plants", id, "revenue", "trend", granularity] as const,
+  fleetRevenue: (period: RevenuePeriodCode) => ["revenue", "plants", period] as const,
 
   device: (id: number) => ["devices", id] as const,
   deviceOperatingStatus: (id: number) => ["devices", id, "operating-status"] as const,

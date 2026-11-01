@@ -499,10 +499,12 @@ export function PlantStatusCard({
   const rows: Row[] = [
     derived(stateRow(status)),
     derived(gridRow(status)),
-    ...WEATHER_ROWS.map(({ code, label }) => slotRow(label, bySlot.get(code), slots)),
+    // Today's start and peak under the Plant and grid state, the weather after
+    // (the user's order, 1 Nov 2026).
     derived(startRow(status, timeZone)),
-    derived(stopRow(status, timeZone)),
     derived(peakRow(status, timeZone)),
+    ...WEATHER_ROWS.map(({ code, label }) => slotRow(label, bySlot.get(code), slots)),
+    derived(stopRow(status, timeZone)),
   ];
   const badge = commBadge(health);
   // When anything at the Plant was last heard. The Plant KPI panel is written

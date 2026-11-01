@@ -11,6 +11,7 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import * as catalogApi from "./endpoints/catalog";
 import * as dataIssuesApi from "./endpoints/dataIssues";
 import * as forecastApi from "./endpoints/forecast";
+import * as revenueApi from "./endpoints/revenue";
 import * as statusCodesApi from "./endpoints/statusCodes";
 import * as regionsApi from "./endpoints/regions";
 import * as plantsApi from "./endpoints/plants";
@@ -544,6 +545,47 @@ export function usePlantForecast(plantId: number | null | undefined, enabled = t
     staleTime: 60_000,
     refetchInterval: 120_000,
     retry: false,
+  });
+}
+
+// ── Revenue ─────────────────────────────────────────────────────────────────
+
+/** Today, this month and this financial year. Registers move by the minute. */
+export function usePlantRevenue(plantId: number | null) {
+  return useQuery({
+    queryKey: qk.plantRevenue(plantId ?? 0),
+    queryFn: () => revenueApi.plantRevenue(plantId as number),
+    enabled: plantId !== null,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    retry: false,
+    placeholderData: (previous) => (previous && previous.plant_id === plantId ? previous : undefined),
+    ...ON_RETURN,
+  });
+}
+
+export function useRevenueTrend(plantId: number | null, granularity: revenueApi.RevenueGranularity) {
+  return useQuery({
+    queryKey: qk.revenueTrend(plantId ?? 0, granularity),
+    queryFn: () => revenueApi.revenueTrend(plantId as number, granularity),
+    enabled: plantId !== null,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    retry: false,
+    placeholderData: (previous) =>
+      previous && previous.plant_id === plantId && previous.granularity === granularity ? previous : undefined,
+    ...ON_RETURN,
+  });
+}
+
+export function useFleetRevenue(period: revenueApi.RevenuePeriodCode) {
+  return useQuery({
+    queryKey: qk.fleetRevenue(period),
+    queryFn: () => revenueApi.fleetRevenue(period),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    retry: false,
+    ...ON_RETURN,
   });
 }
 

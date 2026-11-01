@@ -8,7 +8,7 @@
  * alike, and a tile cannot be yellow on one screen and teal on the next.
  *
  *   yellow  the sun and what it drives: instantaneous power, every irradiance.
- *   green   what generation adds up to: an energy counter, CO₂ avoided.
+ *   green   what generation adds up to: an energy counter, CO₂ avoided, revenue.
  *   red     the Alarm bell, a warning, a temperature.
  *   accent  everything else — ratios, time, communication, weather, equipment.
  *
@@ -32,6 +32,7 @@ import {
   IconIrradianceTilted,
   IconLeaf,
   IconPower,
+  IconRevenue,
   IconSun,
   IconThermometer,
   IconWarning,
@@ -61,6 +62,7 @@ const HUE_BY_ICON = new Map<ComponentType<IconProps>, WellHue>([
   [IconDiffuse, "yellow"],
   [IconEnergy, "green"],
   [IconLeaf, "green"],
+  [IconRevenue, "green"],
   [IconAlarm, "red"],
   [IconWarning, "red"],
   [IconThermometer, "red"],
