@@ -17,18 +17,18 @@ def fold(*args, **kwargs) -> dict[int, InverterTime]:  # type: ignore[no-untyped
 
 
 def inverter(
-    device_id: int, output: list[float | None], *, kwp: float | None = 100.0,
+    device_id: int, output: list[float | None], *, rated: float | None = 100.0,
     hold: int = 0, planned: list[tuple[int, int]] | None = None,
 ) -> InverterMinutes:
     """One Inverter from a per-minute list of kW; None is a minute with no reading."""
     minutes = [t for t, value in enumerate(output) if value is not None]
     values = [float(value) for value in output if value is not None]
     return InverterMinutes(
-        device_id=device_id, dc_kwp=kwp, hold_minutes=hold, minutes=minutes,
+        device_id=device_id, rated_kw=rated, hold_minutes=hold, minutes=minutes,
         mean_kw=values, peak_kw=values, planned=planned or [])
 
 
-def test_a_stop_while_the_others_run_is_downtime_and_costs_their_rate() -> None:
+def test_a_stop_while_the_others_run_is_downtime_and_costs_its_rating() -> None:
     day = 120
     running = [50.0] * day
     stopped = [50.0] * 40 + [0.0] * 30 + [50.0] * 50
@@ -38,23 +38,23 @@ def test_a_stop_while_the_others_run_is_downtime_and_costs_their_rate() -> None:
     assert down.downtime_minutes == 30
     assert down.judged_minutes == day
     assert down.availability == pytest.approx(90 / 120)
-    # Neighbours made 50 kW from 100 kWp = 0.5 kW per kWp; this one has 100 kWp,
-    # so each down minute lost 50 kW for a minute.
-    assert down.lost_kwh == pytest.approx(50.0 * 30 / 60)
+    # Rated 100 kW, down 30 minutes: rating times hours = 50 kWh (the user's
+    # formula), whatever the neighbours happened to make.
+    assert down.lost_kwh == pytest.approx(100.0 * 30 / 60)
     assert [(s.start, s.end) for s in down.stops] == [(40, 70)]
     assert result[1].availability == 1.0
     assert result[1].lost_kwh == 0.0
 
 
-def test_lost_energy_scales_with_the_stopped_inverter_own_size() -> None:
+def test_lost_energy_is_the_stopped_inverters_own_rating_times_hours() -> None:
     running = [60.0] * 20
     stopped = [0.0] * 20
     result = fold([
-        inverter(1, running, kwp=120.0), inverter(2, running, kwp=120.0),
-        inverter(3, stopped, kwp=240.0),
+        inverter(1, running, rated=120.0), inverter(2, running, rated=120.0),
+        inverter(3, stopped, rated=240.0),
     ], 20, min_stop_minutes=10)
-    # 0.5 kW per kWp times 240 kWp = 120 kW for 20 minutes.
-    assert result[3].lost_kwh == pytest.approx(40.0)
+    # 240 kW for 20 minutes.
+    assert result[3].lost_kwh == pytest.approx(80.0)
 
 
 def test_night_judges_nobody() -> None:
@@ -123,28 +123,28 @@ def test_planned_work_is_neither_available_nor_down() -> None:
     assert result[3].availability == 1.0
 
 
-def test_an_unsized_inverter_that_stopped_has_no_loss_figure() -> None:
+def test_an_unrated_inverter_that_stopped_has_no_loss_figure() -> None:
     running = [40.0] * 30
     stopped = [0.0] * 30
     result = fold([inverter(1, running), inverter(2, running),
-                   inverter(3, stopped, kwp=None)], 30, min_stop_minutes=10)
+                   inverter(3, stopped, rated=None)], 30, min_stop_minutes=10)
     assert result[3].downtime_minutes == 30
     assert result[3].lost_kwh is None
-    assert result[3].lost_reason == "no DC size is recorded for this Inverter"
+    assert result[3].lost_reason == "no rated capacity is recorded for this Inverter"
 
 
-def test_an_unsized_inverter_that_never_stopped_lost_nothing() -> None:
+def test_an_unrated_inverter_that_never_stopped_lost_nothing() -> None:
     running = [40.0] * 30
-    result = fold([inverter(1, running), inverter(2, running, kwp=None)], 30)
+    result = fold([inverter(1, running), inverter(2, running, rated=None)], 30)
     assert result[2].lost_kwh == 0.0
 
 
-def test_unsized_neighbours_leave_the_loss_undefined() -> None:
+def test_unrated_neighbours_do_not_matter() -> None:
+    # Only the stopped Inverter's own rating enters its loss.
     running = [40.0] * 30
-    result = fold([inverter(1, running, kwp=None), inverter(2, running, kwp=None),
+    result = fold([inverter(1, running, rated=None), inverter(2, running, rated=None),
                    inverter(3, [0.0] * 30)], 30, min_stop_minutes=10)
-    assert result[3].lost_kwh is None
-    assert result[3].lost_reason == "no generating neighbour has a DC size recorded"
+    assert result[3].lost_kwh == pytest.approx(50.0)
 
 
 def test_a_stop_still_running_at_the_end_is_marked_ongoing() -> None:
@@ -158,7 +158,7 @@ def test_a_stop_still_running_at_the_end_is_marked_ongoing() -> None:
 
 def test_a_value_held_from_before_the_window_counts_inside_it() -> None:
     # A reading one minute before the window (index -1) still holds at minute 0.
-    held = InverterMinutes(device_id=2, dc_kwp=100.0, hold_minutes=2, minutes=[-1, 2],
+    held = InverterMinutes(device_id=2, rated_kw=100.0, hold_minutes=2, minutes=[-1, 2],
                            mean_kw=[40.0, 40.0], peak_kw=[40.0, 40.0])
     result = fold([inverter(1, [40.0] * 3), held], 3)
     assert result[2].no_data_minutes == 0

@@ -21,6 +21,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import text
 
+from solarcms.api import pages
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.schemas.reports import StatusCodeIn
 
@@ -102,7 +103,7 @@ async def list_status_codes(
     }
 
 
-@router.put("/plants/{plant_id}/status-codes")
+@router.put("/plants/{plant_id}/status-codes", dependencies=[pages.STATUS_MEANINGS])
 async def set_status_code(
     plant_id: int, body: StatusCodeIn, session: SessionDep,
     user: CurrentUser = Depends(require_permission("config.modify")),
@@ -143,7 +144,7 @@ async def set_status_code(
     return {"id": row, **body.model_dump()}
 
 
-@router.delete("/plants/{plant_id}/status-codes/{code_id}",
+@router.delete("/plants/{plant_id}/status-codes/{code_id}", dependencies=[pages.STATUS_MEANINGS],
                status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_status_code(
     plant_id: int, code_id: int, session: SessionDep,

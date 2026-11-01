@@ -27,7 +27,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { PageLink } from "@/components/layout/PageLink";
 import { usePlant, usePlantDevices, usePlantStrings } from "@/api/hooks";
 import type {
   DeviceListItem,
@@ -288,12 +288,13 @@ export function Heatmap({
               >
                 {inverter.string_count ? "No PV strings reported." : "No string count recorded."}{" "}
                 {canManage ? (
-                  <Link
+                  <PageLink
+                    page="admin_bindings"
                     to={`/admin/bindings?device=${inverter.device_id}`}
                     className="font-medium text-accent hover:underline"
                   >
                     Record it in Tag Mapping
-                  </Link>
+                  </PageLink>
                 ) : null}
               </p>
             )}

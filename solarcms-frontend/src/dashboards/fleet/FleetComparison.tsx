@@ -74,7 +74,7 @@ const METRICS = [
   },
   {
     key: "availability",
-    label: "Availability",
+    label: "Data availability",
     unit: "%",
     kind: "ratio" as const,
     of: (kpi: PlantKpis) => kpi.availability.value,

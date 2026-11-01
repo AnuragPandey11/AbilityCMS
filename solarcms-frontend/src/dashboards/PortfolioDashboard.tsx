@@ -616,7 +616,7 @@ export function PortfolioDashboard(): JSX.Element {
             "Capacity utilisation factor, capacity-weighted.",
           )}
           {ratioTile(
-            "Fleet availability",
+            "Fleet data availability",
             IconAvailability,
             "accent",
             fleetAvailability,

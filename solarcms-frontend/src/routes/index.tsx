@@ -43,7 +43,7 @@ import { UsersAdmin } from "@/admin/UsersAdmin";
 import { AlarmEmailsAdmin } from "@/admin/AlarmEmailsAdmin";
 import { SystemAdmin } from "@/admin/SystemAdmin";
 import { SystemHealthAdmin } from "@/admin/SystemHealthAdmin";
-import { usePermission, type Permission } from "@/auth/usePermission";
+import { useAdminPage, usePermission, type Permission } from "@/auth/usePermission";
 import { ArtPreview } from "@/dev/ArtPreview";
 import { ChartPreview } from "@/dev/ChartPreview";
 import { ForbiddenState } from "@/components/state";
@@ -147,14 +147,23 @@ function DashboardRoute(): JSX.Element {
 
 function RequirePermission({
   permission,
+  page,
   children,
 }: {
   permission: Permission;
+  /** The tab that must be ticked for this User (migration 0046). */
+  page?: string;
   children: JSX.Element;
 }): JSX.Element {
   const allowed = usePermission(permission);
+  const ticked = useAdminPage(page);
   if (!allowed) {
     return <ForbiddenState detail={`This screen requires the ${permission} permission.`} />;
+  }
+  if (!ticked) {
+    return (
+      <ForbiddenState detail="This page has not been given to your account. A platform administrator gives pages under Users." />
+    );
   }
   return children;
 }
@@ -189,7 +198,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/onboarding"
           element={
-            <RequirePermission permission="plant.manage">
+            <RequirePermission permission="plant.manage" page="admin_onboarding">
               <OnboardingWizard />
             </RequirePermission>
           }
@@ -205,7 +214,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/data-issues"
           element={
-            <RequirePermission permission="config.modify">
+            <RequirePermission permission="config.modify" page="admin_data_issues">
               <DataIssuesAdmin />
             </RequirePermission>
           }
@@ -213,7 +222,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/plant-setup"
           element={
-            <RequirePermission permission="plant.manage">
+            <RequirePermission permission="plant.manage" page="admin_plant_setup">
               <PlantEditor />
             </RequirePermission>
           }
@@ -221,7 +230,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/hierarchy"
           element={
-            <RequirePermission permission="plant.manage">
+            <RequirePermission permission="plant.manage" page="admin_hierarchy">
               <PlantHierarchyEditor />
             </RequirePermission>
           }
@@ -229,7 +238,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/bindings"
           element={
-            <RequirePermission permission="config.modify">
+            <RequirePermission permission="config.modify" page="admin_bindings">
               <DeviceBindingsAdmin />
             </RequirePermission>
           }
@@ -237,7 +246,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/alarm-rules"
           element={
-            <RequirePermission permission="config.modify">
+            <RequirePermission permission="config.modify" page="admin_alarm_rules">
               <AlarmRulesAdmin />
             </RequirePermission>
           }
@@ -245,7 +254,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/users"
           element={
-            <RequirePermission permission="user.manage">
+            <RequirePermission permission="user.manage" page="admin_users">
               <UsersAdmin />
             </RequirePermission>
           }
@@ -253,7 +262,7 @@ export function AppRoutes(): JSX.Element {
         <Route
           path="/admin/alarm-emails"
           element={
-            <RequirePermission permission="user.manage">
+            <RequirePermission permission="user.manage" page="admin_alarm_emails">
               <AlarmEmailsAdmin />
             </RequirePermission>
           }

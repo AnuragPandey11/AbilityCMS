@@ -689,6 +689,35 @@ GRID_STATUS_SOURCE: Final = ("VCB", "VCB_ON_FEEDBACK")
 INVERTER_PRODUCING_ABOVE_KW: Final = PLANT_START_ABOVE_KW
 INVERTER_DOWNTIME_MIN_MINUTES: Final = 10
 
+# ── Grid, Plant and Inverter availability — ⚠ PROPOSED (1 Nov 2026). The
+# definitions are the client's (Grid: voltage and frequency within limits;
+# Plant: able to generate; Inverter: healthy and ready); every number below is
+# ours, pending OPEN-16. `domain/availability.py` holds the rules.
+#
+# Each is counted over **daylight** minutes only: the brightest measuring
+# station's GHI at or above this, or — where no station is measuring — the sun
+# this high above the horizon at the Plant's latitude and longitude. Night has
+# nothing to be available for, and counting it would put every Plant near 50%.
+AVAILABILITY_DAYLIGHT_W_PER_M2: Final = 50.0
+AVAILABILITY_DAYLIGHT_SUN_ELEVATION_DEG: Final = 10.0
+# Grid frequency within this band counts as within limits. The generating
+# band of India's Grid Code; ⚠ the client's own limits are wanted. There is no
+# voltage band yet: no Plant records its nominal voltage, so voltage is judged
+# only as present or absent.
+AVAILABILITY_GRID_FREQUENCY_HZ: Final = (47.5, 52.5)
+# A grid reading within this share of its Tag's range of zero is "absent" —
+# 0 Hz, 0 kV, and float noise for zero (OASIS_2MW's meters send 1.5E-17). The
+# same share Data Issues reads as equipment saying "nothing".
+AVAILABILITY_ZERO_FRACTION: Final = 0.01
+# The PPC holding output at or below this with active power control enabled
+# is curtailment: those minutes are neither available nor down. A setpoint of
+# 0 with control disabled is "not commanded" and is ignored.
+AVAILABILITY_CURTAILED_AT_OR_BELOW_KW: Final = 0.5
+# How many completed days a request works out at most; the rest are worked out
+# on the next requests (each day once, then kept), and the response says how
+# many are still to come. A month is one pass.
+AVAILABILITY_DAYS_PER_PASS: Final = 31
+
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1519,6 +1548,23 @@ DATA_ISSUE_IDLE_ZERO_FRACTION: Final = 0.01
 # How many recent messages of an unregistered topic its interval is measured
 # over — as discovery's topic view measures it, by the median gap.
 DATA_ISSUE_INTERVAL_SAMPLE: Final = 50
+# A mapped reading that has held one value for this long, on a Device whose
+# other readings changed meanwhile, is listed as possibly having no sensor
+# behind it (the client's request, 1 Nov 2026: a weather station with no cloud
+# cover sensor sends `CC` = 0, and Plant Status printed "0.00 %"). A fixed
+# register map sends every input, and one with nothing wired to it reads its
+# default for ever. A week, so a clear or still spell rarely trips it; a dry
+# one will trip a rain gauge, which is acknowledged. ⚠ PROPOSED — it only
+# *asks*: whether a sensor is fitted is the client's to say, never inferred
+# from a reading (a cloudless week really is 0 %).
+DATA_ISSUE_CONSTANT_WINDOW_S: Final = 7 * 86_400
+# Judged only once this many hours of the window held good readings — three
+# days' worth — so a Device registered yesterday is not asked about its first day.
+DATA_ISSUE_CONSTANT_MIN_HOURS: Final = 72
+# "One value" allows for float noise: OASIS_2MW's meters send 1.5E-17 for zero,
+# and a comparison with zero that does not allow for it is how a night of noise
+# froze a screen (20 Oct 2026).
+DATA_ISSUE_CONSTANT_SPREAD: Final = 1e-9
 
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -9,7 +9,24 @@
  * the call regardless; this only keeps the UI coherent.
  */
 
+import type { Me } from "@/api/schemas";
 import { useAuth } from "./AuthProvider";
+
+/**
+ * Whether this session may open an admin page (A-3, migration 0046): a
+ * platform administrator always; anyone else only where the page is ticked for
+ * them. The page's permission is checked separately — a tick grants none. An
+ * older server sends no `admin_pages`, and then nothing is filtered here.
+ */
+export function canOpenPage(me: Me | null | undefined, page: string | undefined): boolean {
+  if (!page || !me || me.platform_admin || me.admin_pages === undefined) return true;
+  return me.admin_pages.includes(page);
+}
+
+export function useAdminPage(page: string | undefined): boolean {
+  const { me } = useAuth();
+  return canOpenPage(me, page);
+}
 
 export type Permission =
   | "dashboard.view"

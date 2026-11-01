@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from solarcms.domain.assumptions import QUALITY_OUT_OF_RANGE as OOR
 from solarcms.domain.assumptions import QUALITY_UNPARSEABLE as EMPTY
@@ -12,6 +12,7 @@ from solarcms.domain.data_issues import (
     DeviceFact,
     OwnTopicFact,
     PlantFacts,
+    ReadingSpan,
     ReplayBurst,
     SunlightSetAside,
     TagHealth,
@@ -24,7 +25,8 @@ NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 TYPES = frozenset({"INVERTER", "SMB", "MFM", "WMS", "PLANT_KPI", "VCB"})
 TAGS = frozenset({
     "AC_ACTIVE_POWER", "FREQUENCY", "HV_VOLTAGE_RY", "AMBIENT_TEMPERATURE", "GHI",
-    "INVERTER_EFFICIENCY", *(f"PV{n}_CURRENT" for n in range(1, 29)),
+    "INVERTER_EFFICIENCY", "CLOUD_COVER", "WIND_SPEED",
+    *(f"PV{n}_CURRENT" for n in range(1, 29)),
 })
 
 
@@ -232,6 +234,99 @@ class TestInterval:
         meter = publishing(device(expected_interval_s=30, measured_interval_s=300.0,
                                   measured_gaps=2))
         assert find_issues(plant(meter)) == []
+
+
+def span(tag: str, low: float, high: float, *, hours: int = 168) -> ReadingSpan:
+    return ReadingSpan(tag_code=tag, low=low, high=high, hours=hours,
+                       first=NOW - timedelta(hours=hours), last=NOW - timedelta(hours=1))
+
+
+class TestConstantReadings:
+    """A weather station with no cloud cover sensor sends CC = 0 (1 Nov 2026)."""
+
+    def station(self, *spans: ReadingSpan, **kw: object) -> DeviceFact:
+        return publishing(
+            device(4, "WMS", "WMS",
+                   bindings=(binding(41, "CC", "CLOUD_COVER"),
+                             binding(42, "AT", "AMBIENT_TEMPERATURE"),
+                             binding(43, "WS", "WIND_SPEED")),
+                   reading_spans=spans, **kw),
+            CC=0, AT=26.5, WS=0.6,
+        )
+
+    def test_a_reading_that_never_moved_is_asked_about(self) -> None:
+        wms = self.station(span("CLOUD_COVER", 0.0, 0.0),
+                           span("AMBIENT_TEMPERATURE", 14.0, 31.0))
+        [issue] = find_issues(plant(wms))
+        assert issue.kind == "reading_constant"
+        assert issue.category == "data_wrong"
+        assert issue.key == "constant:4:CC"
+        assert issue.title == "WMS: CC has read 0 for 7 days"
+        assert issue.facts["binding_id"] == 41
+        assert issue.facts["value"] == 0.0
+        assert "Not Available" in issue.detail
+
+    def test_float_noise_around_zero_is_still_one_value(self) -> None:
+        wms = self.station(span("CLOUD_COVER", 1.5e-17, 2.5e-17),
+                           span("AMBIENT_TEMPERATURE", 14.0, 31.0))
+        [issue] = find_issues(plant(wms))
+        assert issue.facts["value"] == 0.0
+
+    def test_a_reading_that_moved_at_all_is_not(self) -> None:
+        wms = self.station(span("CLOUD_COVER", 0.0, 12.5),
+                           span("AMBIENT_TEMPERATURE", 14.0, 31.0))
+        assert find_issues(plant(wms)) == []
+
+    def test_nothing_is_asked_where_nothing_on_the_device_moved(self) -> None:
+        # Idle or stuck as a whole — not one input with nothing wired to it.
+        wms = self.station(span("CLOUD_COVER", 0.0, 0.0),
+                           span("AMBIENT_TEMPERATURE", 25.0, 25.0))
+        assert find_issues(plant(wms)) == []
+
+    def test_too_few_hours_to_judge(self) -> None:
+        wms = self.station(span("CLOUD_COVER", 0.0, 0.0, hours=48),
+                           span("AMBIENT_TEMPERATURE", 14.0, 31.0))
+        assert find_issues(plant(wms)) == []
+
+    def test_a_mapping_already_switched_off_is_not_asked_again(self) -> None:
+        wms = replace(
+            self.station(span("CLOUD_COVER", 0.0, 0.0),
+                         span("AMBIENT_TEMPERATURE", 14.0, 31.0)),
+            bindings=(binding(41, "CC", "CLOUD_COVER", enabled=False),
+                      binding(42, "AT", "AMBIENT_TEMPERATURE"),
+                      binding(43, "WS", "WIND_SPEED")),
+        )
+        assert find_issues(plant(wms)) == []
+
+    def test_a_reading_that_stopped_arriving_is_left_to_its_own_row(self) -> None:
+        wms = replace(
+            self.station(span("CLOUD_COVER", 0.0, 0.0),
+                         span("AMBIENT_TEMPERATURE", 14.0, 31.0)),
+            recent_keys={"AT": 26.5, "WS": 0.6},
+        )
+        assert kinds(plant(wms)) == ["binding_silent"]
+
+    def test_pv_inputs_are_left_to_the_string_count(self) -> None:
+        inverter = publishing(
+            device(5, "INVERTER_1", "INVERTER",
+                   bindings=(binding(51, "I7", "PV7_CURRENT"),
+                             binding(52, "PAC", "AC_ACTIVE_POWER")),
+                   reading_spans=(span("PV7_CURRENT", 0.0, 0.0),
+                                  span("AC_ACTIVE_POWER", 0.0, 480.0))),
+            I7=0, PAC=310.0,
+        )
+        assert "reading_constant" not in kinds(plant(inverter))
+
+    def test_a_held_value_is_named_with_its_unit(self) -> None:
+        wms = replace(
+            self.station(span("CLOUD_COVER", 12.0, 12.0),
+                         span("AMBIENT_TEMPERATURE", 14.0, 31.0, hours=100)),
+            bindings=(replace(binding(41, "CC", "CLOUD_COVER"), unit="%"),
+                      binding(42, "AT", "AMBIENT_TEMPERATURE"),
+                      binding(43, "WS", "WIND_SPEED")),
+        )
+        [issue] = find_issues(plant(wms))
+        assert issue.title == "WMS: CC has read 12 % for 7 days"
 
 
 class TestRejectedValues:

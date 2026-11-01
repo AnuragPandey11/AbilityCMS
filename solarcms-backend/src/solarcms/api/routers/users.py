@@ -5,17 +5,120 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from solarcms.api.auth import hash_password
-from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.api.deps import CurrentUser, SessionDep, require_page, require_permission
+from solarcms.domain.access import USERS_PAGE, Tab, grant_refusal, offered
 from solarcms.schemas.identity import UserUpdate
 
+# Every route here is the Users page's, and needs it ticked (migration 0046) as
+# well as `user.manage`. Listing Users also serves Alarm Emails.
 router = APIRouter(prefix="/users", tags=["users"])
+_USERS_PAGE = Depends(require_page(USERS_PAGE))
 
 
-@router.get("")
+async def _catalogue(session: AsyncSession) -> dict[str, Tab]:
+    rows = (await session.execute(text(
+        "SELECT code, name, kind, permission FROM dashboards ORDER BY sort_order"))).all()
+    return {r.code: Tab(r.code, r.name, r.kind, r.permission) for r in rows}
+
+
+async def _role_permissions(session: AsyncSession, role_code: str) -> frozenset[str]:
+    rows = (await session.execute(text("""
+        SELECT p.code FROM role_permissions rp
+          JOIN roles r ON r.id = rp.role_id
+          JOIN permissions p ON p.id = rp.permission_id
+         WHERE r.code = :role
+    """), {"role": role_code})).all()
+    return frozenset(r.code for r in rows)
+
+
+async def _actor_tabs(session: AsyncSession, actor: CurrentUser) -> frozenset[str]:
+    rows = (await session.execute(text("""
+        SELECT d.code FROM user_dashboard_access uda
+          JOIN memberships m ON m.id = uda.membership_id
+          JOIN dashboards d  ON d.id = uda.dashboard_id
+         WHERE m.user_id = :user_id AND m.client_id = :client_id
+    """), {"user_id": actor.user_id, "client_id": actor.client_id})).all()
+    return frozenset(r.code for r in rows)
+
+
+async def _other_admins_with_users(
+    session: AsyncSession, client_id: int, user_id: int,
+) -> int:
+    """Active Client Admins of the Client, other than this one, who can open Users."""
+    return int((await session.execute(text("""
+        SELECT count(*) FROM memberships m
+          JOIN roles r ON r.id = m.role_id AND r.code = 'admin'
+          JOIN users u ON u.id = m.user_id AND u.is_active
+          JOIN user_dashboard_access uda ON uda.membership_id = m.id
+          JOIN dashboards d ON d.id = uda.dashboard_id AND d.code = :users_page
+         WHERE m.client_id = :client_id AND m.user_id <> :user_id
+    """), {"client_id": client_id, "user_id": user_id, "users_page": USERS_PAGE})).scalar() or 0)
+
+
+async def _check_grant(
+    session: AsyncSession, actor: CurrentUser, *, client_id: int, user_id: int,
+    role_code: str, codes: list[str],
+) -> None:
+    """Refuse tabs this actor may not give this User (`domain/access.grant_refusal`)."""
+    refusal = grant_refusal(
+        requested=codes,
+        catalogue=await _catalogue(session),
+        target_role=role_code,
+        role_permissions=await _role_permissions(session, role_code),
+        actor_is_platform_admin=actor.is_platform_admin,
+        actor_tabs=await _actor_tabs(session, actor),
+        other_admins_with_users=await _other_admins_with_users(session, client_id, user_id),
+    )
+    if refusal is not None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN if refusal.forbidden
+            else status.HTTP_422_UNPROCESSABLE_ENTITY,
+            refusal.reason)
+
+
+async def _grant(session: AsyncSession, membership_id: int, codes: list[str]) -> None:
+    await session.execute(
+        text("DELETE FROM user_dashboard_access WHERE membership_id = :m"),
+        {"m": membership_id})
+    for code in codes:
+        await session.execute(text("""
+            INSERT INTO user_dashboard_access (membership_id, dashboard_id)
+            SELECT :m, id FROM dashboards WHERE code = :code ON CONFLICT DO NOTHING
+        """), {"m": membership_id, "code": code})
+
+
+@router.get("/access-catalogue", dependencies=[_USERS_PAGE])
+async def access_catalogue(
+    session: SessionDep,
+    actor: CurrentUser = Depends(require_permission("user.manage")),
+) -> dict[str, Any]:
+    """Every tab, which a role can use, and which this caller may give.
+
+    The checkboxes on the Users screen: every screen and each admin page, the
+    ones a role cannot use (an admin page whose permission it lacks) offered
+    disabled, and — for a Client Admin — only their own tabs givable, since a
+    tick from them may never exceed what they hold.
+    """
+    catalogue = await _catalogue(session)
+    roles = {}
+    for code in ("admin", "employee", "guest"):
+        roles[code] = offered(catalogue, await _role_permissions(session, code))
+    return {
+        "tabs": [{"code": t.code, "name": t.name, "kind": t.kind,
+                  "permission": t.permission} for t in catalogue.values()],
+        "offered_by_role": roles,
+        # None: a platform administrator may give anything, to anyone.
+        "givable": None if actor.is_platform_admin else sorted(await _actor_tabs(session, actor)),
+        "sets_client_admin_tabs": actor.is_platform_admin,
+    }
+
+
+@router.get("", dependencies=[Depends(require_page(USERS_PAGE, "admin_alarm_emails"))])
 async def list_users(
     session: SessionDep,
     _: CurrentUser = Depends(require_permission("user.manage")),
@@ -48,10 +151,11 @@ async def list_users(
     return [dict(row._mapping) for row in rows]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[_USERS_PAGE])
 async def create_user(
     email: str, password: str, full_name: str, role_code: str, session: SessionDep,
     client_id: int | None = None,
+    dashboard_codes: list[str] | None = Body(default=None, embed=True),
     user: CurrentUser = Depends(require_permission("user.manage")),
 ) -> dict[str, Any]:
     """Create a User in a Client.
@@ -83,6 +187,16 @@ async def create_user(
         # mint a platform administrator.
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "role must be admin, employee or guest")
+    if role_code == "admin" and not user.is_platform_admin:
+        # A Client Admin's tabs are the platform administrator's to set
+        # (migration 0046), and one created with none could open nothing.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "a Client Admin is created by the platform administrator, who sets the tabs "
+            "they may open")
+    codes = list(dict.fromkeys(dashboard_codes or []))
+    await _check_grant(session, user, client_id=target_client_id, user_id=0,
+                       role_code=role_code, codes=codes)
 
     row = (await session.execute(text("""
         INSERT INTO users (email, password_hash, full_name)
@@ -93,25 +207,32 @@ async def create_user(
            "full_name": full_name})).first()
     assert row is not None
 
-    await session.execute(text("""
+    membership_id = (await session.execute(text("""
         INSERT INTO memberships (user_id, client_id, role_id)
         SELECT :user_id, :client_id, id FROM roles WHERE code = :role_code
         ON CONFLICT (user_id, client_id) DO UPDATE SET role_id = EXCLUDED.role_id
-    """), {"user_id": row.id, "client_id": target_client_id, "role_code": role_code})
+        RETURNING id
+    """), {"user_id": row.id, "client_id": target_client_id, "role_code": role_code})).scalar_one()
+    # The tabs ticked on the form, in the same transaction: a User created
+    # without them opens to "no dashboards are assigned".
+    await _grant(session, membership_id, codes)
 
     await session.execute(text("""
         INSERT INTO audit_log (client_id, user_id, actor_email, action, entity_type,
-                               entity_id)
-        VALUES (:client_id, :actor, :email, 'user.create', 'users', :entity_id)
+                               entity_id, after)
+        VALUES (:client_id, :actor, :email, 'user.create', 'users', :entity_id,
+                CAST(:after AS jsonb))
     """), {"client_id": target_client_id, "actor": user.user_id, "email": email,
-           "entity_id": row.id})
+           "entity_id": row.id,
+           "after": json.dumps({"role": role_code, "dashboards": codes})})
     # An Employee starts with zero Plant Assignments and therefore sees zero
     # Plants (I-5). That is deliberate: access is granted explicitly, never by
     # default.
-    return {**dict(row._mapping), "role": role_code, "assigned_plants": 0}
+    return {**dict(row._mapping), "role": role_code, "assigned_plants": 0,
+            "dashboards": codes}
 
 
-@router.put("/{user_id}/plants")
+@router.put("/{user_id}/plants", dependencies=[_USERS_PAGE])
 async def set_plant_access(
     user_id: int, plant_ids: list[int], session: SessionDep,
     actor: CurrentUser = Depends(require_permission("user.manage")),
@@ -147,26 +268,29 @@ async def set_plant_access(
     return {"user_id": user_id, "requested": len(plant_ids), "granted": granted}
 
 
-@router.put("/{user_id}/dashboards")
+@router.put("/{user_id}/dashboards", dependencies=[_USERS_PAGE])
 async def set_dashboard_access(
     user_id: int, dashboard_codes: list[str], session: SessionDep,
     actor: CurrentUser = Depends(require_permission("user.manage")),
 ) -> dict[str, Any]:
-    """Replace a User's dashboard access (dimension A-3)."""
+    """Replace the tabs a User is given — screens and admin pages (A-3).
+
+    Who may give what is `domain/access.grant_refusal`: a platform administrator
+    anything; a Client Admin only to an Employee or Guest, and only tabs they
+    have themselves; never an admin page the User's role cannot use.
+    """
     membership = (await session.execute(text("""
-        SELECT id FROM memberships WHERE user_id = :user_id AND client_id = :client_id
+        SELECT m.id, r.code AS role_code FROM memberships m
+          JOIN roles r ON r.id = m.role_id
+         WHERE m.user_id = :user_id AND m.client_id = :client_id
     """), {"user_id": user_id, "client_id": actor.client_id})).first()
-    if membership is None:
+    if membership is None or actor.client_id is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user is not a member")
 
-    await session.execute(
-        text("DELETE FROM user_dashboard_access WHERE membership_id = :m"),
-        {"m": membership.id})
-    for code in dashboard_codes:
-        await session.execute(text("""
-            INSERT INTO user_dashboard_access (membership_id, dashboard_id)
-            SELECT :m, id FROM dashboards WHERE code = :code ON CONFLICT DO NOTHING
-        """), {"m": membership.id, "code": code})
+    dashboard_codes = list(dict.fromkeys(dashboard_codes))
+    await _check_grant(session, actor, client_id=actor.client_id, user_id=user_id,
+                       role_code=membership.role_code, codes=dashboard_codes)
+    await _grant(session, membership.id, dashboard_codes)
     # Access changes are the audit trail's whole purpose: "who could see what,
     # and since when" is unanswerable otherwise.
     await session.execute(text("""
@@ -178,7 +302,7 @@ async def set_dashboard_access(
     return {"user_id": user_id, "dashboards": dashboard_codes}
 
 
-@router.patch("/{user_id}")
+@router.patch("/{user_id}", dependencies=[_USERS_PAGE])
 async def update_user(
     user_id: int, body: UserUpdate, session: SessionDep,
     actor: CurrentUser = Depends(require_permission("user.manage")),
@@ -262,7 +386,8 @@ async def update_user(
     return {**dict(row._mapping), "role": body.role_code}
 
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[_USERS_PAGE])
 async def remove_user(
     user_id: int, session: SessionDep,
     actor: CurrentUser = Depends(require_permission("user.manage")),

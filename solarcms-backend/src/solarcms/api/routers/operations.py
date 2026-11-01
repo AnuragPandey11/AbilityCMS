@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from solarcms.api import pages
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.domain.absence import classify_topic_liveness
 from solarcms.domain.decoding import TopicPattern, parse_topic
@@ -65,7 +66,7 @@ async def list_maintenance(
     return [dict(r._mapping) for r in rows]
 
 
-@router.post("/maintenance", status_code=status.HTTP_201_CREATED)
+@router.post("/maintenance", status_code=status.HTTP_201_CREATED, dependencies=[pages.MAINTENANCE])
 async def open_maintenance(
     body: MaintenanceWindowIn, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -113,7 +114,7 @@ async def open_maintenance(
     return dict(row._mapping)
 
 
-@router.post("/maintenance/{window_id}/close")
+@router.post("/maintenance/{window_id}/close", dependencies=[pages.MAINTENANCE])
 async def close_maintenance(
     window_id: int, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),

@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from solarcms.cache import live
 from solarcms.domain.absence import classify_topic_liveness
 from solarcms.domain.assumptions import (
+    DATA_ISSUE_CONSTANT_WINDOW_S,
     DATA_ISSUE_FLAGGED_WINDOW_S,
     DATA_ISSUE_INTERVAL_SAMPLE,
     DATA_ISSUE_PAYLOAD_MESSAGES,
@@ -53,6 +54,7 @@ from solarcms.domain.data_issues import (
     DeviceFact,
     OwnTopicFact,
     PlantFacts,
+    ReadingSpan,
     ReplayBurst,
     SunlightSetAside,
     TagHealth,
@@ -113,6 +115,7 @@ async def gather(
     arrivals: dict[str, list[datetime]] = {}
     health: dict[int, list[TagHealth]] = defaultdict(list)
     string_max: dict[int, dict[int, float]] = defaultdict(dict)
+    spans: dict[int, list[ReadingSpan]] = defaultdict(list)
     peak_power: dict[int, float] = {}
     own_of: dict[str, int] = {}
     own_seen: dict[str, _OwnSeen] = {}
@@ -284,6 +287,41 @@ async def gather(
                     index = int(row.tag_code[2:].split("_", 1)[0])
                     string_max[row.device_id][index] = float(row.peak)
 
+        # Each measured reading's lowest and highest good value over the last
+        # week, for `_constant_issues`: a mapped input that never moved, on a
+        # Device whose other readings did, is asked about. Contacts, codes and
+        # setpoints (category `status`) sit still by nature, and a register —
+        # a counter, yesterday's total, a time of day (`last` roll-up) — holds
+        # between updates, so none is gathered. Hourly, so a week is 168 rows a
+        # Tag; ids resolved first, never a join to the view (see Scale).
+        span_tags = [row.tag_id for row in (await session.execute(text("""
+            SELECT DISTINCT b.tag_id
+              FROM device_tag_bindings b JOIN tags t ON t.id = b.tag_id
+             WHERE b.device_id = ANY(:ids) AND b.enabled
+               AND t.category <> 'status' AND NOT t.is_cumulative
+               AND t.rollup_method <> 'last'
+               AND COALESCE(t.unit, '') NOT IN ('bool', 'code')
+        """), {"ids": device_ids})).all()]
+        if span_tags:
+            for row in (await session.execute(text("""
+                SELECT a.device_id, t.code AS tag_code,
+                       min(a.min_value) AS low, max(a.max_value) AS high,
+                       count(*) AS hours, min(a.bucket) AS first, max(a.bucket) AS last
+                  FROM agg_1h_v a JOIN tags t ON t.id = a.tag_id
+                 WHERE a.device_id = ANY(:ids) AND a.tag_id = ANY(:tag_ids)
+                   AND a.bucket > now() - make_interval(
+                           secs => CAST(:window AS double precision))
+                   AND COALESCE(a.worst_quality, 0) = :good
+                 GROUP BY a.device_id, t.code
+            """), {"ids": device_ids, "tag_ids": span_tags,
+                   "window": DATA_ISSUE_CONSTANT_WINDOW_S, "good": QUALITY_GOOD})).all():
+                if row.low is None or row.high is None:
+                    continue
+                spans[row.device_id].append(ReadingSpan(
+                    tag_code=row.tag_code, low=float(row.low), high=float(row.high),
+                    hours=int(row.hours), first=row.first, last=row.last,
+                ))
+
     own_by_device = {device_id: own for own, device_id in own_of.items()}
     devices = []
     for row in device_rows:
@@ -309,6 +347,7 @@ async def gather(
             tag_health=tuple(health.get(row.id, ())),
             string_current_max=string_max.get(row.id, {}),
             peak_power_kw=peak_power.get(row.id),
+            reading_spans=tuple(spans.get(row.id, ())),
             own_topic=OwnTopicFact(
                 topic=own, messages=seen.messages, last_seen=seen.last,
                 keys=tuple(seen.keys),

@@ -12,8 +12,9 @@ platform offers beside it — the Data Issues screen.
 * ``data_lost`` — data is being thrown away on every message, and it does not
   come back: raw history is the only copy and it is kept for 90 days.
 * ``data_wrong`` — data is kept but cannot be trusted as shown: rejected
-  values, a recorded interval that makes a healthy Device read as late, and a
-  burst of replayed messages stored at the time they *arrived*.
+  values, a recorded interval that makes a healthy Device read as late, a
+  burst of replayed messages stored at the time they *arrived*, and a reading
+  that has not moved in a week — often an input with no sensor wired to it.
 * ``setup`` — a screen cannot answer until a fact is entered: string counts,
   Inverter type and size, the Plant's capacity.
 
@@ -38,6 +39,8 @@ from datetime import datetime
 from typing import Any, Literal
 
 from solarcms.domain.assumptions import (
+    DATA_ISSUE_CONSTANT_MIN_HOURS,
+    DATA_ISSUE_CONSTANT_SPREAD,
     DATA_ISSUE_FLAGGED_SHARE,
     DATA_ISSUE_IDLE_ZERO_FRACTION,
     DATA_ISSUE_INTERVAL_FASTER,
@@ -155,6 +158,28 @@ class OwnTopicFact:
 
 
 @dataclass(frozen=True, slots=True)
+class ReadingSpan:
+    """One measured Tag's good readings on one Device over the constant window.
+
+    From the hourly tier: the lowest and highest value any good hour held, how
+    many hours held one, and the first and last of them. Only Tags that move
+    by nature are gathered — not contacts, codes, setpoints or registers.
+    """
+
+    tag_code: str
+    low: float
+    high: float
+    hours: int
+    first: datetime
+    last: datetime
+
+    @property
+    def held(self) -> bool:
+        """Whether every good reading was the same value, allowing for float noise."""
+        return self.high - self.low <= DATA_ISSUE_CONSTANT_SPREAD
+
+
+@dataclass(frozen=True, slots=True)
 class DeviceFact:
     """Everything one registered Device is, and has recently sent."""
 
@@ -188,6 +213,8 @@ class DeviceFact:
     # The highest AC power it reported over the rejected-values window, for a
     # Device that reports any — what says whether it was idle at the time.
     peak_power_kw: float | None = None
+    # Each measured Tag's spread over the constant window (`_constant_issues`).
+    reading_spans: tuple[ReadingSpan, ...] = ()
 
     @property
     def producing(self) -> bool:
@@ -561,6 +588,7 @@ def _device_issues(
     else:
         yield from _key_issues(device, plant, detached_keys)
         yield from _interval_issues(device)
+        yield from _constant_issues(device)
     yield from _rejected_issues(device)
     yield from _string_issues(device, detached_keys)
     yield from _inverter_issues(device)
@@ -681,6 +709,64 @@ def _key_issues(
             ),
             device_id=device.device_id, device_code=device.code,
             facts=_binding_facts(binding),
+        )
+
+
+def _constant_issues(device: DeviceFact) -> Iterable[DataIssue]:
+    """A mapped reading that has not moved in a week: is anything wired to it?
+
+    Asked, never decided. A weather station with no cloud cover sensor sends 0
+    for that input in every message, and every screen showed "0.00 %" — but a
+    cloudless week is also 0 %, so the platform cannot tell the two apart and
+    only a person who knows the site can. The fix switches the mapping off,
+    after which every screen says "Not Available" for it.
+
+    Judged only on a Device whose other readings moved over the same week: one
+    on which nothing moved is idle or stuck as a whole, and a row per reading
+    would bury that under thirty questions about sensors. PV inputs are left
+    to the string count, which says how many an Inverter has.
+    """
+    spans = device.reading_spans
+    if not any(not span.held for span in spans):
+        return
+    enabled = {b.tag_code: b for b in device.bindings if b.enabled}
+    for span in spans:
+        if not span.held or span.hours < DATA_ISSUE_CONSTANT_MIN_HOURS:
+            continue
+        binding = enabled.get(span.tag_code)
+        # Still arriving: a reading that stopped is `binding_silent`'s row.
+        if binding is None or _PV_INPUT.match(binding.tag_code) \
+                or binding.source_key not in device.recent_keys:
+            continue
+        value = 0.0 if abs(span.low) <= DATA_ISSUE_CONSTANT_SPREAD else span.low
+        unit = binding.unit if binding.unit and binding.unit != "ratio" else None
+        shown = f"{value:g} {unit}" if unit else f"{value:g}"
+        # From the first good hour's start to the last one's end.
+        days = max(1, round((span.last - span.first).total_seconds() / 86_400 + 1 / 24))
+        yield DataIssue(
+            key=f"constant:{device.device_id}:{binding.source_key}",
+            kind="reading_constant", category="data_wrong",
+            title=(
+                f"{device.code}: {binding.source_key} has read {shown} "
+                f"for {days} day{'s' if days != 1 else ''}"
+            ),
+            detail=(
+                f"Every reading of {binding.tag_code} from {binding.source_key} has been "
+                f"{shown}, while the Device's other readings changed. Equipment sends "
+                "every input on its register map, and one with no sensor wired to it "
+                "reads the same value for ever — which screens show as a measurement. "
+                "If no sensor is fitted, mark it not installed and screens say Not "
+                "Available. If one is, it may be disconnected; if the value is right, "
+                "acknowledge this."
+            ),
+            device_id=device.device_id, device_code=device.code,
+            facts={
+                **_binding_facts(binding),
+                "value": value,
+                "days": days,
+                "hours": span.hours,
+                "since": span.first,
+            },
         )
 
 

@@ -35,6 +35,7 @@ import type {
   ResolvedSlot,
 } from "@/api/schemas";
 import {
+  isNotAvailable,
   isRejectedBlank,
   undefinedExplanation,
   slotText,
@@ -43,7 +44,7 @@ import {
 import { Panel } from "@/components/ui";
 import { Skeleton } from "@/components/state";
 import { IconChevronRight } from "@/components/icons";
-import { UNDEFINED_DISPLAY, formatNumber } from "@/format/value";
+import { NOT_AVAILABLE_DISPLAY, UNDEFINED_DISPLAY, formatNumber } from "@/format/value";
 import { formatDateTime, formatTime } from "@/format/datetime";
 import { withheldWords } from "@/format/sunlight";
 
@@ -159,27 +160,57 @@ function gridRow(status: OperatingStatus | undefined): Row {
         title: `${grid.undefined_reason ?? "No breaker is reporting"}. ${basis}`,
       };
     default:
+      if (grid.breakers === 0) {
+        return {
+          label,
+          value: NOT_AVAILABLE_DISPLAY,
+          tone: "faint",
+          title:
+            "No breaker (VCB) is registered at this Plant, so there is no grid status — " +
+            "never an assumed \"connected\".",
+        };
+      }
       return {
         label,
         value: UNDEFINED_DISPLAY,
         tone: "faint",
-        title:
-          "No breaker (VCB) is registered at this Plant, so there is no grid status — " +
-          "never an assumed \"connected\".",
+        title: grid.undefined_reason ?? undefined,
       };
   }
 }
 
-function slotRow(label: string, slot: ResolvedSlot | undefined): Row {
+/** Why a weather row reads "Not Available": either cause, since the card cannot tell which. */
+const NOT_AVAILABLE_WEATHER =
+  "Not available at this Plant: no weather station here is bound to this reading. Either " +
+  "there is no weather station, or its input for this is switched off in Tag Mapping " +
+  "because no sensor is fitted.";
+
+/**
+ * Where the dashboard's slots stand. An absent slot means "nothing here
+ * measures it" only once the dashboard has answered; before that it is a
+ * request in flight, and after a failure nobody knows.
+ */
+export type SlotsStatus = "loading" | "failed" | "ready";
+
+/** The row for a slot the dashboard has not answered — never "Not Available". */
+export function unansweredRow(label: string, slots: SlotsStatus): Row | null {
+  if (slots === "ready") return null;
+  return slots === "loading"
+    ? { label, value: UNDEFINED_DISPLAY, tone: "faint", pending: true }
+    : { label, value: UNDEFINED_DISPLAY, tone: "faint", title: "The dashboard could not be loaded." };
+}
+
+function slotRow(label: string, slot: ResolvedSlot | undefined, slots: SlotsStatus): Row {
   if (!slot) {
+    const unanswered = unansweredRow(label, slots);
+    if (unanswered) return unanswered;
+  }
+  if (!slot || isNotAvailable(slot)) {
     // Hidden by the server because nothing here is bound to answer it: a Plant
-    // with no weather station, which is common and valid.
-    return {
-      label,
-      value: UNDEFINED_DISPLAY,
-      tone: "faint",
-      title: "No Device at this Plant reports this — there is no weather station bound to it.",
-    };
+    // with no weather station, or a station with no sensor for this one — its
+    // input switched off, since a fixed register map sends 0 for an input with
+    // nothing wired to it, and 0.00 % is a reading nobody took.
+    return { label, value: NOT_AVAILABLE_DISPLAY, tone: "faint", title: NOT_AVAILABLE_WEATHER };
   }
   if (isRejectedBlank(slot)) {
     // What arrived, marked: a value the equipment sent and the platform
@@ -340,6 +371,10 @@ function peakRow(status: OperatingStatus | undefined, timeZone: string): Row {
       <>
         {formatNumber(peak.value)}
         {peak.unit ? <span className="ml-1 text-xs text-ink-muted">{peak.unit}</span> : null}
+        {/* When it was reached, to the minute — the peak is a per-minute reading. */}
+        {peak.at ? (
+          <span className="ml-1.5 text-xs font-medium text-ink-muted">at {clock(peak.at, timeZone)}</span>
+        ) : null}
       </>
     ),
     tone: "ink",
@@ -439,6 +474,7 @@ export function PlantStatusCard({
   status,
   isLoading,
   environment,
+  slots,
   devices,
   health,
   timeZone,
@@ -449,6 +485,8 @@ export function PlantStatusCard({
   isLoading: boolean;
   /** The `environment` panel's slots, as the server resolved them. */
   environment: ResolvedSlot[];
+  /** Whether the dashboard those slots come from has answered. */
+  slots: SlotsStatus;
   devices: DeviceListItem[];
   health: Record<CommStatus, number>;
   timeZone: string;
@@ -461,7 +499,7 @@ export function PlantStatusCard({
   const rows: Row[] = [
     derived(stateRow(status)),
     derived(gridRow(status)),
-    ...WEATHER_ROWS.map(({ code, label }) => slotRow(label, bySlot.get(code))),
+    ...WEATHER_ROWS.map(({ code, label }) => slotRow(label, bySlot.get(code), slots)),
     derived(startRow(status, timeZone)),
     derived(stopRow(status, timeZone)),
     derived(peakRow(status, timeZone)),

@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import text
 
+from solarcms.api import pages
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.api.patching import patch_assignments
 from solarcms.cache import live
@@ -569,7 +570,7 @@ async def list_plant_collectors(
     return [dict(row._mapping) for row in rows]
 
 
-@router.put("/{plant_id}/collectors/{code}")
+@router.put("/{plant_id}/collectors/{code}", dependencies=[pages.COLLECTOR_EDGE])
 async def set_collector_parent(
     plant_id: int, code: str, body: CollectorEdge, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -676,7 +677,7 @@ async def plant_sld_stages(
     return {"plant_id": plant_id, **rendered["sld"]}
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[pages.PLANT_CREATE])
 async def create_plant(
     body: PlantCreate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -763,7 +764,7 @@ async def create_plant(
     return {**dict(row._mapping), "client_id": client_id, "device_counts": counts}
 
 
-@router.patch("/{plant_id}")
+@router.patch("/{plant_id}", dependencies=[pages.PLANT_EDIT])
 async def update_plant(
     plant_id: int, body: PlantUpdate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -1069,7 +1070,7 @@ def _next_status(current: str) -> str | None:
     return {"draft": "commissioning", "commissioning": "active"}.get(current)
 
 
-@router.post("/{plant_id}/status")
+@router.post("/{plant_id}/status", dependencies=[pages.PLANT_STATUS])
 async def change_plant_status(
     plant_id: int, body: PlantStatusChange, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -1149,7 +1150,8 @@ async def list_blocks(
     return [dict(row._mapping) for row in rows]
 
 
-@router.post("/{plant_id}/blocks", status_code=status.HTTP_201_CREATED)
+@router.post("/{plant_id}/blocks", status_code=status.HTTP_201_CREATED,
+             dependencies=[pages.BLOCK_CREATE])
 async def create_block(
     plant_id: int, body: BlockCreate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -1178,7 +1180,7 @@ async def create_block(
     return dict(row._mapping)
 
 
-@blocks_router.patch("/{block_id}")
+@blocks_router.patch("/{block_id}", dependencies=[pages.BLOCK_EDIT])
 async def update_block(
     block_id: int, body: BlockUpdate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -1196,7 +1198,8 @@ async def update_block(
     return dict(row._mapping)
 
 
-@blocks_router.delete("/{block_id}", status_code=status.HTTP_204_NO_CONTENT)
+@blocks_router.delete("/{block_id}", status_code=status.HTTP_204_NO_CONTENT,
+                      dependencies=[pages.BLOCK_EDIT])
 async def delete_block(
     block_id: int, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),

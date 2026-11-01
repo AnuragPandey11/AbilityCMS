@@ -17,6 +17,7 @@
 
 import type { ResolvedSlot, SlotSource } from "@/api/schemas";
 import {
+  NOT_AVAILABLE_DISPLAY,
   UNDEFINED_DISPLAY,
   digitsForUnit,
   formatHeadline,
@@ -48,12 +49,30 @@ function rejectionSentences(slot: ResolvedSlot): string {
   return `Rejected — ${shown.join(" ")}${more > 0 ? ` And ${more} more.` : ""}`;
 }
 
+/**
+ * True when nothing at the Plant measures this at all — no Device of a Type
+ * that could answer, or none bound to the Tag (an input switched off in Tag
+ * Mapping because no sensor is fitted). Drawn "Not Available", never a dash:
+ * a dash is an instrument that is there and silent (`no_value`).
+ */
+export function isNotAvailable(slot: ResolvedSlot): boolean {
+  return (
+    slot.value === null &&
+    !isRejectedBlank(slot) &&
+    (slot.undefined_reason === "no_source" || slot.undefined_reason === "unconfigured")
+  );
+}
+
 /** Why a slot is blank, in words an operator can act on. */
 export function undefinedExplanation(slot: ResolvedSlot): string {
   if (isRejectedBlank(slot)) return rejectionSentences(slot);
   switch (slot.undefined_reason) {
     case "no_source":
-      return "No Device on this Plant is bound to a Tag that could answer this.";
+      return (
+        "Not available at this Plant: no Device here is bound to a Tag that could answer " +
+        "this. Where the equipment has the input but no sensor is fitted, its mapping is " +
+        "switched off in Tag Mapping."
+      );
     case "no_value":
       if (slot.source?.kind === "counter_today") {
         // Bound, but fewer than two readings since midnight: no step to count.
@@ -111,6 +130,7 @@ export function slotText(slot: ResolvedSlot): string {
       ? `${rejectedValue(rejected[0], slot.unit)} rejected`
       : `${rejected.length} rejected`;
   }
+  if (isNotAvailable(slot)) return NOT_AVAILABLE_DISPLAY;
   if (slot.value === null) return UNDEFINED_DISPLAY;
   // The unit decides where it can: two decimals for a ratio, none for a
   // count — "17.00 count" invites the reader to look for a precision that
@@ -157,7 +177,7 @@ export function SlotTile({ slot }: { slot: ResolvedSlot }): JSX.Element {
   // the backend supplied is passed through untouched either way (§4.1).
   const headline =
     slot.unit === "ratio" ? null : formatHeadline(slot.value, { digits: digitsForUnit(slot.unit) });
-  const text = headline ? headline.text : slotText(slot);
+  const text = headline && !isNotAvailable(slot) ? headline.text : slotText(slot);
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-raised p-4">
       <div className="tile-label flex items-center">
@@ -241,7 +261,7 @@ export function SlotRailTile({
   const explanation = undefinedExplanation(slot);
   const headline =
     slot.unit === "ratio" ? null : formatHeadline(slot.value, { digits: digitsForUnit(slot.unit) });
-  const text = headline ? headline.text : slotText(slot);
+  const text = headline && !isNotAvailable(slot) ? headline.text : slotText(slot);
   return (
     <RailTile
       tone={tone}
@@ -308,7 +328,7 @@ export function SlotStat({
   const explanation = undefinedExplanation(slot);
   const headline =
     slot.unit === "ratio" ? null : formatHeadline(slot.value, { digits: digitsForUnit(slot.unit) });
-  const text = headline ? headline.text : slotText(slot);
+  const text = headline && !isNotAvailable(slot) ? headline.text : slotText(slot);
 
   return (
     <div className="surface-tile min-w-0 rounded-card border border-line px-3 py-2">

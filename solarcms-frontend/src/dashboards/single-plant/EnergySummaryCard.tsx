@@ -28,6 +28,7 @@
 import type { KpiFigure, PlantKpis, ResolvedSlot } from "@/api/schemas";
 import type { YesterdayEnergy } from "@/api/useYesterdayEnergy";
 import {
+  isNotAvailable,
   isRejectedBlank,
   slotText,
   sourceLabel,
@@ -35,6 +36,7 @@ import {
 } from "@/components/dashboard/SlotValue";
 import { Panel } from "@/components/ui";
 import {
+  NOT_AVAILABLE_DISPLAY,
   UNDEFINED_DISPLAY,
   digitsForUnit,
   formatHeadline,
@@ -44,16 +46,27 @@ import {
   ratioIsImplausible,
   variantNote,
 } from "@/format/value";
-import { StatusRow, cardHeading, type StatusRowData } from "./PlantStatusCard";
+import {
+  StatusRow,
+  cardHeading,
+  unansweredRow,
+  type SlotsStatus,
+  type StatusRowData,
+} from "./PlantStatusCard";
 
-function slotRow(label: string, slot: ResolvedSlot | undefined): StatusRowData {
+function slotRow(label: string, slot: ResolvedSlot | undefined, slots: SlotsStatus): StatusRowData {
   if (!slot) {
+    const unanswered = unansweredRow(label, slots);
+    if (unanswered) return unanswered;
     return {
       label,
-      value: UNDEFINED_DISPLAY,
+      value: NOT_AVAILABLE_DISPLAY,
       tone: "faint",
-      title: "No Device at this Plant is bound to a Tag that could answer this.",
+      title: "Not available at this Plant: no Device here is bound to a Tag that could answer this.",
     };
+  }
+  if (isNotAvailable(slot)) {
+    return { label, value: NOT_AVAILABLE_DISPLAY, tone: "faint", title: undefinedExplanation(slot) };
   }
   if (isRejectedBlank(slot)) {
     return { label, value: slotText(slot), tone: "warn", title: undefinedExplanation(slot) };
@@ -179,6 +192,7 @@ function kpiRow(
 
 export function EnergySummaryCard({
   headline,
+  slots,
   today,
   yesterday,
   onOpen,
@@ -186,6 +200,8 @@ export function EnergySummaryCard({
 }: {
   /** The `kpi_row` panel's slots, as the server resolved them. */
   headline: ResolvedSlot[];
+  /** Whether the dashboard those slots come from has answered. */
+  slots: SlotsStatus;
   /** `/kpis?period=today` — never the page's Period. */
   today: PlantKpis | undefined;
   /** Yesterday's total energy, the same claim as today's row. */
@@ -195,10 +211,10 @@ export function EnergySummaryCard({
 }): JSX.Element {
   const bySlot = new Map(headline.map((slot) => [slot.slot_code, slot]));
   const rows: StatusRowData[] = [
-    slotRow("Energy Generated Today", bySlot.get("kpi.energy_today")),
+    slotRow("Energy Generated Today", bySlot.get("kpi.energy_today"), slots),
     yesterdayRow("Energy Generated Yesterday", yesterday),
-    slotRow("Current Plant Power", bySlot.get("kpi.current_power")),
-    slotRow("Total Energy (Lifetime)", bySlot.get("kpi.energy_lifetime")),
+    slotRow("Current Plant Power", bySlot.get("kpi.current_power"), slots),
+    slotRow("Total Energy (Lifetime)", bySlot.get("kpi.energy_lifetime"), slots),
     kpiRow("Specific Yield (Today)", today?.specific_yield, "quantity", "kWh/kWp", today, 3),
     kpiRow("Performance Ratio (Today)", today?.performance_ratio, "ratio", null, today),
     kpiRow("CO₂ Saved Today", today?.co2_avoided_kg, "quantity", "kg", today),

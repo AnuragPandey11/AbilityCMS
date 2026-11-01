@@ -25,6 +25,7 @@ from solarcms.db.session import scoped_session
 from solarcms.services.notifications import deliver_due
 from solarcms.workers.scheduler import fire_due_escalations
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -57,6 +58,7 @@ async def _alarm_awaiting_escalation(
             INSERT INTO memberships (user_id, client_id, role_id)
             VALUES (:u, :c, :r)
         """), {"u": user_id, "c": client_id, "r": role_id})
+        await grant_admin_tabs(s)
 
         rule_id = (await s.execute(text("""
             INSERT INTO alarm_rules (client_id, code, name, scope_type, operator,

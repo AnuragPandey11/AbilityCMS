@@ -35,6 +35,7 @@ import type { Irradiation, KpiFigure, KpiPeriod, PlantKpis, PrBasis } from "@/ap
 import { RatioDial, type DialComparison } from "@/components/charts/RatioDial";
 import { RatioMeter } from "@/components/charts/RatioMeter";
 import { RailTile } from "@/components/charts/RailTile";
+import { AvailabilityLevelsVisual, availabilityFoot } from "./AvailabilityLevels";
 import { CoverageBadge, CoverageBar } from "@/components/dashboard/CoverageBadge";
 import { ErrorState, Skeleton } from "@/components/state";
 import {
@@ -406,13 +407,29 @@ export function PerformanceTiles({
         }
         footnote={footnote(kpis.cuf, period, measuredLater)}
       />
-      <RailTile
-        dense
-        icon={IconAvailability}
-        label="Availability"
-        visual={<RatioMeter figure={kpis.availability} label="Availability" />}
-        footnote={footnote(kpis.availability, period, measuredLater)}
-      />
+      {kpis.availability_levels ? (
+        // Grid, Plant and Inverter, with Data availability at the foot.
+        <RailTile
+          dense
+          icon={IconAvailability}
+          label="Availability"
+          visual={<AvailabilityLevelsVisual levels={kpis.availability_levels} />}
+          footnote={availabilityFoot(
+            kpis.availability_levels,
+            kpis.availability,
+            <span className="text-ink-muted">{PERIOD_LABEL[period]}</span>,
+          )}
+        />
+      ) : (
+        // A stored copy from before the three levels, or an older server.
+        <RailTile
+          dense
+          icon={IconAvailability}
+          label="Data availability"
+          visual={<RatioMeter figure={kpis.availability} label="Data availability" />}
+          footnote={footnote(kpis.availability, period, measuredLater)}
+        />
+      )}
     </>
   );
 }
@@ -502,11 +519,33 @@ export function PerformancePanel({
         <PrBasisDetail basis={kpis?.pr_basis} timeZone={timeZone} />
         <SunlightDetail irradiation={kpis?.irradiation_kwh_m2} />
         <FigureRow label="CUF" figure={kpis?.cuf} kind="ratio" />
+        {kpis?.availability_levels ? (
+          <>
+            <FigureRow
+              label="Plant availability"
+              figure={kpis.availability_levels.plant}
+              kind="ratio"
+              note="Whether the Plant as a whole could generate, over daylight minutes with the grid there. One Inverter down is not the Plant down. Provisional (OPEN-16)."
+            />
+            <FigureRow
+              label="Grid availability"
+              figure={kpis.availability_levels.grid}
+              kind="ratio"
+              note="The grid meter's frequency within limits and its voltage present, over daylight minutes. A grid outage is never counted against the Plant or its Inverters."
+            />
+            <FigureRow
+              label="Inverter availability"
+              figure={kpis.availability_levels.inverter}
+              kind="ratio"
+              note="Inverters producing while the grid and the Plant were available; stops under 10 minutes and minutes with no data are not counted as down."
+            />
+          </>
+        ) : null}
         <FigureRow
-          label="Availability"
+          label="Data availability"
           figure={kpis?.availability}
           kind="ratio"
-          note="Time-weighted over the period from each Device's recorded communication status. A Collector failure is communication loss, not generation downtime."
+          note="The share of time each Device was reporting, time-weighted from its recorded communication status. A Collector failure is communication loss, not generation downtime."
         />
         <FigureRow
           label="CO₂ avoided"

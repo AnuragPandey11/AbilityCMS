@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { OperatingDay, OperatingStatus, ResolvedSlot } from "@/api/schemas";
-import { PlantStatusCard } from "@/dashboards/single-plant/PlantStatusCard";
+import { PlantStatusCard, type SlotsStatus } from "@/dashboards/single-plant/PlantStatusCard";
 
 const ZONE = "Asia/Kolkata";
 
@@ -101,12 +101,17 @@ const irradiance: ResolvedSlot = {
   override_note: null,
 } as ResolvedSlot;
 
-const card = (value: OperatingStatus | undefined, environment: ResolvedSlot[] = [irradiance]) =>
+const card = (
+  value: OperatingStatus | undefined,
+  environment: ResolvedSlot[] = [irradiance],
+  slots: SlotsStatus = "ready",
+) =>
   render(
     <PlantStatusCard
       status={value}
       isLoading={false}
       environment={environment}
+      slots={slots}
       devices={[]}
       health={{ online: 19, degraded: 0, offline: 0, unknown: 0 }}
       timeZone={ZONE}
@@ -128,6 +133,8 @@ describe("Plant Status card", () => {
     // 13:10 UTC is 18:40 local.
     expect(valueOf("Plant Stop (Yesterday)")).toHaveTextContent("18:40:00");
     expect(valueOf("Peak Load (Today)")).toHaveTextContent("3,381");
+    // 14:34 UTC is 20:04 in Kolkata: when the peak was reached, in the Plant's time.
+    expect(valueOf("Peak Load (Today)")).toHaveTextContent("at 20:04");
     expect(screen.getByText("Online")).toBeInTheDocument();
   });
 
@@ -205,7 +212,25 @@ describe("Plant Status card", () => {
         },
       }),
     );
+    expect(valueOf("Grid Status")).toHaveTextContent("Not Available");
+  });
+
+  it("keeps a dash for breakers that are registered and give no state", () => {
+    card(
+      status({
+        grid: {
+          state: null,
+          breakers: 2,
+          reporting: 0,
+          closed: 0,
+          open: 0,
+          undefined_reason: "no breaker has reported",
+          source: { device_type_code: "VCB", tag_code: "VCB_ON_FEEDBACK" },
+        },
+      }),
+    );
     expect(valueOf("Grid Status")).toHaveTextContent("—");
+    expect(valueOf("Grid Status")).not.toHaveTextContent("Not Available");
   });
 
   it("reports a Plant nobody can hear as unknown, not as its last state", () => {
@@ -220,10 +245,55 @@ describe("Plant Status card", () => {
     expect(valueOf("Plant Status")).not.toHaveTextContent("Running");
   });
 
-  it("gives a Plant with no weather station a reason, not a zero", () => {
+  it("says Not Available for a Plant with no weather station, not a zero", () => {
     card(status(), []);
     const cell = valueOf("Cloud Cover");
-    expect(cell).toHaveTextContent("—");
+    expect(cell).toHaveTextContent("Not Available");
     expect(cell).toHaveAttribute("title", expect.stringMatching(/no weather station/));
+  });
+
+  // Absent because the dashboard has not answered is not absent from the Plant.
+  it("never says Not Available before the dashboard has answered", () => {
+    card(status(), [], "loading");
+    expect(screen.queryByText("Not Available")).toBeNull();
+  });
+
+  it("never says Not Available when the dashboard failed to load", () => {
+    card(status(), [], "failed");
+    expect(screen.queryByText("Not Available")).toBeNull();
+    expect(valueOf("Cloud Cover")).toHaveTextContent("—");
+    expect(valueOf("Cloud Cover")).toHaveAttribute("title", expect.stringMatching(/could not be loaded/));
+  });
+
+  // A station with no cloud cover sensor sends 0 for that input; once its
+  // mapping is switched off the server answers `no_source` (or hides the slot).
+  it("says Not Available for a weather reading nothing at the Plant is bound to", () => {
+    const unbound = {
+      ...irradiance,
+      slot_code: "env.cloud_cover",
+      label: "Cloud Cover",
+      value: null,
+      unit: "%",
+      undefined_reason: "no_source",
+      source: null,
+    } as ResolvedSlot;
+    card(status(), [irradiance, unbound]);
+    expect(valueOf("Cloud Cover")).toHaveTextContent("Not Available");
+    expect(valueOf("Cloud Cover")).toHaveAttribute("title", expect.stringMatching(/Tag Mapping/));
+  });
+
+  // A sensor that is fitted and has gone quiet is somebody's problem now.
+  it("keeps a dash for a weather sensor that is bound and silent", () => {
+    const silent = {
+      ...irradiance,
+      slot_code: "env.cloud_cover",
+      label: "Cloud Cover",
+      value: null,
+      unit: "%",
+      undefined_reason: "no_value",
+    } as ResolvedSlot;
+    card(status(), [irradiance, silent]);
+    expect(valueOf("Cloud Cover")).toHaveTextContent("—");
+    expect(valueOf("Cloud Cover")).not.toHaveTextContent("Not Available");
   });
 });

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from solarcms.api import pages
 from solarcms.api.auth import hash_password
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.api.patching import patch_assignments
@@ -314,7 +315,7 @@ async def unmapped_keys(
     }
 
 
-@router.delete("/devices/{device_id}/unmapped-keys",
+@router.delete("/devices/{device_id}/unmapped-keys", dependencies=[pages.BINDINGS_REPLACE],
                status_code=status.HTTP_204_NO_CONTENT)
 async def forget_unmapped_keys(
     device_id: int, session: SessionDep,
@@ -340,7 +341,7 @@ async def forget_unmapped_keys(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/devices", status_code=status.HTTP_201_CREATED)
+@router.post("/devices", status_code=status.HTTP_201_CREATED, dependencies=[pages.DEVICE_CREATE])
 async def create_device(
     plant_id: int, body: DeviceCreate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -355,7 +356,8 @@ async def create_device(
     return created[0]
 
 
-@router.post("/devices/bulk-import", status_code=status.HTTP_201_CREATED)
+@router.post("/devices/bulk-import", status_code=status.HTTP_201_CREATED,
+             dependencies=[pages.DEVICE_IMPORT])
 async def bulk_import_devices(
     plant_id: int, body: DeviceBulkImport, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -469,7 +471,8 @@ async def _insert_devices(
     return out
 
 
-@router.delete("/devices/{device_id}", status_code=status.HTTP_200_OK)
+@router.delete("/devices/{device_id}", status_code=status.HTTP_200_OK,
+               dependencies=[pages.DEVICE_DELETE])
 async def delete_device(
     device_id: int, session: SessionDep,
     force: bool = Query(
@@ -555,7 +558,7 @@ async def delete_device(
     return {"deleted": device_id, "code": row.code, "readings_deleted": readings if force else 0}
 
 
-@router.patch("/devices/{device_id}")
+@router.patch("/devices/{device_id}", dependencies=[pages.DEVICE_EDIT])
 async def update_device(
     device_id: int, body: DeviceUpdate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -796,7 +799,7 @@ async def update_device(
     return dict(row._mapping)
 
 
-@router.post("/devices/{device_id}/bindings/from-model")
+@router.post("/devices/{device_id}/bindings/from-model", dependencies=[pages.BINDINGS_REPLACE])
 async def rebind_from_model(
     device_id: int, session: SessionDep,
     replace: bool = Query(False, description="Discard existing bindings first."),
@@ -843,7 +846,8 @@ async def list_device_topics(
     return [dict(row._mapping) for row in rows]
 
 
-@router.post("/devices/{device_id}/topics", status_code=status.HTTP_201_CREATED)
+@router.post("/devices/{device_id}/topics", status_code=status.HTTP_201_CREATED,
+             dependencies=[pages.TOPIC_ATTACH])
 async def add_device_topic(
     device_id: int, body: DeviceTopicCreate, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),
@@ -869,7 +873,7 @@ async def add_device_topic(
             "created": created}
 
 
-@router.delete("/devices/{device_id}/topics")
+@router.delete("/devices/{device_id}/topics", dependencies=[pages.TOPIC_DETACH])
 async def remove_device_topic(
     device_id: int, session: SessionDep,
     topic: str = Query(..., min_length=1),
@@ -921,7 +925,7 @@ async def _audit(
            "after": json.dumps(after, default=str) if after else None})
 
 
-@router.put("/devices/{device_id}/bindings")
+@router.put("/devices/{device_id}/bindings", dependencies=[pages.BINDINGS_REPLACE])
 async def replace_bindings(
     device_id: int, body: BindingsReplace, session: SessionDep,
     user: CurrentUser = Depends(require_permission("config.modify")),
@@ -1006,7 +1010,8 @@ _BINDING_COLUMNS = """
 """
 
 
-@router.post("/devices/{device_id}/bindings", status_code=status.HTTP_201_CREATED)
+@router.post("/devices/{device_id}/bindings", status_code=status.HTTP_201_CREATED,
+             dependencies=[pages.BINDING_EDIT])
 async def add_binding(
     device_id: int, body: BindingUpsert, session: SessionDep,
     user: CurrentUser = Depends(require_permission("config.modify")),
@@ -1081,7 +1086,7 @@ async def add_binding(
     return dict(row._mapping)
 
 
-@router.patch("/devices/{device_id}/bindings/{binding_id}")
+@router.patch("/devices/{device_id}/bindings/{binding_id}", dependencies=[pages.BINDING_EDIT])
 async def update_binding(
     device_id: int, binding_id: int, body: BindingPatch, session: SessionDep,
     user: CurrentUser = Depends(require_permission("config.modify")),
@@ -1140,7 +1145,8 @@ async def update_binding(
     return dict(after._mapping)
 
 
-@router.post("/devices/{device_id}/credential", status_code=status.HTTP_201_CREATED)
+@router.post("/devices/{device_id}/credential", status_code=status.HTTP_201_CREATED,
+             dependencies=[pages.DEVICE_CREDENTIAL])
 async def mint_credential(
     device_id: int, session: SessionDep,
     user: CurrentUser = Depends(require_permission("plant.manage")),

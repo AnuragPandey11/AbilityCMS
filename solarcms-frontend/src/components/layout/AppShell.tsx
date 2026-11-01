@@ -42,7 +42,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthProvider";
-import { usePermissions } from "@/auth/usePermission";
+import { canOpenPage, usePermissions } from "@/auth/usePermission";
 import { useDashboards, dashboardLabel } from "@/auth/useDashboard";
 import { useAlarms, useDataIssuesSummary } from "@/api/hooks";
 import { LiveIndicator } from "@/live/LiveIndicator";
@@ -102,7 +102,10 @@ export function AppShell(): JSX.Element {
   const { me, logout } = useAuth();
   const dashboards = useDashboards();
   const { has } = usePermissions();
-  const adminLinks = ADMIN_LINKS.filter((link) => has(link.permission));
+  // The role must allow the page and, since migration 0046, it must be ticked.
+  const adminLinks = ADMIN_LINKS.filter(
+    (link) => has(link.permission) && canOpenPage(me, link.page),
+  );
   // `has` is passed so the menu cannot offer a dashboard whose screen refuses.
   const groups = groupDashboards(dashboards, has);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -119,7 +122,10 @@ export function AppShell(): JSX.Element {
 
   // Data being lost or wrong, not yet fixed or marked as known. Never setup,
   // which can stand for months: a badge that never goes out is not read.
-  const dataIssuesQuery = useDataIssuesSummary(has("config.modify"));
+  // Asked only of someone who may open Data Issues: the server refuses anyone else.
+  const dataIssuesQuery = useDataIssuesSummary(
+    has("config.modify") && canOpenPage(me, "admin_data_issues"),
+  );
   const openDataIssues = dataIssuesQuery.data?.open_urgent ?? 0;
 
   // A-1. The active Client is context, and switching resets everything. Named

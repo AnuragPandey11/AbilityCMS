@@ -49,6 +49,7 @@ from solarcms.domain.periods import (
 from solarcms.domain.pr_matching import REASON_WORDS, PlantPr, plant_pr
 from solarcms.domain.tiering import Tier, bucket_start, select_tier
 from solarcms.services import scope
+from solarcms.services.availability import plant_levels_or_reason
 from solarcms.services.energy import (
     counter_anomalies_payload,
     energy_source_payload,
@@ -561,6 +562,10 @@ async def compute_plant_kpis(
         yield_result = specific_yield(energy_kwh, dc_kwp)
 
     avail = await plant_availability(session, plant_id, start, now)
+    # Grid, Plant and Inverter availability (⚠ PROPOSED, `domain/availability`).
+    # `availability` above is the share of time Devices were reporting — data
+    # availability — and keeps its field so older screens still read it.
+    levels = await plant_levels_or_reason(session, plant_id, start, now)
     coverage = await plant_coverage(session, plant_id, tier, start, now, lifetime)
 
     # The same figures over the previous period to the same point, for the
@@ -603,6 +608,7 @@ async def compute_plant_kpis(
         "pr_basis": pr_basis_payload(pr),
         "cuf": render_formula(cuf_result),
         "availability": render_formula(avail),
+        "availability_levels": levels,
         "co2_avoided_kg": render_formula(co2),
         # The period's energy over DC capacity — the same energy PR and CUF are
         # computed from, so the three cannot disagree about how much was made.

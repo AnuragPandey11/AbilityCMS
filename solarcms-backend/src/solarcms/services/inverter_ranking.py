@@ -12,6 +12,8 @@ rupees — the stops cost, for the Inverter Monitoring screen. The rules:
   size, no PR — never estimated (the user's choice).
 * **Availability, downtime, no data and energy lost** are
   `domain/inverter_ranking.fold` over one-minute AC output (⚠ PROPOSED).
+* **Energy lost** is each Inverter's rated AC capacity times its downtime in
+  hours (the user's formula, 1 Nov 2026) — an estimate, and a ceiling.
 * **Loss** is energy lost times the Plant's tariff, where one is recorded.
 
 Read through the `*_v` barrier views with the Plant's own Device and Tag ids
@@ -60,7 +62,8 @@ from solarcms.services.kpis import irradiation_payload, plant_zone
 
 ENERGY_PAIR = ("INVERTER", "ENERGY_TOTAL")
 # v2: the response names where the Plant's sunlight came from (15 Oct 2026).
-CACHE_KEY = "inverter_ranking:v2:{plant_id}:{digest}"
+# v3: energy lost is rated capacity times downtime (1 Nov 2026).
+CACHE_KEY = "inverter_ranking:v3:{plant_id}:{digest}"
 #: While the period reaches now, the figures move each minute.
 LIVE_CACHE_S = 60
 #: A period wholly in the past changes only if history is replayed into it.
@@ -115,7 +118,7 @@ async def ranking(
     digest = hashlib.sha1(json.dumps([
         period, window.start.isoformat(), window.last_day.isoformat(),
         str(window.to_time), tariff,
-        [(i.id, i.dc_kwp, i.variant, i.bound) for i in inverters],
+        [(i.id, i.dc_kwp, i.rated_kw, i.variant, i.bound) for i in inverters],
     ]).encode()).hexdigest()[:16]
     key = CACHE_KEY.format(plant_id=plant_id, digest=digest)
     redis = get_redis()
@@ -287,7 +290,7 @@ async def _compute(
 
     result: Folded = fold([
         InverterMinutes(
-            device_id=inv.id, dc_kwp=inv.dc_kwp, hold_minutes=inv.hold_minutes,
+            device_id=inv.id, rated_kw=inv.rated_kw, hold_minutes=inv.hold_minutes,
             minutes=minutes.get(inv.id, ([], [], []))[0],
             mean_kw=minutes.get(inv.id, ([], [], []))[1],
             peak_kw=minutes.get(inv.id, ([], [], []))[2],

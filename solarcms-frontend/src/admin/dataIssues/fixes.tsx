@@ -10,7 +10,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { PageLink } from "@/components/layout/PageLink";
 import * as dataIssuesApi from "@/api/endpoints/dataIssues";
 import * as devicesApi from "@/api/endpoints/devices";
 import * as discoveryApi from "@/api/endpoints/discovery";
@@ -130,6 +130,15 @@ export function RowSummary({ issue, timezone }: { issue: DataIssue; timezone: st
         <Line>
           <Mono>{str(issue, "source_key")}</Mono> → <Mono>{str(issue, "tag_code")}</Mono>
           <Muted inline>not in the recent messages</Muted>
+        </Line>
+      );
+    case "reading_constant":
+      return (
+        <Line>
+          <Mono>{str(issue, "source_key")}</Mono> → <Mono>{str(issue, "tag_code")}</Mono>
+          <Muted inline>
+            {num(issue, "value") ?? "the same value"} in every reading for {num(issue, "days") ?? "?"} day(s)
+          </Muted>
         </Line>
       );
     case "values_rejected": {
@@ -260,6 +269,7 @@ function Topic({ value }: { value: string | null }): JSX.Element | null {
 /** Fixed by editing mappings alone — `config.modify`, which the screen itself needs. */
 const MAPPING_ONLY = new Set([
   "unmapped_key", "key_renamed", "binding_silent", "strings_not_arriving", "values_rejected",
+  "reading_constant",
   "replay_burst", "plant_silent", "sunlight_too_low",
 ]);
 
@@ -357,6 +367,23 @@ export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): J
         </Button>
       );
     }
+    case "reading_constant": {
+      const deviceId = issue.device_id;
+      const bindingId = num(issue, "binding_id");
+      return (
+        <Button
+          disabled={busy || deviceId === null || bindingId === null}
+          title="No sensor is fitted for this: the mapping is switched off, so screens say Not Available instead of the value. It can be switched back on in Tag Mapping."
+          onClick={() =>
+            void ctx.actions.run([issue.key], async () => {
+              await devicesApi.updateBinding(deviceId as number, bindingId as number, { enabled: false });
+            }, `${str(issue, "source_key") ?? "That reading"} is marked not installed; screens say Not Available.`)
+          }
+        >
+          {busy ? "Saving…" : "Not installed"}
+        </Button>
+      );
+    }
     case "strings_not_arriving": {
       const deviceId = issue.device_id;
       const bindingIds = numbers(issue, "binding_ids");
@@ -420,18 +447,19 @@ export function RowFix({ issue, ctx }: { issue: DataIssue; ctx: FixContext }): J
       return <PlantCapacityFix issue={issue} ctx={ctx} busy={busy} />;
     case "device_silent":
       return (
-        <Link to="/admin/plant-setup" className="text-xs font-medium text-accent hover:underline">
+        <PageLink page="admin_plant_setup" to="/admin/plant-setup" className="text-xs font-medium text-accent hover:underline">
           Open in Plants &amp; Devices →
-        </Link>
+        </PageLink>
       );
     case "sunlight_too_low":
       return issue.device_id === null ? null : (
-        <Link
+        <PageLink
+          page="admin_bindings"
           to={`/admin/bindings?device=${issue.device_id}`}
           className="text-xs font-medium text-accent hover:underline"
         >
           Check its mapping in Tag Mapping →
-        </Link>
+        </PageLink>
       );
     default:
       return null;

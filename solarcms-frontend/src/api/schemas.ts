@@ -60,8 +60,12 @@ export const MeSchema = z.object({
   permissions: z.array(z.string()),
   // A-2. Already RLS-filtered; an empty array means zero Plants, not all (I-5).
   plants: z.array(MePlantSchema),
-  // A-3. Which routes exist at all.
+  // A-3. Which routes exist at all — screens only.
   dashboards: z.array(z.string()),
+  // A-3 for admin pages (migration 0046): ticked for this User and allowed by
+  // the role. Optional: an older server does not send it, and then the admin
+  // menu falls back to permissions alone rather than emptying.
+  admin_pages: z.array(z.string()).optional(),
 });
 export type Me = z.infer<typeof MeSchema>;
 export type MePlant = z.infer<typeof MePlantSchema>;
@@ -242,6 +246,54 @@ export const KpiFigureSchema = z.object({
 });
 export type KpiFigure = z.infer<typeof KpiFigureSchema>;
 
+const minutes = () => z.number().catch(0);
+
+/**
+ * Grid, Plant and Inverter availability (⚠ PROPOSED, `domain/availability.py`):
+ * judged as a chain over daylight minutes, so one lost minute is blamed on one
+ * level. Each figure is a `KpiFigure` with the minutes behind it.
+ */
+export const AvailabilityLevelsSchema = z.object({
+  variant: z.string(),
+  /** The figures could not be worked out at all (the reason says so). */
+  failed: z.boolean().optional().catch(false),
+  grid: KpiFigureSchema.extend({
+    judged_minutes: minutes(),
+    down_minutes: minutes(),
+    no_data_minutes: minutes(),
+    source: z
+      .object({ device_type_code: z.string().nullable(), device_count: z.number() })
+      .nullable()
+      .catch(null),
+  }),
+  plant: KpiFigureSchema.extend({
+    judged_minutes: minutes(),
+    down_minutes: minutes(),
+    no_data_minutes: minutes(),
+    /** Judged with nothing saying whether the grid was there. */
+    without_grid_minutes: minutes(),
+  }),
+  inverter: KpiFigureSchema.extend({
+    judged_minutes: minutes(),
+    down_minutes: minutes(),
+    weighted_by: z.enum(["capacity", "count"]).catch("count"),
+    inverter_count: minutes(),
+    worst: z
+      .object({ device_id: z.number(), device_code: z.string(), down_minutes: z.number() })
+      .nullable()
+      .catch(null),
+  }),
+  daylight_minutes: minutes(),
+  no_sun_minutes: minutes(),
+  unattributed_minutes: minutes(),
+  curtailed_minutes: minutes(),
+  planned_minutes: minutes(),
+  days_counted: minutes(),
+  days_pending: minutes(),
+  days_beyond_retention: minutes(),
+});
+export type AvailabilityLevels = z.infer<typeof AvailabilityLevelsSchema>;
+
 /**
  * How much of the period the figures beside it actually saw.
  *
@@ -400,7 +452,10 @@ export const PlantKpisSchema = z.object({
   /** What PR stands on; see `PrBasisSchema`. Optional for an older server. */
   pr_basis: PrBasisSchema.nullable().optional().catch(null),
   cuf: KpiFigureSchema,
+  /** The share of time Devices were reporting — shown as Data availability. */
   availability: KpiFigureSchema,
+  /** Optional: a stored copy made before it existed, or an older server, has none. */
+  availability_levels: AvailabilityLevelsSchema.nullable().optional().catch(null),
   co2_avoided_kg: KpiFigureSchema,
   /** Which meter's counter the energy (and so PR, CUF, CO₂) came from. Only
    *  the part the screen names; optional for an API that predates it. */

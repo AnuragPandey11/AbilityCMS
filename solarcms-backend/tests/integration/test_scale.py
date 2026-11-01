@@ -26,6 +26,7 @@ from solarcms.services import snapshots
 from solarcms.services.backfill import refresh_aggregates
 from solarcms.workers.leadership import Leadership
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -54,6 +55,7 @@ async def _client_with_plant() -> dict[str, Any]:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'admin'
         """), {"u": user_id, "c": client_id})
+        await grant_admin_tabs(s)
     return {"client_id": client_id, "plant_id": plant_id, "email": email}
 
 

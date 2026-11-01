@@ -25,7 +25,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import text
 
-from solarcms.api.deps import CurrentUser, SessionDep, require_permission
+from solarcms.api.deps import CurrentUser, SessionDep, require_page, require_permission
 from solarcms.api.patching import patch_assignments
 from solarcms.config import get_settings
 from solarcms.domain.notification_scope import (
@@ -41,7 +41,9 @@ from solarcms.schemas.alarming import (
 )
 from solarcms.services.notifications import queue_notification
 
-router = APIRouter(prefix="/notification-subscriptions", tags=["notifications"])
+# Every route is the Alarm Emails page's, and needs it ticked (migration 0046).
+router = APIRouter(prefix="/notification-subscriptions", tags=["notifications"],
+                   dependencies=[Depends(require_page("admin_alarm_emails"))])
 
 _MANAGE = require_permission("user.manage")
 

@@ -139,18 +139,25 @@ class Membership(Base):
 
 
 class Dashboard(Base):
-    """A dashboard *type* a User may be permitted to open — dimension A-3."""
+    """A tab a User may be given — a screen or an admin page — dimension A-3.
+
+    An admin page (`kind = 'admin'`) also needs its role `permission`: a tick
+    never grants a permission (migration 0046).
+    """
 
     __tablename__ = "dashboards"
+    __table_args__ = (CheckConstraint("kind IN ('screen', 'admin')", name="dashboards_kind"),)
 
     id: Mapped[int] = pk()
     code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="screen")
+    permission: Mapped[str | None] = mapped_column(String(64))
 
 
 class UserDashboardAccess(Base):
-    """No rows + role 'admin' → all dashboards. No rows otherwise → none (cf. I-5)."""
+    """No rows → no tabs, for every role but the platform's (migration 0046; cf. I-5)."""
 
     __tablename__ = "user_dashboard_access"
 

@@ -20,8 +20,40 @@ export async function createUser(input: {
   role_code: string;
   /** Required of a platform administrator, ignored for a Client Admin. */
   client_id?: number;
+  /** The tabs ticked on the form, given in the same transaction (A-3). */
+  dashboard_codes?: string[];
 }): Promise<unknown> {
-  return request("/users", { method: "POST", params: { ...input } });
+  const { dashboard_codes, ...params } = input;
+  return request("/users", {
+    method: "POST",
+    params: { ...params },
+    body: { dashboard_codes: dashboard_codes ?? [] },
+  });
+}
+
+/** One tab: a screen, or an admin page with the role permission it also needs. */
+export const AccessTabSchema = z.object({
+  code: z.string(),
+  name: z.string(),
+  kind: z.enum(["screen", "admin"]).catch("screen"),
+  permission: z.string().nullable(),
+});
+export type AccessTab = z.infer<typeof AccessTabSchema>;
+
+export const AccessCatalogueSchema = z.object({
+  tabs: z.array(AccessTabSchema),
+  /** Per role, the tabs it can use: every screen, and the admin pages it holds the permission for. */
+  offered_by_role: z.record(z.array(z.string())),
+  /** The tabs this caller may give; null for a platform administrator, who may give any. */
+  givable: z.array(z.string()).nullable(),
+  /** Whether this caller sets a Client Admin's tabs — a platform administrator only. */
+  sets_client_admin_tabs: z.boolean(),
+});
+export type AccessCatalogue = z.infer<typeof AccessCatalogueSchema>;
+
+export async function accessCatalogue(): Promise<AccessCatalogue> {
+  return parse(AccessCatalogueSchema, await request("/users/access-catalogue"),
+    "GET /users/access-catalogue");
 }
 
 export async function updateUser(

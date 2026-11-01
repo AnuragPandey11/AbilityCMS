@@ -20,6 +20,7 @@ from solarcms.api.auth import hash_password
 from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -41,6 +42,7 @@ async def _admin_http() -> tuple[httpx.AsyncClient, int, int]:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'admin'
         """), {"u": user_id, "c": client_id})
+        await grant_admin_tabs(s)
 
     async with httpx.AsyncClient(transport=ASGITransport(app=create_app()),
                                  base_url="http://test") as opener:

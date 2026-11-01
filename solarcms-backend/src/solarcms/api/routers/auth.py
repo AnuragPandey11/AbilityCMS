@@ -230,17 +230,23 @@ async def me(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
     """User, role, accessible Plants and accessible dashboards."""
     plants = (await session.execute(
         text("SELECT id, code, name, status FROM plants ORDER BY code"))).all()
-    if user.is_platform_admin or user.role_code == "admin":
-        dashboards = (await session.execute(
-            text("SELECT code FROM dashboards ORDER BY sort_order"))).all()
+    # Every tab for a platform administrator; for everyone else, a Client Admin
+    # included, the tabs ticked for them (migration 0046) — and an admin page
+    # only where the role also holds the permission it needs.
+    if user.is_platform_admin:
+        tabs = (await session.execute(text(
+            "SELECT code, kind, permission FROM dashboards ORDER BY sort_order"))).all()
     else:
-        dashboards = (await session.execute(text("""
-            SELECT d.code FROM user_dashboard_access uda
+        tabs = (await session.execute(text("""
+            SELECT d.code, d.kind, d.permission FROM user_dashboard_access uda
               JOIN memberships m ON m.id = uda.membership_id
               JOIN dashboards d  ON d.id = uda.dashboard_id
              WHERE m.user_id = :user_id AND m.client_id = :client_id
              ORDER BY d.sort_order
         """), {"user_id": user.user_id, "client_id": user.client_id})).all()
+    dashboards = [t for t in tabs if t.kind == "screen"]
+    admin_pages = [t.code for t in tabs
+                   if t.kind == "admin" and t.permission in user.permissions]
 
     # The Client's own name, so every screen can say whose data is on it
     # without a call to `GET /clients` — which is Super Admin only, and would
@@ -263,5 +269,8 @@ async def me(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
         # RLS already filtered these; the API adds no second filter of its own.
         "plants": [{"id": p.id, "code": p.code, "name": p.name, "status": p.status}
                    for p in plants],
+        # Screens only: the menu's tabs and the landing page are built from it.
         "dashboards": [d.code for d in dashboards],
+        # The admin pages this User may open — ticked, and the role permits.
+        "admin_pages": admin_pages,
     }

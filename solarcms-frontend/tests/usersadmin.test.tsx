@@ -55,8 +55,29 @@ const OPERATOR: User = {
   plant_ids: [11, 12], dashboards: ["single_plant", "alarms", "plant_list"],
 };
 
+const CATALOGUE = {
+  tabs: [
+    { code: "plant_overview", name: "Plant Overview", kind: "screen", permission: null },
+    { code: "plant_list", name: "Plant List", kind: "screen", permission: null },
+    { code: "single_plant", name: "Single Plant", kind: "screen", permission: null },
+    { code: "alarms", name: "Alarms", kind: "screen", permission: null },
+    { code: "reports", name: "Reports", kind: "screen", permission: null },
+    { code: "admin_bindings", name: "Tag Mapping", kind: "admin", permission: "config.modify" },
+    { code: "admin_users", name: "Users", kind: "admin", permission: "user.manage" },
+  ],
+  offered_by_role: {
+    admin: ["plant_overview", "plant_list", "single_plant", "alarms", "reports", "admin_bindings", "admin_users"],
+    employee: ["plant_overview", "plant_list", "single_plant", "alarms", "reports"],
+    guest: ["plant_overview", "plant_list", "single_plant", "alarms", "reports"],
+  },
+  // A Client Admin gives only what they have; this one has every screen.
+  givable: ["plant_overview", "plant_list", "single_plant", "alarms", "reports", "admin_users"] as string[] | null,
+  sets_client_admin_tabs: false,
+};
+
 const api = vi.hoisted(() => ({
   listUsers: vi.fn(),
+  accessCatalogue: vi.fn(),
   createUser: vi.fn(async () => ({})),
   updateUser: vi.fn(async () => ({})),
   setPlantAccess: vi.fn(async (_id: number, ids: number[]) => ({
@@ -90,7 +111,10 @@ async function openManage(email: string): Promise<HTMLElement> {
 beforeEach(() => {
   me = clientAdmin();
   api.listUsers.mockResolvedValue([ADMIN, OPERATOR]);
-  for (const fn of Object.values(api)) if (fn !== api.listUsers) fn.mockClear();
+  api.accessCatalogue.mockResolvedValue(CATALOGUE);
+  for (const fn of Object.values(api)) {
+    if (fn !== api.listUsers && fn !== api.accessCatalogue) fn.mockClear();
+  }
 });
 
 describe("Users: the Manage panel", () => {
@@ -100,7 +124,7 @@ describe("Users: the Manage panel", () => {
     expect(within(panel).getByRole("checkbox", { name: /NORTH/ })).toBeChecked();
     expect(within(panel).getByRole("checkbox", { name: /SOUTH/ })).toBeChecked();
     expect(within(panel).getByRole("checkbox", { name: /EAST/ })).not.toBeChecked();
-    expect(within(panel).getByRole("checkbox", { name: "Single Plant" })).toBeChecked();
+    expect(await within(panel).findByRole("checkbox", { name: "Single Plant" })).toBeChecked();
     expect(within(panel).getByRole("checkbox", { name: "Alarms" })).toBeChecked();
     // `plant_list` alone ticks the one Plants box: the two codes are one screen.
     expect(within(panel).getByRole("checkbox", { name: "Plants" })).toBeChecked();
@@ -117,8 +141,8 @@ describe("Users: the Manage panel", () => {
     // The two it already had are kept: the save is their list plus EAST.
     await waitFor(() => expect(api.setPlantAccess).toHaveBeenCalledWith(2, [11, 12, 13]));
 
-    fireEvent.click(within(panel).getByRole("checkbox", { name: "Alarms" }));
-    fireEvent.click(within(panel).getByRole("button", { name: "Save screens (remove 1)" }));
+    fireEvent.click(await within(panel).findByRole("checkbox", { name: "Alarms" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Save tabs (remove 1)" }));
     await waitFor(() =>
       expect(api.setDashboardAccess).toHaveBeenCalledWith(2, ["single_plant", "plant_list"]),
     );
@@ -165,6 +189,61 @@ describe("Users: the Manage panel", () => {
     expect(within(panel).getByText(/switch to/)).toBeInTheDocument();
     fireEvent.click(within(panel).getByRole("checkbox", { name: /EAST/ }));
     expect(within(panel).getByRole("button", { name: "Save Plants (add 1)" })).toBeDisabled();
+  });
+});
+
+describe("Users: the tabs", () => {
+  it("offers an Employee no admin page, and says why", async () => {
+    renderScreen();
+    const panel = await openManage("ravi@example.com");
+    const tagMapping = await within(panel).findByRole("checkbox", { name: "Tag Mapping" });
+    expect(tagMapping).toBeDisabled();
+    expect(tagMapping.closest("label")).toHaveAttribute(
+      "title", expect.stringMatching(/Client Employee cannot use this page/));
+  });
+
+  it("leaves a Client Admin's tabs to the platform administrator", async () => {
+    renderScreen();
+    const panel = await openManage("asha@example.com");
+    const single = await within(panel).findByRole("checkbox", { name: "Single Plant" });
+    expect(single).toBeDisabled();
+    expect(single.closest("label")).toHaveAttribute(
+      "title", "A Client Admin's tabs are set by the platform administrator.");
+  });
+
+  it("lets a platform administrator tick a Client Admin's admin pages", async () => {
+    me = { ...clientAdmin(), platform_admin: true, permissions: ["system.admin", "user.manage"] };
+    api.accessCatalogue.mockResolvedValue({ ...CATALOGUE, givable: null, sets_client_admin_tabs: true });
+    renderScreen();
+    const panel = await openManage("asha@example.com");
+    const tagMapping = await within(panel).findByRole("checkbox", { name: "Tag Mapping" });
+    expect(tagMapping).toBeEnabled();
+    fireEvent.click(tagMapping);
+    fireEvent.click(within(panel).getByRole("button", { name: "Save tabs (add 1)" }));
+    await waitFor(() => expect(api.setDashboardAccess).toHaveBeenCalledWith(1, ["admin_bindings"]));
+  });
+
+  it("creates a User with the tabs ticked on the form", async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: /New User/ }));
+    fireEvent.change(screen.getByLabelText(/Email/), { target: { value: "new@example.com" } });
+    fireEvent.change(screen.getByLabelText(/Full name/), { target: { value: "New" } });
+    fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: "a-long-password" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Single Plant" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Alarms" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create User" }));
+    await waitFor(() =>
+      expect(api.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ role_code: "employee", dashboard_codes: ["single_plant", "alarms"] }),
+      ),
+    );
+  });
+
+  it("offers a Client Admin no way to create another Client Admin", async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: /New User/ }));
+    const option = screen.getByRole("option", { name: /Client Admin/ }) as HTMLOptionElement;
+    expect(option.disabled).toBe(true);
   });
 });
 

@@ -14,6 +14,18 @@ import type { KpiPeriod, Tag } from "@/api/schemas";
 /** Rendered wherever a figure is undefined. Never "0". */
 export const UNDEFINED_DISPLAY = "—";
 
+/**
+ * Rendered where nothing at the Plant measures the figure at all — no weather
+ * station, no breaker, or a station whose input for it is switched off in Tag
+ * Mapping because no sensor is fitted (the client's request, 1 Nov 2026).
+ * Kept apart from the dash on purpose: "Not Available" is a fact about the
+ * Plant's equipment and needs nobody, a dash is an instrument that is there
+ * and silent and needs someone now (Guardrail 26). A fixed register map sends
+ * 0 for an input with nothing wired to it, so a Plant reaches this only once
+ * someone has said so — never because a reading was zero.
+ */
+export const NOT_AVAILABLE_DISPLAY = "Not Available";
+
 function significantDigits(magnitude: number): number {
   if (magnitude === 0) return 2;
   if (magnitude >= 1000) return 0;

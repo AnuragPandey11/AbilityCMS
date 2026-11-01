@@ -22,6 +22,7 @@ from solarcms.api.auth import hash_password
 from solarcms.db.rls import SecurityContext
 from solarcms.db.session import scoped_session
 from tests.conftest import requires_db
+from tests.integration.access import grant_admin_tabs
 
 pytestmark = [pytest.mark.asyncio, requires_db]
 
@@ -55,6 +56,7 @@ async def _client_with_a_device() -> dict[str, Any]:
             INSERT INTO memberships (user_id, client_id, role_id)
             SELECT :u, :c, id FROM roles WHERE code = 'admin'
         """), {"u": user_id, "c": client_id})
+        await grant_admin_tabs(s)
         model_id = (await s.execute(text("""
             INSERT INTO device_models (device_type_id, manufacturer, model_code)
             SELECT id, 'Delete', :m FROM device_types WHERE code = 'MFM' RETURNING id

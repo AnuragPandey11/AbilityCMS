@@ -25,10 +25,13 @@ choices of 9 Oct 2026, constants in `assumptions.py`:
 * **Availability** is the share of judged minutes with data that were not
   downtime. Undefined, never 1.0, when there was nothing to judge: a lone
   Inverter has no neighbours to compare with, and that is said, not hidden.
-* **Energy lost** is counted only while down (the user's choice): in each down
-  minute, the median producing neighbour's output per kWp of panels, times this
-  Inverter's own kWp. Undefined where a size it needs is not recorded — never
-  estimated (the user's choice) — and exactly zero when it never went down.
+* **Energy lost** is counted only while down, as **the Inverter's rated AC
+  capacity times its downtime in hours** (the user's formula, 1 Nov 2026,
+  replacing the median producing neighbour's output per kWp times this Inverter's
+  DC size, which read 0.0 kWh beside 6.9 h of downtime on a Plant with no DC
+  sizes recorded). ⚠ An estimate and a ceiling: it assumes full rated output
+  for every down minute, at dawn and under cloud alike. Undefined where no
+  rating is recorded — never guessed — and exactly zero when it never went down.
 
 Each Device's value is **held** between its own readings for its hold, as the
 Plant's operating rule holds it (`operating.held_series`): an Inverter on an
@@ -43,7 +46,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from statistics import median
 
 from solarcms.domain.assumptions import (
     INVERTER_DOWNTIME_MIN_MINUTES,
@@ -63,7 +65,8 @@ class InverterMinutes:
     """
 
     device_id: int
-    dc_kwp: float | None
+    #: Rated AC capacity, kW — what a down minute is assumed to have cost.
+    rated_kw: float | None
     hold_minutes: int
     minutes: Sequence[int]
     mean_kw: Sequence[float]
@@ -173,7 +176,6 @@ def fold(
     state = [_NO_DATA] * count
     tallies = [_Tally() for _ in inverters]
     planned = [_planned_mask(inv.planned, minutes) for inv in inverters]
-    sized = [(k, inv.dc_kwp) for k, inv in enumerate(inverters) if inv.dc_kwp]
     heard = generating = 0
 
     for t in range(minutes):
@@ -203,10 +205,6 @@ def fold(
                 tally.close(min_stop=min_stop_minutes)
             continue
 
-        # The typical producing neighbour's output per kWp, worked out once per
-        # minute and only if some Inverter is stopped and sized.
-        per_kwp: float | None = None
-        per_kwp_known = False
         for k, inv in enumerate(inverters):
             tally, here = tallies[k], state[k]
             others_reporting = reporting - (here != _NO_DATA)
@@ -227,17 +225,8 @@ def fold(
                 tally.producing += 1
                 tally.close(min_stop=min_stop_minutes)
             else:
-                expected: float | None = None
-                if inv.dc_kwp:
-                    if not per_kwp_known:
-                        # A stopped Inverter is not producing, so every producing
-                        # one is a neighbour.
-                        rates = [max(0.0, mean[j]) / kwp for j, kwp in sized
-                                 if state[j] == _PRODUCING]
-                        per_kwp = median(rates) if rates else None
-                        per_kwp_known = True
-                    if per_kwp is not None:
-                        expected = per_kwp * inv.dc_kwp / 60.0
+                # Rated capacity for one minute: the user's formula, rating times hours.
+                expected = inv.rated_kw / 60.0 if inv.rated_kw else None
                 if tally.run_start is None:
                     tally.run_start = t
                 tally.run.append(expected)
@@ -270,10 +259,8 @@ def _result(inv: InverterMinutes, tally: _Tally, count: int) -> InverterTime:
         lost = 0.0
     elif all(stop.lost_kwh is not None for stop in tally.stops):
         lost = sum(stop.lost_kwh or 0.0 for stop in tally.stops)
-    elif not inv.dc_kwp:
-        lost_reason = "no DC size is recorded for this Inverter"
     else:
-        lost_reason = "no generating neighbour has a DC size recorded"
+        lost_reason = "no rated capacity is recorded for this Inverter"
 
     return InverterTime(
         device_id=inv.device_id,

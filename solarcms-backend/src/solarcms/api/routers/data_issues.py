@@ -24,6 +24,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from solarcms.api import pages
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.cache import keys
 from solarcms.cache.live import get_redis
@@ -98,7 +99,7 @@ def _counts(issues: list[DataIssue], acks: dict[str, dict[str, Any]]) -> dict[st
     return counts
 
 
-@router.get("/plants/{plant_id}/data-issues")
+@router.get("/plants/{plant_id}/data-issues", dependencies=[pages.DATA_ISSUES_PAGE])
 async def plant_data_issues(
     plant_id: int, session: SessionDep,
     user: CurrentUser = Depends(require_permission("config.modify")),
@@ -133,7 +134,7 @@ async def plant_data_issues(
     }
 
 
-@router.get("/data-issues/summary")
+@router.get("/data-issues/summary", dependencies=[pages.DATA_ISSUES_PAGE])
 async def data_issues_summary(
     session: SessionDep,
     user: CurrentUser = Depends(require_permission("config.modify")),
@@ -193,6 +194,7 @@ async def data_issues_summary(
 
 
 @router.post("/plants/{plant_id}/data-issues/acknowledgements",
+             dependencies=[pages.DATA_ISSUES_PAGE],
              status_code=status.HTTP_201_CREATED)
 async def acknowledge_issue(
     plant_id: int, body: AcknowledgeIn, session: SessionDep, background: BackgroundTasks,
@@ -232,7 +234,7 @@ async def acknowledge_issue(
             "created_at": row.created_at}
 
 
-@router.delete("/data-issues/acknowledgements/{ack_id}",
+@router.delete("/data-issues/acknowledgements/{ack_id}", dependencies=[pages.DATA_ISSUES_PAGE],
                status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def unacknowledge_issue(
     ack_id: int, session: SessionDep, background: BackgroundTasks,
