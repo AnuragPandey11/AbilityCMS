@@ -532,6 +532,39 @@ PLANT_IMPORT_COUNTER_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
     ("MFM", "ENERGY_IMPORT_TOTAL"),
 )
 
+# ── Revenue — ⚠ PROPOSED (the user's choices of 1 Nov 2026; OPEN-14, I-11).
+#
+# Revenue is exported energy times the Plant's tariff (`plants.energy_tariff_inr_per_kwh`).
+# Export is read from the ABT Meter, the sealed settlement instrument, and —
+# the user's decision — from the MFM where a Plant has no ABT Meter, with every
+# such figure labelled an *estimate*, never settlement. That fallback is why
+# this is a screen figure and not a Financial Report: I-11 still governs those,
+# with no fallback (`services/reporting.SETTLEMENT_DEVICE_TYPES`). No Inverter
+# fallback: generation is not export.
+REVENUE_EXPORT_COUNTER_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
+    ("ABT_METER", "ENERGY_EXPORT_TOTAL"),
+    ("MFM", "ENERGY_EXPORT_TOTAL"),
+)
+# The one Type whose export is settlement; anything else answering is an estimate.
+REVENUE_SETTLEMENT_TYPE: Final = "ABT_METER"
+# "Total Energy Generated" on the Revenue screen is what the Inverters made —
+# beside export, so the two can differ by the Plant's own losses and auxiliary
+# load. A Plant with no Inverter register falls back to the meters, and says so.
+REVENUE_GENERATION_COUNTER_PRECEDENCE: Final[tuple[tuple[str, str], ...]] = (
+    ("INVERTER", "ENERGY_TOTAL"),
+    ("ABT_METER", "ENERGY_EXPORT_TOTAL"),
+    ("MFM", "ENERGY_EXPORT_TOTAL"),
+)
+# Yearly revenue is per Indian financial year, April to March — the requirement
+# names the financial year. The KPI "year" stays the calendar year
+# (`KPI_YEAR_START_MONTH`); the two are different questions.
+REVENUE_YEAR_START_MONTH: Final = 4
+# The trends: the last 30 Plant days, the last 12 months, and financial years
+# back to the Plant's first reading, at most this many.
+REVENUE_TREND_DAYS: Final = 30
+REVENUE_TREND_MONTHS: Final = 12
+REVENUE_TREND_MAX_YEARS: Final = 5
+
 # ── A ratio a Report flags as implausible — ⚠ ASSUMED.
 #
 # A PR or CUF above this, or below zero, means the numerator and denominator

@@ -27,6 +27,7 @@ import { InverterMonitoringDashboard } from "@/dashboards/InverterMonitoringDash
 import { StringAnalysisDashboard } from "@/dashboards/StringAnalysisDashboard";
 import { MeteorologicalDashboard } from "@/dashboards/MeteorologicalDashboard";
 import { EnergyAnalyticsDashboard } from "@/dashboards/EnergyAnalyticsDashboard";
+import { RevenueDashboard } from "@/dashboards/RevenueDashboard";
 import { GridMonitoringDashboard } from "@/dashboards/GridMonitoringDashboard";
 import { PpcDashboard, TransformerDashboard, VcbDashboard } from "@/dashboards/EquipmentDashboard";
 import { AlarmsDashboard } from "@/dashboards/AlarmsDashboard";
@@ -64,6 +65,7 @@ const DASHBOARD_COMPONENTS: Record<string, () => JSX.Element> = {
   string_analysis: StringAnalysisDashboard,
   meteorological: MeteorologicalDashboard,
   energy_analytics: EnergyAnalyticsDashboard,
+  revenue: RevenueDashboard,
   grid_monitoring: GridMonitoringDashboard,
   transformer_monitoring: TransformerDashboard,
   ppc_monitoring: PpcDashboard,
@@ -84,6 +86,7 @@ const PLANT_FILTERED_DASHBOARDS = new Set([
   "string_analysis",
   "meteorological",
   "energy_analytics",
+  "revenue",
   "grid_monitoring",
   "transformer_monitoring",
   "ppc_monitoring",

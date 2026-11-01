@@ -468,6 +468,17 @@ export const IconEnergy = (p: IconProps) => (
   </Svg>
 );
 
+/**
+ * Revenue — the rupee sign: what the exported energy earned. Money, never
+ * energy, so not the counter's bars.
+ */
+export const IconRevenue = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6.5 4h11M6.5 8.6h11" />
+    <path d="M9.6 4h.6a4.3 4.3 0 0 1 0 8.6H6.5l8.6 7.8" />
+  </Svg>
+);
+
 /** Power — instantaneous. A bolt, used for this and nothing else. */
 export const IconPower = (p: IconProps) => (
   <Svg {...p}>

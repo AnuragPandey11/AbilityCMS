@@ -23,6 +23,7 @@ import type { Permission } from "@/auth/usePermission";
 import {
   IconAlarm,
   IconAnalytics,
+  IconRevenue,
   IconBreaker,
   IconClient,
   IconController,
@@ -96,6 +97,7 @@ export const DASHBOARD_ICONS: Record<string, IconComponent> = {
   string_analysis: IconStrings,
   meteorological: IconIrradiance,
   energy_analytics: IconAnalytics,
+  revenue: IconRevenue,
   grid_monitoring: IconMeter,
   transformer_monitoring: IconTransformer,
   ppc_monitoring: IconController,
@@ -133,6 +135,7 @@ export const NAV_GROUPS: NavGroup[] = [
       "string_analysis",
       "meteorological",
       "energy_analytics",
+      "revenue",
       "grid_monitoring",
       "transformer_monitoring",
       "ppc_monitoring",
