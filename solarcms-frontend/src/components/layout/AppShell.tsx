@@ -46,6 +46,7 @@ import { canOpenPage, usePermissions } from "@/auth/usePermission";
 import { useDashboards, dashboardLabel } from "@/auth/useDashboard";
 import { useAlarms, useDataIssuesSummary } from "@/api/hooks";
 import { LiveIndicator } from "@/live/LiveIndicator";
+import { RefreshCountdown } from "@/live/RefreshCountdown";
 import { SystemHealthPill } from "@/components/layout/SystemHealthPill";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { HeaderSlotProvider } from "@/components/layout/HeaderSlot";
@@ -307,6 +308,8 @@ export function AppShell(): JSX.Element {
           <div className="ml-auto flex shrink-0 items-center gap-3">
             {/* Only for a Super Admin, and only when something is wrong. */}
             <SystemHealthPill />
+            {/* Only while a screen shows a Plant's live figures. */}
+            <RefreshCountdown />
             <LiveIndicator />
             {/* Hidden on a phone: the count is context, and the header there
                 has room for the live state and the theme toggle, not both. */}

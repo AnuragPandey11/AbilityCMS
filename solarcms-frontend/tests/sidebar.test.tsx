@@ -38,6 +38,7 @@ vi.mock("@/api/hooks", () => ({
 }));
 
 vi.mock("@/live/LiveIndicator", () => ({ LiveIndicator: () => null }));
+vi.mock("@/live/RefreshCountdown", () => ({ RefreshCountdown: () => null }));
 
 const { AppShell } = await import("@/components/layout/AppShell");
 const { ThemeProvider } = await import("@/theme/ThemeProvider");
