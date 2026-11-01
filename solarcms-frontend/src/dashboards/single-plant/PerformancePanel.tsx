@@ -151,19 +151,23 @@ const COMPARISON_LABEL: Partial<Record<KpiPeriod, string>> = {
   year: "Last year, same date",
 };
 
-/** The footnote: the period, then what the figure is measured against. */
+/**
+ * The footnote: the period, with what the figure is measured against on its
+ * tooltip (and in the Performance details drawer). Spelled out on the tile it
+ * took two or three lines in a fifth of the row and set the whole strip's
+ * height (the user's request, 1 Nov 2026).
+ */
 function footnote(
   figure: KpiFigure,
   period: KpiPeriod,
   measuredLater: boolean,
 ): ReactNode {
   const words = variantWords(figure.variant, period, measuredLater);
+  const note = figure.variant ? variantNote(figure.variant) : null;
+  const title = [words ? `${PERIOD_LABEL[period]} · ${words}` : null, note].filter(Boolean).join(". ");
   return (
-    <span title={figure.variant ? variantNote(figure.variant) : undefined}>
-      {/* The weight is the tile's (bold in the headline strip); the period
-          stands out by its shade alone, so it is never lighter than the rest. */}
-      <span className="text-ink-muted">{PERIOD_LABEL[period]}</span>
-      {words ? ` · ${words}` : ""}
+    <span className="cursor-help text-ink-muted" title={title || undefined}>
+      {PERIOD_LABEL[period]}
     </span>
   );
 }

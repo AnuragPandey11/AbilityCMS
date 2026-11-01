@@ -96,12 +96,14 @@ describe("Performance tiles", () => {
     expect(drawing("Data availability")).toBeInTheDocument();
   });
 
-  it("says in words what each figure is measured against", () => {
+  it("says in words, on the footnote's tooltip, what each figure is measured against", () => {
     band();
-    expect(screen.getByText(/plane-of-array irradiance, not temperature-corrected/)).toBeInTheDocument();
-    expect(screen.getByText(/AC capacity, every hour since midnight/)).toBeInTheDocument();
-    expect(screen.getByText(/share of time Devices were reporting; offline counts as down/)).toBeInTheDocument();
-    // The code itself stays on the tooltip, never in the footnote.
+    // On the tooltip, not the tile: spelled out it set the whole strip's height.
+    expect(screen.getByTitle(/plane-of-array irradiance, not temperature-corrected/)).toBeInTheDocument();
+    expect(screen.getByTitle(/AC capacity, every hour since midnight/)).toBeInTheDocument();
+    expect(screen.getByTitle(/share of time Devices were reporting; offline counts as down/)).toBeInTheDocument();
+    expect(screen.queryByText(/not temperature-corrected/)).not.toBeInTheDocument();
+    // The code itself is never shown.
     expect(screen.queryByText(/poa uncorrected/)).not.toBeInTheDocument();
   });
 
@@ -115,7 +117,7 @@ describe("Performance tiles", () => {
       },
       period: "month",
     });
-    expect(screen.getByText(/AC capacity, every hour since the first reading/)).toBeInTheDocument();
+    expect(screen.getByTitle(/AC capacity, every hour since the first reading/)).toBeInTheDocument();
   });
 
   it("keeps the figures' coverage on the button into their detail", () => {
