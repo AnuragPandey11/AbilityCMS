@@ -5,7 +5,7 @@
  * Circuit Breaker".
  *
  * One screen, three specs (`equipment/specs.ts`): the headline figures, a
- * panel of contacts, and trends over a chosen window. The VCB has no analogue
+ * panel of contacts, and trends over the history screens' shared period. The VCB has no analogue
  * value, so its screen is contacts only, and it shows every breaker at once.
  *
  * ── Where the figures come from ─────────────────────────────────────────────
@@ -25,9 +25,8 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAlarms, usePlant, usePlantDevices } from "@/api/hooks";
 import type { Alarm, DeviceListItem, Tag } from "@/api/schemas";
-import type { TrendWindow } from "@/api/trendWindow";
 import { useDashboard } from "@/auth/useDashboard";
-import { InfoHint, Panel, SegmentedControl, SelectBox } from "@/components/ui";
+import { InfoHint, Panel, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
 import { CommStatusPill, PlantPicker, SeverityBadge } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
@@ -36,7 +35,13 @@ import { StateTrendChart } from "@/components/charts/StateTrendChart";
 import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
 import { ReadingTile } from "@/components/devices/ReadingTile";
 import { useDeviceReadings, type DeviceReadings } from "@/components/devices/useDeviceReadings";
-import { TREND_WINDOWS, useDeviceTrends } from "@/components/devices/useDeviceTrends";
+import { useDeviceTrends } from "@/components/devices/useDeviceTrends";
+import { HistoryPeriodBar } from "@/components/history/HistoryPeriodBar";
+import { useHistoryPeriod } from "@/state/useHistoryPeriod";
+import { periodDates } from "@/api/historyPeriod";
+import { useTimelineEvents } from "@/api/useHistory";
+import { exportStem } from "@/components/charts/csv";
+import { usePermission } from "@/auth/usePermission";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
 import { flagState, openAlarmsByTag, type FlagState, type FlagTone } from "./equipment/flags";
@@ -311,13 +316,15 @@ function Trends({
   device,
   readings,
   timezone,
+  plantId,
 }: {
   spec: EquipmentSpec;
   device: DeviceListItem;
   readings: DeviceReadings;
   timezone: string | undefined;
+  plantId: number;
 }): JSX.Element {
-  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
+  const { period } = useHistoryPeriod();
   const panels = spec.trends.map((trend: TrendSpec) => ({
     trend,
     lines: trend.lines
@@ -327,12 +334,25 @@ function Trends({
   const trends = useDeviceTrends(
     device,
     panels.flatMap(({ lines }) => lines.map(({ filled }) => filled.tag)),
-    trendWindow,
+    period,
     timezone,
     readings.tagsById,
   );
   const chartHeight = 240;
   const day = trends.range?.day ?? null;
+  const canExport = usePermission("data.export");
+  const canReadMaintenance = usePermission("plant.manage");
+  // This Device's own Alarms, and planned work on it or the whole Plant.
+  const { events } = useTimelineEvents(plantId, trends.range, {
+    deviceId: device.id,
+    canReadMaintenance,
+    live: trends.live,
+  });
+  const dates = timezone ? periodDates(period, Date.now(), timezone) : null;
+  // Every chart here spans the whole period, as the contact trends below do.
+  const frame = trends.range
+    ? { from: Date.parse(trends.range.from), to: Date.parse(trends.range.to) }
+    : null;
 
   return (
     <Panel
@@ -342,14 +362,6 @@ function Trends({
           A break in a line is a stretch in which nothing was received from {spec.subject} — not a
           reading of zero, and never drawn as one.
         </span>
-      }
-      actions={
-        <SegmentedControl
-          label={`${spec.noun} trend window`}
-          value={trendWindow}
-          onChange={setTrendWindow}
-          options={TREND_WINDOWS}
-        />
       }
       padding="p-4"
     >
@@ -388,6 +400,12 @@ function Trends({
                     height={chartHeight}
                     day={day}
                     markPeak={trend.markPeak}
+                    band
+                    events={events}
+                    frame={frame}
+                    exportName={
+                      canExport ? exportStem(device.code, trend.key, dates?.first, dates?.last) : null
+                    }
                   />
                 ) : (
                   <OverlayTrendChart
@@ -402,6 +420,7 @@ function Trends({
                     timezone={timezone}
                     height={chartHeight}
                     day={day}
+                    frame={frame}
                   />
                 )}
               </section>
@@ -496,6 +515,7 @@ function VersusChart({
           timezone={timezone}
           height={220}
           day={range?.day ?? null}
+          frame={range ? { from: Date.parse(range.from), to: Date.parse(range.to) } : null}
         />
       )}
       {actualReason ? (
@@ -523,7 +543,7 @@ function SetpointTrends({
   timezone: string | undefined;
   plantId: number;
 }): JSX.Element {
-  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
+  const { period } = useHistoryPeriod();
   const pairs = (spec.versus ?? []).map((pair) => ({
     pair,
     filled: readings.fill(pair.setpoint),
@@ -532,7 +552,7 @@ function SetpointTrends({
   const trends = useDeviceTrends(
     device,
     pairs.map(({ filled }) => filled.tag),
-    trendWindow,
+    period,
     timezone,
     readings.tagsById,
   );
@@ -544,14 +564,6 @@ function SetpointTrends({
           Each setpoint {spec.subject} commanded (dashed) against what the meter at the point of connection
           measured. While a control is FALSE its setpoint is not in force, and 0 there means "not commanded".
         </span>
-      }
-      actions={
-        <SegmentedControl
-          label={`${spec.noun} setpoint window`}
-          value={trendWindow}
-          onChange={setTrendWindow}
-          options={TREND_WINDOWS}
-        />
       }
       padding="p-4"
     >
@@ -569,7 +581,7 @@ function SetpointTrends({
               control={control}
               plantId={plantId}
               range={trends.range}
-              live={trendWindow !== "yesterday"}
+              live={trends.live}
               timezone={timezone}
             />
           ))}
@@ -601,12 +613,12 @@ function FlagTrends({
   timezone: string | undefined;
   embedded: boolean;
 }): JSX.Element {
-  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
+  const { period } = useHistoryPeriod();
   const flags = spec.flags.map((position: Position) => readings.fill(position));
   const trends = useDeviceTrends(
     device,
     flags.map((filled) => filled.tag),
-    trendWindow,
+    period,
     timezone,
     readings.tagsById,
   );
@@ -616,14 +628,6 @@ function FlagTrends({
   // A contact is never throttled, so it is due every Device cycle.
   const cycleMs = (device.expected_interval_s ?? 0) * 1000;
 
-  const control = (
-    <SegmentedControl
-      label={`${spec.noun} signal trend window`}
-      value={trendWindow}
-      onChange={setTrendWindow}
-      options={TREND_WINDOWS}
-    />
-  );
   const subtitle =
     "Each signal as the equipment sent it, held until it changed. A dot marks a change; a ring marks a " +
     "stretch that saw both states. A break is a stretch with nothing received — never drawn as FALSE.";
@@ -693,7 +697,6 @@ function FlagTrends({
             <h3 className="text-sm font-semibold text-ink">Signal trends</h3>
             <p className="mt-0.5 text-xs text-ink-muted">{subtitle}</p>
           </div>
-          {control}
         </div>
         {body}
       </div>
@@ -703,7 +706,6 @@ function FlagTrends({
     <Panel
       title={<span className="text-base">Status flag trends</span>}
       subtitle={<span className="text-sm">{subtitle}</span>}
-      actions={control}
       padding="p-4"
     >
       {body}
@@ -731,7 +733,7 @@ function OneDevice({
     <>
       <DeviceSection spec={spec} device={device} readings={readings} timezone={timezone} headed={false} />
       {spec.trends.length > 0 ? (
-        <Trends spec={spec} device={device} readings={readings} timezone={timezone} />
+        <Trends spec={spec} device={device} readings={readings} timezone={timezone} plantId={plantId} />
       ) : null}
       {spec.versus && spec.versus.length > 0 ? (
         <SetpointTrends spec={spec} device={device} readings={readings} timezone={timezone} plantId={plantId} />
@@ -797,6 +799,7 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
   // Several at once only where the spec asks for it; one of them is just one.
   const every = spec.showEvery && devices.length > 1;
   const readings = useDeviceReadings(every ? null : chosen, spec.subject);
+  const { period, setPeriod } = useHistoryPeriod();
 
   if (hasNoPlants) {
     return (
@@ -806,6 +809,20 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
       />
     );
   }
+
+  const hasTrends = spec.trends.length > 0 || (spec.versus?.length ?? 0) > 0 || spec.flagTrends;
+  // One period for every trend on the screen, and the same one the other
+  // history screens show (`useHistoryPeriod`) — it used to be a control on
+  // each panel, so two panels could sit on different spans looking aligned.
+  const periodBar = hasTrends ? (
+    <HistoryPeriodBar
+      period={period}
+      onChange={setPeriod}
+      timezone={timezone}
+      nowMs={Math.floor(Date.now() / 60_000) * 60_000}
+      note="The figures and contacts above the trends are always the latest; the period sets the trends."
+    />
+  ) : null;
 
   const header = (
     <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -876,11 +893,13 @@ export function EquipmentDashboard({ spec }: { spec: EquipmentSpec }): JSX.Eleme
   return (
     <div className="flex flex-col gap-6">
       {header}
+      {periodBar}
       {every ? (
         devices.map((device) => <HeadedDevice key={device.id} spec={spec} device={device} timezone={timezone} />)
       ) : (
-        // Keyed on the Device, so a switch starts its trend window afresh
-        // rather than carrying one Device's state onto another.
+        // Keyed on the Device, so a switch starts its panels afresh rather
+        // than carrying one Device's state onto another. The period is the
+        // screen's, and stays.
         <OneDevice
           key={chosen.id}
           spec={spec}

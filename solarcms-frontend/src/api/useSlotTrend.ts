@@ -115,6 +115,15 @@ export interface TrendPoint {
   value: number | null;
   /** How many Devices contributed. Below `deviceCount`, the bucket is partial. */
   contributors: number;
+  /**
+   * The lowest and highest reading inside the bucket, where that is a fact —
+   * one Device, an averaged Tag, an aggregate tier. Absent otherwise: the
+   * lowest of a *sum* across Inverters is not the sum of their lowests (they
+   * did not all dip at once), so a band there would assert a spread nobody
+   * measured. Drawn only by a chart asked to (`TrendChart` `band`).
+   */
+  low?: number;
+  high?: number;
 }
 
 export interface SlotTrend {
@@ -250,6 +259,8 @@ export function seriesFromReadings(
   // Bucket → the Devices that reported in it. A Map preserves insertion
   // order, and the server returns buckets ascending, so no sort is needed.
   const byBucket = new Map<string, number[]>();
+  // The one good item of a bucket, kept for its min and max (see `TrendPoint.low`).
+  const only = new Map<string, ReadingPoint>();
   for (const point of items) {
     if (point.quality !== null && point.quality !== 0) {
       flagged += 1;
@@ -258,15 +269,32 @@ export function seriesFromReadings(
     if (point.value === null) continue;
     const bucket = byBucket.get(point.bucket);
     if (bucket) bucket.push(point.value);
-    else byBucket.set(point.bucket, [point.value]);
+    else {
+      byBucket.set(point.bucket, [point.value]);
+      only.set(point.bucket, point);
+    }
   }
   return {
     points: withGaps(
-      [...byBucket].map(([at, values]) => ({
-        at,
-        value: combine(values, aggregate),
-        contributors: values.length,
-      })),
+      [...byBucket].map(([at, values]) => {
+        const point: TrendPoint = { at, value: combine(values, aggregate), contributors: values.length };
+        const item = only.get(at);
+        // A spread is a fact only for one Device's averaged Tag: a counter's
+        // value is its last reading, and a bucket of several Devices has no
+        // one lowest.
+        if (
+          values.length === 1 &&
+          item &&
+          item.rollup_method === "avg" &&
+          typeof item.min_value === "number" &&
+          typeof item.max_value === "number" &&
+          item.min_value <= item.max_value
+        ) {
+          point.low = item.min_value;
+          point.high = item.max_value;
+        }
+        return point;
+      }),
       tier,
       sampleEveryMs,
     ),

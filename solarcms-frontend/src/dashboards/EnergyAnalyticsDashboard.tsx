@@ -4,7 +4,18 @@
  *
  * Four trends on one window — Plant power, GHI, module temperature, one
  * Inverter's efficiency — and energy per day for the last thirty days. The
- * window is a preset or two Plant-local wall times typed by hand.
+ * window is the history screens' shared period (`useHistoryPeriod`): a preset
+ * or two Plant-local wall times, carried in the link and kept when moving to
+ * Performance History or the equipment screens.
+ *
+ * ── Reading a long period ───────────────────────────────────────────────────
+ * - **Zoom fetches.** Scroll into a month of hourly buckets and the span on
+ *   screen is asked for again at the finest tier that fits it
+ *   (`useZoomableSeries`), down to the minute.
+ * - **The spread is shaded** on the one-Device trends (an averaged Tag), so a
+ *   ten-minute excursion an hourly mean smooths away is still visible.
+ * - **Alarms and planned work are marked** on the power trend's time axis,
+ *   so a fall in output is read beside the trip that caused it.
  *
  * ── Where each curve comes from ─────────────────────────────────────────────
  * - **Plant power** and **module temperature** read their dashboard slots
@@ -26,32 +37,31 @@
  */
 
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { useDashboard } from "@/auth/useDashboard";
 import { usePlant, usePlantDevices, useTags } from "@/api/hooks";
 import type { DeviceListItem, Tag } from "@/api/schemas";
-import { useSeries, useSlotSeries, type Series } from "@/api/useSeries";
+import { useZoomableSeries, useSlotSeries, type ZoomableSeries } from "@/api/useSeries";
 import { useSlotSteps } from "@/api/useSlotSteps";
 import type { TrendPoint } from "@/api/useSlotTrend";
-import { customRange, windowRange, type TrendWindow, type WindowRange } from "@/api/trendWindow";
-import { Panel, SegmentedControl, SelectBox, inputClass } from "@/components/ui";
+import type { WindowRange } from "@/api/trendWindow";
+import { periodDates, resolvePeriod } from "@/api/historyPeriod";
+import { useTimelineEvents } from "@/api/useHistory";
+import { usePermission } from "@/auth/usePermission";
+import { Panel, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState } from "@/components/state";
 import { PlantPicker } from "@/components/domain";
-import { TrendChart } from "@/components/charts/TrendChart";
+import { TrendChart, type ChartEvent } from "@/components/charts/TrendChart";
+import { exportStem } from "@/components/charts/csv";
+import { HistoryPeriodBar } from "@/components/history/HistoryPeriodBar";
 import { NOT_A_UNIT } from "@/components/devices/InverterView";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
-import { fromDateTimeInput, timezoneLabel, toDateTimeInput } from "@/format/datetime";
+import { useHistoryPeriod } from "@/state/useHistoryPeriod";
+import { timezoneLabel } from "@/format/datetime";
 
 const WMS_TYPE_CODE = "WMS";
 const INVERTER_TYPE_CODE = "INVERTER";
 const DAILY_ENERGY_DAYS = 30;
-
-const WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
-  { value: "today", label: "Today", hint: "The Plant's day so far, midnight to midnight." },
-  { value: "yesterday", label: "Yesterday", hint: "The Plant's previous day." },
-  { value: "7d", label: "Last 7 days", hint: "The last seven days, ending now." },
-  { value: "30d", label: "Last 30 days", hint: "The last thirty days, ending now." },
-];
-
-type Applied = { kind: "preset"; window: TrendWindow } | { kind: "custom"; from: number; to: number };
 
 /** INVERTER_2 before INVERTER_10 — codes carry numbers, and people count. */
 const byCode = (a: DeviceListItem, b: DeviceListItem) =>
@@ -77,8 +87,11 @@ function SeriesChart({
   timezone,
   day,
   markPeak,
+  band = false,
+  events,
+  exportName,
 }: {
-  series: Series;
+  series: ZoomableSeries;
   unavailableReason: string | null;
   unit: string | null;
   label: string;
@@ -86,6 +99,9 @@ function SeriesChart({
   timezone: string | undefined;
   day: WindowRange["day"];
   markPeak: boolean;
+  band?: boolean;
+  events?: ChartEvent[];
+  exportName?: string | null;
 }): JSX.Element {
   if (unavailableReason) {
     return (
@@ -114,6 +130,10 @@ function SeriesChart({
       height={260}
       day={day}
       markPeak={markPeak}
+      band={band}
+      events={events}
+      zoom={series.zoom ?? undefined}
+      exportName={exportName}
     />
   );
 }
@@ -125,52 +145,26 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
   const tagsQuery = useTags();
   const timezone = plantQuery.data?.timezone;
 
-  // ── The window
-  const [applied, setApplied] = useState<Applied>({ kind: "preset", window: "today" });
-  const [fromInput, setFromInput] = useState("");
-  const [toInput, setToInput] = useState("");
+  // ── The window: the history screens' shared period
+  const { period, setPeriod } = useHistoryPeriod();
   const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
-
-  /** Typed wall times, read in the Plant's zone. Applied as soon as both make a window. */
-  const draft = useMemo(() => {
-    if (!fromInput || !toInput || !timezone) return null;
-    return customRange(fromDateTimeInput(fromInput, timezone), fromDateTimeInput(toInput, timezone), nowMs);
-  }, [fromInput, toInput, timezone, nowMs]);
-  const draftError = draft && "error" in draft ? draft.error : null;
-
-  const applyDraft = (from: string, to: string) => {
-    if (!from || !to || !timezone) return;
-    const fromMs = fromDateTimeInput(from, timezone);
-    const toMs = fromDateTimeInput(to, timezone);
-    if ("error" in customRange(fromMs, toMs, nowMs)) return;
-    setApplied({ kind: "custom", from: fromMs, to: toMs });
-  };
-  const onFrom = (value: string) => {
-    setFromInput(value);
-    applyDraft(value, toInput);
-  };
-  const onTo = (value: string) => {
-    setToInput(value);
-    applyDraft(fromInput, value);
-  };
-  const onPreset = (window: TrendWindow) => {
-    setApplied({ kind: "preset", window });
-    // The typed window is no longer what the charts show; leaving it in the
-    // boxes would say it was.
-    setFromInput("");
-    setToInput("");
-  };
+  const canExport = usePermission("data.export");
+  const hasHistory = useDashboard("performance_history");
+  const canReadMaintenance = usePermission("plant.manage");
 
   // Waits for the Plant's zone: "today" on the browser's day first would be a
   // request answering a question nobody asked.
   const range: WindowRange | null = useMemo(() => {
     if (!timezone) return null;
-    if (applied.kind === "preset") return windowRange(applied.window, nowMs, timezone);
-    const custom = customRange(applied.from, applied.to, nowMs);
-    return "error" in custom ? null : custom;
-  }, [applied, nowMs, timezone]);
+    const resolved = resolvePeriod(period, nowMs, timezone);
+    return "error" in resolved ? null : resolved;
+  }, [period, nowMs, timezone]);
   // Only a window that ends now has anything new to learn.
   const live = range !== null && Date.parse(range.to) >= nowMs;
+  const dates = timezone ? periodDates(period, nowMs, timezone) : null;
+  const stem = (what: string) =>
+    canExport ? exportStem(plantQuery.data?.code, what, dates?.first, dates?.last) : null;
+  const { events } = useTimelineEvents(plantId, range, { canReadMaintenance, live });
 
   // ── The series
   const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data]);
@@ -184,7 +178,7 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
 
   const stations = useMemo(() => devices.filter((device) => device.type_code === WMS_TYPE_CODE), [devices]);
   const ghiTag = tagsByCode.get("GHI");
-  const ghi = useSeries({ devices: stations, tag: ghiTag, aggregate: "avg" }, range, { live });
+  const ghi = useZoomableSeries({ devices: stations, tag: ghiTag, aggregate: "avg" }, range, { live });
 
   const inverters = useMemo(
     () => devices.filter((device) => device.type_code === INVERTER_TYPE_CODE).sort(byCode),
@@ -195,7 +189,7 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
   const inverter = inverters.find((device) => device.id === inverterId) ?? inverters[0] ?? null;
   const oneInverter = useMemo(() => (inverter ? [inverter] : []), [inverter]);
   const efficiencyTag = tagsByCode.get("INVERTER_EFFICIENCY");
-  const efficiency = useSeries({ devices: oneInverter, tag: efficiencyTag, aggregate: "first" }, range, {
+  const efficiency = useZoomableSeries({ devices: oneInverter, tag: efficiencyTag, aggregate: "first" }, range, {
     live,
   });
 
@@ -235,8 +229,6 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
   }
 
   const day = range?.day ?? null;
-  // The native picker offers nothing past now, in the Plant's own clock.
-  const latestInput = timezone ? toDateTimeInput(nowMs, timezone) : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -254,47 +246,9 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
       </header>
 
       {/* One window for all four trends: a per-chart control would let two
-          charts sit side by side on different spans and still look aligned. */}
-      <div className="flex flex-wrap items-end gap-3">
-        <SegmentedControl<TrendWindow | "custom">
-          label="Analytics window"
-          size="lg"
-          // A custom window highlights no preset — none of them is on screen.
-          value={applied.kind === "preset" ? applied.window : "custom"}
-          onChange={(value) => {
-            if (value !== "custom") onPreset(value);
-          }}
-          options={WINDOWS}
-        />
-        <label className="flex flex-col gap-1">
-          <span className="field-label">From</span>
-          <input
-            type="datetime-local"
-            value={fromInput}
-            max={latestInput}
-            onChange={(event) => onFrom(event.target.value)}
-            className={`${inputClass} w-auto`}
-            aria-describedby="analytics-window-note"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="field-label">To</span>
-          <input
-            type="datetime-local"
-            value={toInput}
-            max={latestInput}
-            onChange={(event) => onTo(event.target.value)}
-            className={`${inputClass} w-auto`}
-            aria-describedby="analytics-window-note"
-          />
-        </label>
-        <p id="analytics-window-note" className={`pb-2 text-xs ${draftError ? "text-bad" : "text-ink-faint"}`}>
-          {draftError ??
-            (applied.kind === "custom"
-              ? "Showing the window typed. Pick a preset to go back."
-              : "Type a start and an end to show any other window.")}
-        </p>
-      </div>
+          charts sit side by side on different spans and still look aligned.
+          The same period as the other history screens (`useHistoryPeriod`). */}
+      <HistoryPeriodBar period={period} onChange={setPeriod} timezone={timezone} nowMs={nowMs} />
 
       {plantQuery.isError ? (
         <ErrorState error={plantQuery.error} retry={() => void plantQuery.refetch()} />
@@ -311,6 +265,8 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
             timezone={timezone}
             day={day}
             markPeak
+            events={events}
+            exportName={stem("power")}
           />
         </Panel>
 
@@ -326,6 +282,8 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
             timezone={timezone}
             day={day}
             markPeak
+            band={stations.length === 1}
+            exportName={stem("ghi")}
           />
         </Panel>
 
@@ -340,6 +298,8 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
             day={day}
             // The hottest minute is just the largest number here.
             markPeak={false}
+            band
+            exportName={stem("module_temperature")}
           />
         </Panel>
 
@@ -375,13 +335,30 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
             timezone={timezone}
             day={day}
             markPeak={false}
+            band
+            exportName={stem(inverter ? `${inverter.code}_efficiency` : "efficiency")}
           />
         </Panel>
       </div>
 
       <Panel
         title={titled(`Daily energy — last ${DAILY_ENERGY_DAYS} days`, unitOf(energyDays.unit))}
-        subtitle="One bar per Plant day, midnight to midnight: what each Device's counter added that day. A day nothing measured is left empty, not drawn as zero. Always the last thirty days, whatever the window above."
+        subtitle={
+          <>
+            One bar per Plant day, midnight to midnight: what each Device&rsquo;s counter added that day. A day
+            nothing measured is left empty, not drawn as zero. Always the last thirty days, whatever the period
+            above
+            {hasHistory ? (
+              <>
+                {" "}— the days of any period are on{" "}
+                <Link to="/d/performance_history" className="font-medium text-accent hover:underline">
+                  Performance History
+                </Link>
+              </>
+            ) : null}
+            .
+          </>
+        }
         padding="p-4"
       >
         {energyDays.unavailableReason || energyDays.isError ? (

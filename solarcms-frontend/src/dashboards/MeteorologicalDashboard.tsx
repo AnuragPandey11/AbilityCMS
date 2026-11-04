@@ -29,8 +29,9 @@
 import { useMemo, useState } from "react";
 import { usePlant, usePlantDevices } from "@/api/hooks";
 import type { DeviceListItem, Tag } from "@/api/schemas";
-import type { TrendWindow } from "@/api/trendWindow";
-import { Panel, SegmentedControl, SelectBox } from "@/components/ui";
+import { periodDates } from "@/api/historyPeriod";
+import { usePermission } from "@/auth/usePermission";
+import { Panel, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
@@ -38,7 +39,10 @@ import { OverlayTrendChart } from "@/components/charts/OverlayTrendChart";
 import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
 import { ReadingTile } from "@/components/devices/ReadingTile";
 import { useDeviceReadings } from "@/components/devices/useDeviceReadings";
-import { TREND_WINDOWS, useDeviceTrends } from "@/components/devices/useDeviceTrends";
+import { useDeviceTrends } from "@/components/devices/useDeviceTrends";
+import { HistoryPeriodBar } from "@/components/history/HistoryPeriodBar";
+import { exportStem } from "@/components/charts/csv";
+import { useHistoryPeriod } from "@/state/useHistoryPeriod";
 import type { IconComponent } from "@/components/layout/navigation";
 import {
   IconBeam,
@@ -128,8 +132,10 @@ export function MeteorologicalDashboard(): JSX.Element {
     .sort((a, b) => a.label.localeCompare(b.label));
 
   // ── Trends
-  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
+  // The history screens' shared period (`useHistoryPeriod`).
+  const { period, setPeriod } = useHistoryPeriod();
   const timezone = plantQuery.data?.timezone;
+  const canExport = usePermission("data.export");
 
   const trendFills = {
     ghi: fill(GHI),
@@ -141,12 +147,17 @@ export function MeteorologicalDashboard(): JSX.Element {
   const trends = useDeviceTrends(
     station,
     Object.values(trendFills).map((filled) => filled.tag),
-    trendWindow,
+    period,
     timezone,
     tagsById,
   );
   const range = trends.range;
   const seriesOf = (filled: Filled) => trends.seriesOf(filled.tag);
+  // Each chart spans the whole period, so they agree about time.
+  const frame = range ? { from: Date.parse(range.from), to: Date.parse(range.to) } : null;
+  const dates = timezone ? periodDates(period, Date.now(), timezone) : null;
+  const stem = (what: string) =>
+    canExport ? exportStem(station?.code, what, dates?.first, dates?.last) : null;
 
   // ── Rendering
   if (hasNoPlants) {
@@ -259,16 +270,16 @@ export function MeteorologicalDashboard(): JSX.Element {
             reading of zero, and never drawn as one.
           </span>
         }
-        actions={
-          <SegmentedControl
-            label="Weather trend window"
-            value={trendWindow}
-            onChange={setTrendWindow}
-            options={TREND_WINDOWS}
-          />
-        }
         padding="p-4"
       >
+        <div className="mb-4">
+          <HistoryPeriodBar
+            period={period}
+            onChange={setPeriod}
+            timezone={timezone}
+            nowMs={Math.floor(Date.now() / 60_000) * 60_000}
+          />
+        </div>
         {trends.isError ? (
           <ErrorState error={trends.error} retry={trends.refetch} />
         ) : (
@@ -296,6 +307,9 @@ export function MeteorologicalDashboard(): JSX.Element {
                     height={chartHeight}
                     day={range?.day ?? null}
                     markPeak={peak}
+                    band
+                    exportName={stem(key)}
+                    frame={frame}
                   />
                 )}
               </section>
@@ -340,6 +354,7 @@ export function MeteorologicalDashboard(): JSX.Element {
                   timezone={timezone}
                   height={chartHeight}
                   day={range?.day ?? null}
+                  frame={frame}
                 />
               )}
             </section>
@@ -364,6 +379,9 @@ export function MeteorologicalDashboard(): JSX.Element {
                   day={range?.day ?? null}
                   // The strongest gust is what a tracker stows for.
                   markPeak
+                  band
+                  exportName={stem("wind")}
+                  frame={frame}
                 />
               )}
             </section>

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { DASHBOARD_CODES, dashboardLabel } from "@/auth/useDashboard";
 
 describe("dashboard codes", () => {
-  it("matches the sixteen registered in the database", () => {
+  it("matches the seventeen registered in the database", () => {
     expect([...DASHBOARD_CODES]).toEqual([
       "portfolio",
       "plant_overview",
@@ -19,6 +19,7 @@ describe("dashboard codes", () => {
       "inverter_monitoring",
       "string_analysis",
       "meteorological",
+      "performance_history",
       "energy_analytics",
       "revenue",
       "grid_monitoring",

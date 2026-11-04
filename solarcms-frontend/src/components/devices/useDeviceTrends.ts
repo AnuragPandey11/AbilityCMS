@@ -18,7 +18,8 @@ import { qk } from "@/api/queryKeys";
 import * as readingsApi from "@/api/endpoints/readings";
 import type { DeviceListItem, ReadingPoint, Tag, Tier } from "@/api/schemas";
 import { seriesFromReadings, type TrendPoint } from "@/api/useSlotTrend";
-import { tierWithin, windowRange, type TrendWindow, type WindowRange } from "@/api/trendWindow";
+import { tierWithin, type TrendWindow, type WindowRange } from "@/api/trendWindow";
+import { resolvePeriod, type HistoryPeriod } from "@/api/historyPeriod";
 
 /** The windows a screen about one Device offers, in the client's reference order. */
 export const TREND_WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
@@ -39,6 +40,8 @@ const NO_ITEMS: ReadingPoint[] = [];
 export interface DeviceTrends {
   /** Null until the Plant's zone is known. */
   range: WindowRange | null;
+  /** The window still ends now. */
+  live: boolean;
   /** The tier the server actually answered from. */
   tier: Tier | null;
   isLoading: boolean;
@@ -53,14 +56,22 @@ export interface DeviceTrends {
 export function useDeviceTrends(
   device: DeviceListItem | null,
   tags: (Tag | undefined)[],
-  trendWindow: TrendWindow,
+  /**
+   * The window: one of the four presets the screens about one Device used to
+   * offer, or the history screens' shared period (`useHistoryPeriod`) — any
+   * preset or a custom stretch, up to years, the tier chosen to fit.
+   */
+  span: TrendWindow | HistoryPeriod,
   timezone: string | undefined,
   tagsById: Map<number, Tag>,
 ): DeviceTrends {
   const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
+  const period: HistoryPeriod = typeof span === "string" ? { kind: "preset", preset: span } : span;
   // Waits for the Plant's zone: "today" framed on the browser's day first
   // would be a request answering a question nobody asked.
-  const range = timezone ? windowRange(trendWindow, nowMs, timezone) : null;
+  const resolved = timezone ? resolvePeriod(period, nowMs, timezone) : null;
+  const range: WindowRange | null = resolved && !("error" in resolved) ? resolved : null;
+  const live = resolved !== null && !("error" in resolved) && resolved.live;
 
   const tagIds = [
     ...new Set(tags.map((tag) => tag?.id).filter((id): id is number => id !== undefined)),
@@ -80,7 +91,8 @@ export function useDeviceTrends(
     enabled,
     retry: false,
     staleTime: 60_000,
-    refetchInterval: trendWindow === "yesterday" ? false : 60_000,
+    // Only a window that ends now has anything new to learn.
+    refetchInterval: live ? 60_000 : false,
     placeholderData: (previous) => previous,
   });
 
@@ -110,6 +122,7 @@ export function useDeviceTrends(
 
   return {
     range,
+    live,
     tier: query.data?.tier ?? null,
     isLoading: enabled && query.isLoading,
     isError: query.isError,

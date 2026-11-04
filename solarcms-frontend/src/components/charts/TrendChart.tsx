@@ -33,7 +33,7 @@
  * verbatim (§4.1).
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import type { Tier } from "@/api/schemas";
 import type { TrendPoint } from "@/api/useSlotTrend";
@@ -43,7 +43,9 @@ import { chartTheme, useEcharts } from "./useEcharts";
 import { seriesPalette, token, tokenAlpha, withAlpha } from "@/theme/tokens";
 import { useTheme } from "@/theme/ThemeProvider";
 import { Badge, InfoHint } from "@/components/ui";
-import { IconList, IconGauge } from "@/components/icons";
+import { IconExpand, IconExport, IconList, IconGauge } from "@/components/icons";
+import { downloadCsv, trendCsv } from "./csv";
+import { sameFrame } from "@/api/trendWindow";
 import { TIER_LABELS } from "./TimeSeriesChart";
 
 export interface TrendChartProps {
@@ -106,6 +108,61 @@ export interface TrendChartProps {
    * naming a tier it was never read from (§9).
    */
   resolution?: { label: string; title: string };
+  /**
+   * Shade each bucket's lowest-to-highest reading behind the line, where the
+   * points carry one (`TrendPoint.low`/`high`: one Device, an averaged Tag).
+   * An hourly mean over a year flattens a ten-minute 95 °C excursion into a
+   * gentle bump; the band keeps it on screen at any zoom.
+   */
+  band?: boolean;
+  /**
+   * What happened in the window that explains a dip: Alarms as thin vertical
+   * marks at the moment they opened, planned work as a shaded stretch. Drawn on
+   * the time axis itself, so a fall in output and the trip that caused it are
+   * read together rather than cross-checked on another screen.
+   */
+  events?: ChartEvent[];
+  /**
+   * Make the zoom **fetch**: the chart frames `[from, to)` and, when the reader
+   * zooms in, calls `onWindow` with the visible span (null once back at the
+   * whole) so the caller can ask for finer buckets there. The zoom is
+   * remembered across data refreshes — without that, the finer data arriving
+   * would itself throw the reader back out to the whole window.
+   */
+  zoom?: ZoomControl;
+  /**
+   * A file name stem for "CSV" — the points drawn, as a table. Omitted, there
+   * is no button: the caller passes one only where the session may export
+   * (`data.export`, MASTER §4.3), which this chart cannot know.
+   */
+  exportName?: string | null;
+  /**
+   * Run the time axis over the whole period, `[from, to)` in epoch ms, rather
+   * than fitting it to wherever the points happen to be. Several charts on one
+   * screen then agree about time: a Device heard only on the last day of a
+   * five-day period draws that day at the right-hand end, not across the frame.
+   */
+  frame?: { from: number; to: number } | null;
+}
+
+export interface ChartEvent {
+  key: string;
+  /** Epoch ms. */
+  at: number;
+  /** Epoch ms; set for a stretch (planned work), absent for a moment (an Alarm opening). */
+  end?: number | null;
+  /** What it was, for the label on hover. */
+  label: string;
+  /** `bad`/`warn` from the Alarm's own severity — a verdict the Alarm Rules made, not this chart. */
+  tone: "bad" | "warn" | "info" | "neutral";
+}
+
+export interface ZoomControl {
+  from: number;
+  to: number;
+  onWindow: (window: { from: number; to: number } | null) => void;
+  /** Set while finer readings for the zoomed span are being fetched or shown. */
+  detail?: { label: string; loading: boolean } | null;
 }
 
 /** One Plant-local calendar day, `[start, end)` in epoch ms. */
@@ -263,8 +320,71 @@ export function TrendChart({
   day = null,
   legend,
   resolution,
+  band = false,
+  events,
+  zoom,
+  exportName,
+  frame = null,
 }: TrendChartProps): JSX.Element {
   const [tableView, setTableView] = useState(false);
+  // ── A remembered zoom (see `zoom`) ──
+  // Percentages of the framed axis, in a ref: it moves on every wheel tick and
+  // nothing needs to re-render for it. Reset when the frame itself changes —
+  // a new period is a new chart, and yesterday's zoom means nothing in it.
+  const zoomPercent = useRef({ start: 0, end: 100 });
+  const [zoomEpoch, setZoomEpoch] = useState(0);
+  const [zoomed, setZoomed] = useState(false);
+  // ⚠ A live period's end moves every minute; that is the same chart, and
+  // resetting on it would throw the reader out of a zoom once a minute. Only a
+  // different period — its start or length moved more than a little — is new.
+  const lastFrame = useRef<{ from: number; to: number } | null>(null);
+  const frameKey = (() => {
+    if (!zoom) return "";
+    const previous = lastFrame.current;
+    if (!previous || !sameFrame(previous, zoom)) {
+      lastFrame.current = { from: zoom.from, to: zoom.to };
+      // Reset here, before this render's option is built — in an effect it
+      // would come after the paint, and the new period would open zoomed into
+      // a span of the old one.
+      zoomPercent.current = { start: 0, end: 100 };
+    }
+    return `${lastFrame.current!.from}|${lastFrame.current!.to}`;
+  })();
+  const onWindowRef = useRef(zoom?.onWindow);
+  onWindowRef.current = zoom?.onWindow;
+  const zoomTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    zoomPercent.current = { start: 0, end: 100 };
+    setZoomed(false);
+    window.clearTimeout(zoomTimer.current);
+  }, [frameKey]);
+  useEffect(() => () => window.clearTimeout(zoomTimer.current), []);
+  const onZoomEvent = (params: unknown) => {
+    if (!zoom) return;
+    const event = params as { start?: number; end?: number; batch?: { start?: number; end?: number }[] };
+    const range = event.batch?.[0] ?? event;
+    if (typeof range.start !== "number" || typeof range.end !== "number") return;
+    zoomPercent.current = { start: range.start, end: range.end };
+    const whole = range.start <= 0.5 && range.end >= 99.5;
+    setZoomed(!whole);
+    // Asked once the reader has stopped, not on every tick of the wheel.
+    window.clearTimeout(zoomTimer.current);
+    const { from, to } = zoom;
+    const start = range.start;
+    const end = range.end;
+    zoomTimer.current = window.setTimeout(() => {
+      onWindowRef.current?.(
+        whole ? null : { from: from + ((to - from) * start) / 100, to: from + ((to - from) * end) / 100 },
+      );
+    }, 350);
+  };
+  const showAll = () => {
+    zoomPercent.current = { start: 0, end: 100 };
+    setZoomed(false);
+    window.clearTimeout(zoomTimer.current);
+    onWindowRef.current?.(null);
+    setZoomEpoch((epoch) => epoch + 1);
+  };
   const { version: themeVersion } = useTheme();
   const theme = chartTheme();
 
@@ -295,6 +415,23 @@ export function TrendChart({
 
   const color = seriesColor(colorToken, paletteSlot);
   const data = points.map((point) => [point.at, point.value] as [string, number | null]);
+  // The band only where it has something to say: a bucket whose lowest and
+  // highest differ. On the raw tier every point is one reading and there is none.
+  const banded =
+    band && shape === "area" && points.some((point) => point.low !== undefined && point.high !== undefined && point.high > point.low);
+  const bandLow = banded
+    ? points.map((point) => [point.at, point.low ?? null] as [string, number | null])
+    : [];
+  const bandSpread = banded
+    ? points.map(
+        (point) =>
+          [point.at, point.low !== undefined && point.high !== undefined ? point.high - point.low : null] as [
+            string,
+            number | null,
+          ],
+      )
+    : [];
+  const shownEvents = useMemo(() => limitEvents(events ?? []), [events]);
 
   /**
    * How many points can actually be drawn.
@@ -342,10 +479,14 @@ export function TrendChart({
           point.contributors > 1
             ? `<br/><span style="opacity:.65">${point.contributors} Device(s) in this bucket</span>`
             : "";
+        const spread =
+          banded && point.low !== undefined && point.high !== undefined
+            ? `<br/><span style="opacity:.75">range ${formatValue(point.low, unit ?? undefined)} – ${formatValue(point.high, unit ?? undefined)}</span>`
+            : "";
         return (
           `${formatBucket(point.at, tier, timezone)}<br/>` +
           `<span style="color:${color}">●</span> ${label}: ` +
-          `<strong>${formatValue(point.value, unit ?? undefined)}</strong>${partial}`
+          `<strong>${formatValue(point.value, unit ?? undefined)}</strong>${spread}${partial}`
         );
       },
     },
@@ -361,14 +502,25 @@ export function TrendChart({
         that looks like duplicated data rather than a tick spacing choice.
       */
       minInterval: tier === "agg_1d" ? 24 * 3600 * 1000 : undefined,
-      min: dayAxis(day).min,
-      max: dayAxis(day).max,
+      // A zoomable chart frames its whole window, so a zoom kept as a share of
+      // the axis still names the same span when finer points arrive inside it.
+      min: dayAxis(day).min ?? (zoom ? zoom.from : frame?.from),
+      max: dayAxis(day).max ?? (zoom ? zoom.to : frame?.to),
       axisLabel: {
         fontSize: 10,
         hideOverlap: true,
         color: token("ink-faint"),
         customValues: dayAxis(day).customValues,
-        formatter: (value: number) => timeAxisLabel(value, tier, timezone, day, pointsSpan(points)),
+        // The axis's own span decides whether a label carries its date: a
+        // framed period of five days with one day of readings is still five days.
+        formatter: (value: number) =>
+          timeAxisLabel(
+            value,
+            tier,
+            timezone,
+            day,
+            zoom ? zoom.to - zoom.from : frame ? frame.to - frame.from : pointsSpan(points),
+          ),
       },
     },
     yAxis: {
@@ -387,9 +539,16 @@ export function TrendChart({
       scale: false,
     },
     dataZoom: [
-      { type: "inside", throttle: 60, zoomOnMouseWheel: true, moveOnMouseMove: true },
+      {
+        type: "inside",
+        throttle: 60,
+        zoomOnMouseWheel: true,
+        moveOnMouseMove: true,
+        ...(zoom ? { start: zoomPercent.current.start, end: zoomPercent.current.end } : {}),
+      },
       {
         type: "slider",
+        ...(zoom ? { start: zoomPercent.current.start, end: zoomPercent.current.end } : {}),
         height: 14,
         bottom: 2,
         borderColor: "transparent",
@@ -411,11 +570,43 @@ export function TrendChart({
       },
     ],
     series: [
+      ...(banded
+        ? [
+            {
+              name: `${label} lowest`,
+              type: "line" as const,
+              data: bandLow,
+              stack: "band",
+              stackStrategy: "all" as const,
+              showSymbol: false,
+              connectNulls: false,
+              silent: true,
+              lineStyle: { opacity: 0 },
+              itemStyle: { opacity: 0 },
+              tooltip: { show: false },
+            },
+            {
+              name: `${label} range`,
+              type: "line" as const,
+              data: bandSpread,
+              stack: "band",
+              stackStrategy: "all" as const,
+              showSymbol: false,
+              connectNulls: false,
+              silent: true,
+              lineStyle: { opacity: 0 },
+              itemStyle: { opacity: 0 },
+              areaStyle: { color: withAlpha(color, 0.16), origin: "auto" as const },
+              tooltip: { show: false },
+            },
+          ]
+        : []),
       shape === "area"
         ? {
             name: label,
             type: "line",
             data,
+            ...eventMarks(shownEvents.shown),
             // See `sparse`: one point with no symbol draws nothing.
             showSymbol: sparse,
             symbolSize: 7,
@@ -513,19 +704,29 @@ export function TrendChart({
     }
   }
 
-  const ref = useEcharts(option, [
-    points,
-    unit,
-    label,
-    tier,
-    timezone,
-    shape,
-    paletteSlot,
-    themeVersion,
-    tableView,
-    day?.start,
-    day?.end,
-  ]);
+  const ref = useEcharts(
+    option,
+    [
+      points,
+      unit,
+      label,
+      tier,
+      timezone,
+      shape,
+      paletteSlot,
+      themeVersion,
+      tableView,
+      day?.start,
+      day?.end,
+      banded,
+      shownEvents,
+      frameKey,
+      zoomEpoch,
+      frame?.from,
+      frame?.to,
+    ],
+    zoom ? { datazoom: onZoomEvent } : undefined,
+  );
 
   const rows = points.filter((point) => point.value !== null);
 
@@ -566,6 +767,31 @@ export function TrendChart({
             </div>
           ) : null}
         </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+        {zoom && zoomed && !tableView ? (
+          <button
+            type="button"
+            onClick={showAll}
+            title="Undo any zoom or pan and show the whole period."
+            className="flex items-center gap-1 rounded-control border border-line px-1.5 py-1 text-[10px] font-medium text-ink-muted transition hover:text-ink"
+          >
+            <IconExpand size={12} />
+            Show all
+          </button>
+        ) : null}
+        {exportName && rows.length > 0 ? (
+          <button
+            type="button"
+            onClick={() =>
+              downloadCsv(`${exportName}.csv`, trendCsv(points, { label, unit, tier, timezone }))
+            }
+            title="Download the values drawn here as a CSV file, in the Plant's time"
+            className="flex items-center gap-1 rounded-control border border-line px-1.5 py-1 text-[10px] font-medium text-ink-muted transition hover:text-ink"
+          >
+            <IconExport size={12} />
+            CSV
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => setTableView((on) => !on)}
@@ -580,6 +806,7 @@ export function TrendChart({
           {tableView ? <IconGauge size={12} /> : <IconList size={12} />}
           {tableView ? "Chart" : "Table"}
         </button>
+        </div>
       </div>
 
       {/*
@@ -666,8 +893,21 @@ export function TrendChart({
           </table>
         </div>
       ) : (
-        <div key="chart" ref={ref} style={{ height }} />
+        <div key={`chart-${zoomEpoch}`} ref={ref} style={{ height }} />
       )}
+
+      {banded && !tableView ? (
+        <p className="mt-1 text-[10px] leading-snug text-ink-faint">
+          Shaded: the lowest to the highest reading inside each{" "}
+          {tier ? (TIER_LABELS[tier] ?? "bucket").toLowerCase() : "bucket"}, so a short excursion the
+          average smooths away is still on screen.
+        </p>
+      ) : null}
+      {shownEvents.total > 0 && !tableView ? (
+        <p className="mt-1 text-[10px] leading-snug text-ink-faint">
+          {eventSummary(shownEvents)}
+        </p>
+      ) : null}
 
       {flaggedCount > 0 ? (
         <p className="mt-1 text-[10px] leading-snug text-warn">
@@ -691,11 +931,123 @@ export function TrendChart({
           >
             {resolution?.label ?? (tier ? TIER_LABELS[tier] : null)}
           </Badge>
-          <span className="text-[10px] text-ink-faint">scroll to zoom · drag to pan</span>
+          {zoom?.detail ? (
+            <Badge tone="info" title="Zoomed in, so the span on screen is read at a finer resolution than the whole period.">
+              {zoom.detail.loading ? "Loading finer readings…" : zoom.detail.label}
+            </Badge>
+          ) : null}
+          <span className="text-[10px] text-ink-faint">
+            scroll to zoom · drag to pan{zoom ? " · zoom in for finer readings" : ""}
+          </span>
         </div>
       ) : null}
     </div>
   );
+}
+
+export { sameFrame };
+
+// ── Events on the time axis ──────────────────────────────────────────────────
+
+/** More marks than this and the axis is a barcode; the worst are kept, and the count said. */
+export const MAX_EVENT_MARKS = 40;
+
+const TONE_RANK: Record<ChartEvent["tone"], number> = { bad: 0, warn: 1, info: 2, neutral: 3 };
+
+export interface ShownEvents {
+  shown: ChartEvent[];
+  total: number;
+  alarms: number;
+  stretches: number;
+}
+
+/** Keep every stretch and the most severe moments, at most `MAX_EVENT_MARKS` in all. */
+export function limitEvents(events: ChartEvent[]): ShownEvents {
+  const stretches = events.filter((event) => event.end !== undefined && event.end !== null);
+  const moments = events
+    .filter((event) => event.end === undefined || event.end === null)
+    .sort((a, b) => TONE_RANK[a.tone] - TONE_RANK[b.tone] || a.at - b.at);
+  const room = Math.max(0, MAX_EVENT_MARKS - stretches.length);
+  return {
+    shown: [...stretches.slice(0, MAX_EVENT_MARKS), ...moments.slice(0, room)],
+    total: events.length,
+    alarms: moments.length,
+    stretches: stretches.length,
+  };
+}
+
+export function eventSummary(events: ShownEvents): string {
+  const parts: string[] = [];
+  if (events.alarms > 0) {
+    parts.push(`${events.alarms} Alarm${events.alarms === 1 ? "" : "s"} opened (thin marks)`);
+  }
+  if (events.stretches > 0) {
+    parts.push(`${events.stretches} maintenance window${events.stretches === 1 ? "" : "s"} (shaded)`);
+  }
+  const hidden = events.total - events.shown.length;
+  return (
+    `In this period: ${parts.join(" and ")}. Hover a mark to name it.` +
+    (hidden > 0 ? ` ${hidden} less severe not marked, to keep the axis readable.` : "")
+  );
+}
+
+const TONE_TOKEN = { bad: "bad", warn: "warn", info: "info", neutral: "ink-faint" } as const;
+
+/** ECharts mark lines (moments) and mark areas (stretches) for a series. */
+function eventMarks(events: ChartEvent[]): Record<string, unknown> {
+  if (events.length === 0) return {};
+  const moments = events.filter((event) => event.end === undefined || event.end === null);
+  const stretches = events.filter((event) => event.end !== undefined && event.end !== null);
+  return {
+    markLine:
+      moments.length > 0
+        ? {
+            silent: false,
+            symbol: ["none", "none"],
+            animation: false,
+            label: { show: false },
+            emphasis: {
+              label: {
+                show: true,
+                formatter: (params: { name?: string }) => params.name ?? "",
+                fontSize: 10,
+                color: token("ink"),
+                backgroundColor: token("surface-raised"),
+                borderColor: token("line"),
+                borderWidth: 1,
+                borderRadius: 4,
+                padding: [2, 5],
+              },
+              lineStyle: { width: 2 },
+            },
+            data: moments.map((event) => ({
+              name: event.label,
+              xAxis: event.at,
+              lineStyle: { color: tokenAlpha(TONE_TOKEN[event.tone], 0.75), width: 1, type: "solid" },
+            })),
+          }
+        : undefined,
+    markArea:
+      stretches.length > 0
+        ? {
+            silent: false,
+            label: { show: false },
+            emphasis: {
+              label: {
+                show: true,
+                position: "insideTop",
+                fontSize: 10,
+                color: token("ink-muted"),
+              },
+            },
+            itemStyle: { color: tokenAlpha("ink-faint", 0.12) },
+            data: stretches.map((event) => [
+              { name: event.label, xAxis: event.at },
+              { xAxis: event.end as number },
+            ]),
+          }
+        : undefined,
+  };
 }
 
 const SMALL_MULTIPLE_LEFT = 52;
