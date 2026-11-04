@@ -281,7 +281,7 @@ export function AppShell(): JSX.Element {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-line bg-surface/85 px-4 py-2.5 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-20 flex items-center gap-2 border-b sm:gap-3 border-line bg-surface/85 px-4 py-2.5 backdrop-blur sm:px-6">
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
@@ -305,7 +305,8 @@ export function AppShell(): JSX.Element {
           </button>
           {/* Filled by the page, if it has an identity worth pinning. */}
           <div ref={setHeaderSlot} className="flex min-w-0 flex-1 items-center" />
-          <div className="ml-auto flex shrink-0 items-center gap-3">
+          {/* Tighter on a phone, where the pills only just fit beside the menu. */}
+          <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
             {/* Only for a Super Admin, and only when something is wrong. */}
             <SystemHealthPill />
             {/* Only while a screen shows a Plant's live figures. */}

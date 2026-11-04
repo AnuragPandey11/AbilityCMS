@@ -66,9 +66,22 @@ export function RefreshCountdown(): JSX.Element | null {
     const key = qk.plantDashboard(plantId);
     const update = () => setSnapshot(read(cache.find({ queryKey: key, exact: true })));
     update();
-    return cache.subscribe((event) => {
-      if (event.query.queryHash === cache.find({ queryKey: key, exact: true })?.queryHash) update();
+    let active = true;
+    const unsubscribe = cache.subscribe((event) => {
+      if (event.query.queryHash !== cache.find({ queryKey: key, exact: true })?.queryHash) return;
+      // ⚠ Deferred: the cache announces an observer being added *while the
+      // component that adds it renders* (any card reading the dashboard), and
+      // a setState here then would update this component during another's
+      // render — React's "Cannot update a component while rendering a
+      // different component". A microtask runs once that render is done.
+      queueMicrotask(() => {
+        if (active) update();
+      });
     });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [plantId, queryClient]);
 
   // One tick a second, and only while there is something to count.
@@ -121,7 +134,9 @@ export function RefreshCountdown(): JSX.Element | null {
         <span>Refreshing…</span>
       ) : (
         <span>
-          {live ? "Refresh by " : "Refresh in "}
+          {/* The words go on a phone, where the header has room for the ring
+              and the seconds only — with them it pushed the page 79px wide. */}
+          <span className="hidden sm:inline">{live ? "Refresh by " : "Refresh in "}</span>
           <span className="figure inline-block min-w-[2.2em] text-right font-semibold tabular-nums text-ink">
             {seconds} s
           </span>

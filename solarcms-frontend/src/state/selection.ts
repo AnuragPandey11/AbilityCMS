@@ -21,6 +21,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { KpiPeriod } from "@/api/schemas";
 import type { TrendRange } from "@/api/useSlotTrend";
+import { DEFAULT_PERIOD, type HistoryPeriod } from "@/api/historyPeriod";
 
 interface SelectionState {
   plantId: number | null;
@@ -40,12 +41,21 @@ interface SelectionState {
    * panel's chart would be the ambiguity that moving it into the panel removed.
    */
   weatherRange: TrendRange;
+  /**
+   * The history screens' one period (`api/historyPeriod`): Energy Analytics,
+   * Performance History, Meteorological, MFM / Grid and the HV equipment
+   * screens all read it, so a stretch chosen on one is still on screen on the
+   * next. The link carries it too (`useHistoryPeriod`); this is what a screen
+   * opened from the menu, with no period in its link, starts on.
+   */
+  historyPeriod: HistoryPeriod;
   setPlantId: (plantId: number | null) => void;
   setPeriod: (period: KpiPeriod) => void;
   setClientId: (clientId: number | null) => void;
   setPlantSearch: (plantSearch: string) => void;
   setTrendRange: (trendRange: TrendRange) => void;
   setWeatherRange: (weatherRange: TrendRange) => void;
+  setHistoryPeriod: (historyPeriod: HistoryPeriod) => void;
   reset: () => void;
 }
 
@@ -58,12 +68,14 @@ export const useSelection = create<SelectionState>()(
       plantSearch: "",
       trendRange: "today",
       weatherRange: "today",
+      historyPeriod: DEFAULT_PERIOD,
       setPlantId: (plantId) => set({ plantId }),
       setPeriod: (period) => set({ period }),
       setClientId: (clientId) => set({ clientId }),
       setPlantSearch: (plantSearch) => set({ plantSearch }),
       setTrendRange: (trendRange) => set({ trendRange }),
       setWeatherRange: (weatherRange) => set({ weatherRange }),
+      setHistoryPeriod: (historyPeriod) => set({ historyPeriod }),
       reset: () =>
         set({
           plantId: null,
@@ -72,6 +84,7 @@ export const useSelection = create<SelectionState>()(
           plantSearch: "",
           trendRange: "today",
           weatherRange: "today",
+          historyPeriod: DEFAULT_PERIOD,
         }),
     }),
     {

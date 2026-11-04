@@ -144,3 +144,14 @@ export function tierWithin(
   }
   return "agg_1d";
 }
+
+/**
+ * Whether two frames are one period: start and length each within 2% of the
+ * length, and never less than five minutes — so a live window growing by a
+ * minute is the same chart, and a different period is not.
+ */
+export function sameFrame(a: { from: number; to: number }, b: { from: number; to: number }): boolean {
+  const span = Math.max(a.to - a.from, b.to - b.from);
+  const slack = Math.max(span * 0.02, 5 * 60_000);
+  return Math.abs(a.from - b.from) <= slack && Math.abs(a.to - a.from - (b.to - b.from)) <= slack;
+}

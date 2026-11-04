@@ -23,6 +23,8 @@ export interface AlarmQuery {
   /** Narrows to one Device's Alarms, for a screen about one Device. */
   deviceId?: number | null;
   since?: string | null;
+  /** Opened before this instant — with `since`, one past period's Alarms. */
+  until?: string | null;
   limit?: number;
 }
 
@@ -40,6 +42,7 @@ export async function listAlarms(query: AlarmQuery = {}): Promise<Alarm[]> {
       client_id: query.clientId ?? undefined,
       device_id: query.deviceId ?? undefined,
       since: query.since ?? undefined,
+      until: query.until ?? undefined,
       limit: query.limit ?? 100,
     },
   });

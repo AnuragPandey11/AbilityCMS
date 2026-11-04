@@ -394,6 +394,22 @@ export const IconCalendar = (p: IconProps) => (
   </Svg>
 );
 
+/**
+ * Performance History — a calendar whose days are shaded by how much they
+ * made: the screen's own picture, a month of days read at a glance.
+ */
+export const IconHistory = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.4" y="4.2" width="17.2" height="16.4" rx="2.2" />
+    <path d="M3.4 8.6h17.2" />
+    <rect x="6.6" y="11.4" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none" opacity="0.35" />
+    <rect x="10.7" y="11.4" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none" opacity="0.7" />
+    <rect x="14.8" y="11.4" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none" />
+    <rect x="6.6" y="15.5" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none" opacity="0.7" />
+    <rect x="10.7" y="15.5" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none" opacity="0.35" />
+  </Svg>
+);
+
 export const IconLocation = (p: IconProps) => (
   <Svg {...p}>
     <path d="M12 21.4s7-5.8 7-11a7 7 0 1 0-14 0c0 5.2 7 11 7 11Z" />

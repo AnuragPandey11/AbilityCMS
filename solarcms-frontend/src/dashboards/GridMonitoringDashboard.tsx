@@ -33,8 +33,14 @@ import { useMemo, useState } from "react";
 import { usePlant, usePlantDevices, useTags } from "@/api/hooks";
 import type { DeviceListItem } from "@/api/schemas";
 import { measuresGeneration, useSlotSource } from "@/api/useSlotTrend";
-import { useSeries, type Series } from "@/api/useSeries";
-import { windowRange } from "@/api/trendWindow";
+import { useZoomableSeries, type ZoomableSeries } from "@/api/useSeries";
+import { periodDates, resolvePeriod } from "@/api/historyPeriod";
+import { useTimelineEvents } from "@/api/useHistory";
+import { usePermission } from "@/auth/usePermission";
+import { HistoryPeriodBar } from "@/components/history/HistoryPeriodBar";
+import { exportStem } from "@/components/charts/csv";
+import { useHistoryPeriod } from "@/state/useHistoryPeriod";
+import type { ChartEvent } from "@/components/charts/TrendChart";
 import { Button, Panel, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
@@ -216,8 +222,11 @@ function MeterTrend({
   timezone,
   day,
   markPeak,
+  band = false,
+  events,
+  exportName,
 }: {
-  series: Series;
+  series: ZoomableSeries;
   unit: string | null;
   label: string;
   reason: string | null;
@@ -225,6 +234,9 @@ function MeterTrend({
   timezone: string | undefined;
   day: { start: number; end: number } | null;
   markPeak: boolean;
+  band?: boolean;
+  events?: ChartEvent[];
+  exportName?: string | null;
 }): JSX.Element {
   if (reason) {
     return <p className="flex h-[260px] items-center justify-center px-6 text-center text-xs text-ink-faint">{reason}</p>;
@@ -249,6 +261,10 @@ function MeterTrend({
       height={260}
       day={day}
       markPeak={markPeak}
+      band={band}
+      events={events}
+      zoom={series.zoom ?? undefined}
+      exportName={exportName}
     />
   );
 }
@@ -280,20 +296,34 @@ export function GridMonitoringDashboard(): JSX.Element {
 
   const readings = useDeviceReadings(headline, "this meter");
 
-  // ── Trends: the Plant's day, as the reference draws them.
+  // ── Trends: the history screens' shared period (`useHistoryPeriod`) —
+  // today by default, as the reference draws them.
   const tagsByCode = useMemo(
     () => new Map((tagsQuery.data ?? []).map((tag) => [tag.code, tag])),
     [tagsQuery.data],
   );
   const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
-  const range = timezone ? windowRange("today", nowMs, timezone) : null;
+  const { period, setPeriod } = useHistoryPeriod();
+  const resolved = timezone ? resolvePeriod(period, nowMs, timezone) : null;
+  const range = resolved && !("error" in resolved) ? resolved : null;
+  const live = range?.live ?? false;
+  const canExport = usePermission("data.export");
+  const canReadMaintenance = usePermission("plant.manage");
   const onTop = useMemo(() => (headline ? [headline] : []), [headline]);
   const activeTag = tagsByCode.get(ACTIVE_POWER.codes[0] ?? "");
   const frequencyTag = tagsByCode.get(FREQUENCY.codes[0] ?? "");
-  const power = useSeries({ devices: onTop, tag: activeTag, aggregate: "first" }, range, { live: true });
-  const frequency = useSeries({ devices: onTop, tag: frequencyTag, aggregate: "first" }, range, {
-    live: true,
+  const power = useZoomableSeries({ devices: onTop, tag: activeTag, aggregate: "first" }, range, { live });
+  const frequency = useZoomableSeries({ devices: onTop, tag: frequencyTag, aggregate: "first" }, range, {
+    live,
   });
+  const { events } = useTimelineEvents(plantId, range, {
+    deviceId: headline?.id ?? null,
+    canReadMaintenance,
+    live,
+  });
+  const dates = timezone ? periodDates(period, nowMs, timezone) : null;
+  const stem = (what: string) =>
+    canExport ? exportStem(headline?.code, what, dates?.first, dates?.last) : null;
   const catalogueReason = (code: string, found: unknown) =>
     tagsQuery.isLoading || found ? null : `Tag ${code} is not in the catalogue.`;
 
@@ -419,6 +449,14 @@ export function GridMonitoringDashboard(): JSX.Element {
         <MeterCard key={device.id} device={device} timezone={timezone} onShow={() => showOnTop(device)} />
       ))}
 
+      <HistoryPeriodBar
+        period={period}
+        onChange={setPeriod}
+        timezone={timezone}
+        nowMs={nowMs}
+        note="The figures above are always the latest; the period sets the two trends below."
+      />
+
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel
           title={
@@ -440,6 +478,9 @@ export function GridMonitoringDashboard(): JSX.Element {
             timezone={timezone}
             day={day}
             markPeak
+            band
+            events={events}
+            exportName={stem("active_power")}
           />
         </Panel>
         <Panel
@@ -463,6 +504,8 @@ export function GridMonitoringDashboard(): JSX.Element {
             day={day}
             // The highest instant of grid frequency is not a fact anyone acts on.
             markPeak={false}
+            band
+            exportName={stem("frequency")}
           />
         </Panel>
       </div>

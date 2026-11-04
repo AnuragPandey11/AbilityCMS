@@ -55,6 +55,7 @@ export function OverlayTrendChart({
   height = 220,
   day = null,
   isLoading = false,
+  frame = null,
 }: {
   series: OverlaySeries[];
   /** The one unit every series shares. Verbatim from the catalogue (§4.1). */
@@ -64,6 +65,8 @@ export function OverlayTrendChart({
   height?: number;
   day?: DayFrame | null;
   isLoading?: boolean;
+  /** As `TrendChart`'s: the whole period on the axis, so charts on one screen agree about time. */
+  frame?: { from: number; to: number } | null;
 }): JSX.Element {
   const [tableView, setTableView] = useState(false);
   const { version: themeVersion } = useTheme();
@@ -85,7 +88,10 @@ export function OverlayTrendChart({
     }
   }
   const gutter = Math.min(78, Math.max(44, Math.round(widest * 6.2) + 16));
-  const span = Math.max(0, ...series.map((entry) => pointsSpan(entry.points)));
+  // The framed period's span where there is one: it, not the readings, is the axis.
+  const span = frame
+    ? frame.to - frame.from
+    : Math.max(0, ...series.map((entry) => pointsSpan(entry.points)));
 
   const option: EChartsOption = {
     backgroundColor: "transparent",
@@ -125,8 +131,8 @@ export function OverlayTrendChart({
       axisTick: { show: false },
       splitLine: { show: false },
       minInterval: tier === "agg_1d" ? 24 * 3600 * 1000 : undefined,
-      min: dayAxis(day).min,
-      max: dayAxis(day).max,
+      min: dayAxis(day).min ?? frame?.from,
+      max: dayAxis(day).max ?? frame?.to,
       axisLabel: {
         fontSize: 10,
         hideOverlap: true,
@@ -187,7 +193,18 @@ export function OverlayTrendChart({
     }),
   };
 
-  const ref = useEcharts(option, [series, unit, tier, timezone, themeVersion, tableView, day?.start, day?.end]);
+  const ref = useEcharts(option, [
+    series,
+    unit,
+    tier,
+    timezone,
+    themeVersion,
+    tableView,
+    day?.start,
+    day?.end,
+    frame?.from,
+    frame?.to,
+  ]);
 
   // The table's rows: every bucket any series has, in time order.
   const times = [...new Set(series.flatMap((entry) => entry.points.map((point) => point.at)))].sort(

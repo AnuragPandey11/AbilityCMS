@@ -15,14 +15,14 @@
  * cannot answer the slot gets no series rather than a fallback.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "./queryKeys";
 import * as readingsApi from "./endpoints/readings";
 import { usePlantDevices } from "./hooks";
-import type { DeviceListItem, ReadingPoint, Tag, Tier } from "./schemas";
+import { TIERS, type DeviceListItem, type ReadingPoint, type Tag, type Tier } from "./schemas";
 import { curveRefusal, provenanceOf, seriesFromReadings, useSlotSource, type TrendPoint } from "./useSlotTrend";
-import { tierWithin, type WindowRange } from "./trendWindow";
+import { bucketMs, sameFrame, tierWithin, type WindowRange } from "./trendWindow";
 
 export interface Series {
   points: TrendPoint[];
@@ -111,7 +111,127 @@ export function useSeries(
   };
 }
 
-export interface SlotSeries extends Series {
+// ── Finer readings where the reader zoomed ───────────────────────────────────
+
+/**
+ * The coarse series with a finer one laid over the zoomed span.
+ *
+ * A coarse bucket that overlaps the span at all is dropped, or one hour's
+ * mean would sit among its own minutes. The finer points keep their own
+ * gaps; a hole at the seam is made a break, never a line drawn across it
+ * (Guardrail 23).
+ */
+export function mergeDetail(
+  coarse: TrendPoint[],
+  coarseTier: Tier | null,
+  fine: TrendPoint[],
+  window: { from: number; to: number },
+): TrendPoint[] {
+  if (fine.length === 0) return coarse;
+  const step = (coarseTier ? bucketMs(coarseTier) : undefined) ?? 0;
+  const before = coarse.filter((point) => Date.parse(point.at) + step <= window.from);
+  const after = coarse.filter((point) => Date.parse(point.at) >= window.to);
+  const inside = fine.filter((point) => {
+    const at = Date.parse(point.at);
+    return at >= window.from && at < window.to;
+  });
+  const seam = (at: number): TrendPoint => ({ at: new Date(at).toISOString(), value: null, contributors: 0 });
+  // A break at each seam: the two resolutions are separate claims, and a line
+  // joining an hourly mean to a minute's reading would be neither.
+  return [
+    ...before,
+    ...(before.length > 0 ? [seam(window.from)] : []),
+    ...inside,
+    ...(after.length > 0 ? [seam(Math.max(window.from, window.to - 1))] : []),
+    ...after,
+  ];
+}
+
+const tierIndex = (tier: Tier | null) => (tier ? TIERS.indexOf(tier) : -1);
+
+/** How fine the zoomed span is, in words, for the chart's badge. */
+const DETAIL_WORDS: Record<Tier, string> = {
+  readings: "Raw readings",
+  agg_1m: "1-minute averages",
+  agg_15m: "15-minute averages",
+  agg_1h: "Hourly averages",
+  agg_1d: "Daily averages",
+};
+
+export interface ZoomableSeries extends Series {
+  /** For `TrendChart`'s `zoom` prop. */
+  zoom: {
+    from: number;
+    to: number;
+    onWindow: (window: { from: number; to: number } | null) => void;
+    detail: { label: string; loading: boolean } | null;
+  } | null;
+}
+
+/**
+ * `useSeries`, and — once the reader has zoomed in far enough that a finer
+ * tier fits — the zoomed span again at that tier, merged in.
+ */
+export function useZoomableSeries(
+  source: SeriesSource,
+  range: WindowRange | null,
+  options: { live: boolean; enabled?: boolean },
+): ZoomableSeries {
+  const main = useSeries(source, range, options);
+  const [window, setWindow] = useState<{ from: number; to: number } | null>(null);
+  // A new period is a new chart; a zoom into the old one means nothing here.
+  // ⚠ The same period still running is not new: its end moves every minute,
+  // and the zoom must survive that (`sameFrame`).
+  const frame = range ? { from: Date.parse(range.from), to: Date.parse(range.to) } : null;
+  const [zoomedFrame, setZoomedFrame] = useState<{ from: number; to: number } | null>(null);
+  const activeWindow = frame && zoomedFrame && sameFrame(zoomedFrame, frame) ? window : null;
+
+  const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
+  const fineRange = activeWindow
+    ? { from: new Date(activeWindow.from).toISOString(), to: new Date(activeWindow.to).toISOString(), day: null }
+    : null;
+  const finest: Tier = source.aggregate === "sum" && source.devices.length > 1 ? "agg_15m" : "agg_1m";
+  const fineTier = fineRange ? tierWithin(fineRange, source.devices.length, nowMs, finest) : null;
+  const finer = fineTier !== null && main.tier !== null && tierIndex(fineTier) < tierIndex(main.tier);
+  const detail = useSeries(source, finer ? fineRange : null, {
+    live: options.live,
+    enabled: (options.enabled ?? true) && finer,
+  });
+
+  const points = useMemo(
+    () =>
+      finer && activeWindow && detail.tier !== null
+        ? mergeDetail(main.points, main.tier, detail.points, activeWindow)
+        : main.points,
+    [finer, activeWindow, detail.points, detail.tier, main.points, main.tier],
+  );
+
+  const from = range ? Date.parse(range.from) : 0;
+  const to = range ? Date.parse(range.to) : 0;
+  return {
+    ...main,
+    points,
+    flaggedCount: main.flaggedCount + (finer ? detail.flaggedCount : 0),
+    zoom: range
+      ? {
+          from,
+          to,
+          onWindow: (next) => {
+            setZoomedFrame(frame);
+            setWindow(next);
+          },
+          detail: finer
+            ? {
+                label: `${DETAIL_WORDS[detail.tier ?? fineTier]} in the zoomed span`,
+                loading: detail.isLoading,
+              }
+            : null,
+        }
+      : null,
+  };
+}
+
+export interface SlotSeries extends ZoomableSeries {
   /** Verbatim from the slot — never derived from the Tag's name (§4.1). */
   unit: string | null;
   label: string;
@@ -136,7 +256,9 @@ export function useSlotSeries(
     return (devicesQuery.data ?? []).filter((device) => ids.has(device.id));
   }, [devicesQuery.data, slotSource.deviceIds]);
 
-  const series = useSeries(
+  // Zoomable: a reader who zooms into the curve is shown finer buckets there
+  // (`useZoomableSeries`) — nothing changes until a chart asks for it.
+  const series = useZoomableSeries(
     { devices, tag: slotSource.tag, aggregate: slotSource.source?.aggregate ?? "first" },
     range,
     { live: options.live, enabled: slotSource.source !== null && refusal === null },
