@@ -698,6 +698,29 @@ export function TrendChart({
   );
 }
 
+const SMALL_MULTIPLE_LEFT = 52;
+const SMALL_MULTIPLE_RIGHT = 16;
+/** Room above the first band for its unit, which ECharts draws above the plot. */
+const SMALL_MULTIPLE_TOP = 18;
+/** Room under the last band for the time labels. */
+const SMALL_MULTIPLE_BOTTOM = 24;
+/** Between bands: the next band's unit sits in it. */
+const SMALL_MULTIPLE_GAP = 26;
+
+/** Each stacked band's top and height in pixels, inside a chart `height` tall. */
+export function smallMultipleBands(
+  count: number,
+  height: number,
+): { top: number; height: number }[] {
+  const n = Math.max(count, 1);
+  const usable = height - SMALL_MULTIPLE_TOP - SMALL_MULTIPLE_BOTTOM - SMALL_MULTIPLE_GAP * (n - 1);
+  const band = Math.max(usable / n, 24);
+  return Array.from({ length: n }, (_, index) => ({
+    top: SMALL_MULTIPLE_TOP + index * (band + SMALL_MULTIPLE_GAP),
+    height: band,
+  }));
+}
+
 /**
  * Two measures stacked on a shared x-axis — the honest alternative to a
  * dual-axis chart.
@@ -733,12 +756,15 @@ export function SmallMultiples({
   const count = Math.max(series.length, 1);
 
   // Each plot gets an equal band, with the axis labels living under the last.
-  const bandHeight = (100 - 14) / count;
-  const grids = series.map((_, index) => ({
-    left: 52,
-    right: 16,
-    top: `${index * bandHeight + 6}%`,
-    height: `${bandHeight - 9}%`,
+  // Laid out in pixels, not percentages: each band's unit sits above it, and at
+  // 6% of a 210px chart the top one was drawn half above the canvas — "W/m2"
+  // cut in two, which on an empty band was all there was to see.
+  const bands = smallMultipleBands(count, height);
+  const grids = bands.map((band) => ({
+    left: SMALL_MULTIPLE_LEFT,
+    right: SMALL_MULTIPLE_RIGHT,
+    top: band.top,
+    height: band.height,
   }));
 
   const option: EChartsOption = {
@@ -851,7 +877,30 @@ export function SmallMultiples({
           </span>
         ))}
       </div>
-      <div ref={ref} style={{ height }} />
+      <div className="relative" style={{ height }}>
+        <div ref={ref} style={{ height }} />
+        {/* A series with nothing to draw leaves its band blank — no line, no
+            scale, no grid — which reads as a chart that failed or slid out of
+            its space. Say in the band itself why it is empty (Guardrail 26). */}
+        {series.map((entry, index) =>
+          entry.points.length === 0 && bands[index] ? (
+            <div
+              key={entry.key}
+              className="pointer-events-none absolute flex items-center justify-center rounded border border-dashed border-line px-2 text-center text-[11px] text-ink-faint"
+              style={{
+                top: bands[index].top,
+                height: bands[index].height,
+                left: SMALL_MULTIPLE_LEFT,
+                right: SMALL_MULTIPLE_RIGHT,
+              }}
+            >
+              {(entry.flaggedCount ?? 0) > 0
+                ? `${entry.label}: every reading in this window was flagged — nothing to plot`
+                : `${entry.label}: no readings in this window`}
+            </div>
+          ) : null,
+        )}
+      </div>
 
       {series
         .filter((entry) => (entry.flaggedCount ?? 0) > 0)

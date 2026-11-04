@@ -425,15 +425,21 @@ const ENERGY_DAYS: Record<TrendRange, number> = { today: 1, "24h": 2, "7d": 7, "
  * gave no way to tell which charts followed it. Each chart panel now carries
  * its own, so what a control changes is the panel it sits in and nothing else.
  */
+/** The Weather panel's tier over 30 days — see `weatherIrradianceTrend`. */
+const WEATHER_30D_TIER = "agg_1h" as const;
+
 function ChartWindow({
   label,
   value,
   onChange,
+  hints,
 }: {
   /** Names the group for a screen reader: which chart this window is for. */
   label: string;
   value: TrendRange;
   onChange: (value: TrendRange) => void;
+  /** A window this chart reads at another tier than the default says so. */
+  hints?: Partial<Record<TrendRange, string>>;
 }): JSX.Element {
   return (
     <div className="flex items-center gap-2">
@@ -450,7 +456,7 @@ function ChartWindow({
         options={TREND_RANGES.map((option) => ({
           value: option.value,
           label: option.label,
-          hint: option.hint,
+          hint: hints?.[option.value] ?? option.hint,
         }))}
       />
     </div>
@@ -607,8 +613,29 @@ export function SinglePlantDashboard(): JSX.Element {
   // The Weather panel's own series, on its own window. Irradiance is asked for
   // twice — the Power trend's Exp Power (DC) needs it on that panel's window —
   // but with the two windows equal the query keys match and it is fetched once.
-  const weatherIrradianceTrend = useSlotTrend(plantId, "env.irradiance", weatherRange);
-  const moduleTempTrend = useSlotTrend(plantId, "env.module_temperature", weatherRange);
+  //
+  // ⚠ Over 30 days both are read hourly, never daily. A daily bucket's quality
+  // is the worst of every reading that day, and an irradiance sensor sends a
+  // value just outside its range most nights (−1 W/m²), so at `agg_1d` every
+  // day is flagged, none is plotted and the irradiance chart goes blank — while
+  // module temperature, flagged on no night, still draws. Hourly, only the
+  // hours that held a refused reading are left out (counted, and drawn as
+  // breaks). Both series take the same tier so the stacked plots line up hour
+  // for hour. Only here: a few weather stations × 720 hours is well inside the
+  // point cap, where the power trend's sum over every Inverter may not be.
+  const weatherTier = weatherRange === "30d" ? WEATHER_30D_TIER : undefined;
+  const weatherIrradianceTrend = useSlotTrend(
+    plantId,
+    "env.irradiance",
+    weatherRange,
+    weatherTier,
+  );
+  const moduleTempTrend = useSlotTrend(
+    plantId,
+    "env.module_temperature",
+    weatherRange,
+    weatherTier,
+  );
 
   const blocks = blocksQuery.data ?? [];
   const blockKpiQueries = useQueries({
@@ -1298,7 +1325,12 @@ export function SinglePlantDashboard(): JSX.Element {
           ) : (
             <>
               <div className="mb-3">
-                <ChartWindow label="Weather window" value={weatherRange} onChange={setWeatherRange} />
+                <ChartWindow
+                  label="Weather window"
+                  value={weatherRange}
+                  onChange={setWeatherRange}
+                  hints={{ "30d": "The last month, hourly." }}
+                />
               </div>
               <SmallMultiples
                 timezone={timezone}
