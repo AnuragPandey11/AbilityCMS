@@ -28,6 +28,9 @@ async def list_alarms(
     client_id: int | None = None,
     device_id: int | None = None,
     since: datetime | None = None,
+    # Opened before this instant — with `since`, the Alarms of one past period,
+    # which "the latest N since" alone cannot give once later ones outnumber it.
+    until: datetime | None = None,
     limit: int = Query(100, ge=1, le=500),
     _: CurrentUser = Depends(require_permission("dashboard.view")),
 ) -> list[dict[str, Any]]:
@@ -56,10 +59,11 @@ async def list_alarms(
            AND (CAST(:client_id AS bigint) IS NULL OR a.client_id = :client_id)
            AND (CAST(:device_id AS bigint) IS NULL OR a.device_id = :device_id)
            AND (CAST(:since AS timestamptz) IS NULL OR a.opened_at >= :since)
+           AND (CAST(:until AS timestamptz) IS NULL OR a.opened_at < :until)
          ORDER BY a.opened_at DESC LIMIT :limit
     """), {"state": state, "severity": severity, "plant_id": plant_id,
            "client_id": client_id, "device_id": device_id, "since": since,
-           "limit": limit})).all()
+           "until": until, "limit": limit})).all()
     return [dict(row._mapping) for row in rows]
 
 
