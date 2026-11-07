@@ -690,6 +690,13 @@ DAY_ROLLOVER_PAIRS: Final[tuple[tuple[str, str], ...]] = (
 PLANT_OPERATING_SOURCE: Final = ("INVERTER", "AC_ACTIVE_POWER")
 PLANT_START_ABOVE_KW: Final = 0.5
 PLANT_STOP_AT_OR_BELOW_KW: Final = 0.0
+# A summed output within this of the stop threshold is at it: float noise
+# standing for zero. UNIT1's Inverter sends `PAC` 2.377443E-41 all night and
+# OASIS_2MW's meters 1.5E-17, so an exact `<= 0.0` never fired there — the
+# Plant started each morning, never stopped, and "Plant Stop (Yesterday)" read
+# "—" with a tooltip saying the Inverters went quiet while generating (7 Nov
+# 2026). The threshold itself stays 0 kW, which is what the card prints.
+PLANT_STOP_NOISE_KW: Final = 1e-9
 
 # ── Grid status — ⚠ ASSUMED.
 #

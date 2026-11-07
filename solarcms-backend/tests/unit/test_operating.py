@@ -34,6 +34,24 @@ def test_stop_is_at_or_below_zero_and_only_once_running() -> None:
     assert transition(False, 0.0) is None
 
 
+
+def test_float_noise_for_zero_is_a_stop() -> None:
+    # UNIT1's Inverter sends PAC 2.377443E-41 all night (7 Nov 2026); an exact
+    # `<= 0.0` never fired, so the Plant started each day and never stopped.
+    assert transition(True, 2.377443e-41) == "stop"
+    assert transition(True, 1.500121e-17) == "stop"
+    assert transition(True, 0.001) is None
+
+
+def test_a_day_ending_in_float_noise_stops() -> None:
+    day = operating_day(_minutes(2.4e-41, 1.2, 600.0, 3.0, 2.4e-41, 2.4e-41))
+    assert day.start == T0 + timedelta(minutes=1)
+    assert day.stop == T0 + timedelta(minutes=4)
+    assert not day.running
+    assert first_crossing(
+        _minutes(3.0, 2.4e-41), T0, T0 + timedelta(minutes=2), "stop",
+    ) == T0 + timedelta(minutes=1)
+
 # ── A day ───────────────────────────────────────────────────────────────────
 
 def test_a_plain_day_starts_at_the_first_crossing_and_stops_at_zero() -> None:
