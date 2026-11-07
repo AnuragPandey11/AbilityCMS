@@ -31,7 +31,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
-from solarcms.domain.assumptions import PLANT_START_ABOVE_KW, PLANT_STOP_AT_OR_BELOW_KW
+from solarcms.domain.assumptions import (
+    PLANT_START_ABOVE_KW,
+    PLANT_STOP_AT_OR_BELOW_KW,
+    PLANT_STOP_NOISE_KW,
+)
 
 Transition = Literal["start", "stop"]
 
@@ -46,7 +50,7 @@ def transition(
     """What one sample does to a Plant that is (or is not) running."""
     if not running and power > start_above:
         return "start"
-    if running and power <= stop_at_or_below:
+    if running and power <= stop_at_or_below + PLANT_STOP_NOISE_KW:
         return "stop"
     return None
 
@@ -188,7 +192,7 @@ def first_crossing(
             continue
         if kind == "start" and value > start_above:
             return at
-        if kind == "stop" and value <= stop_at_or_below:
+        if kind == "stop" and value <= stop_at_or_below + PLANT_STOP_NOISE_KW:
             return at
     return None
 
