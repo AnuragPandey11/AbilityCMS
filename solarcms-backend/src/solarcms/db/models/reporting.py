@@ -116,7 +116,7 @@ class CustomReport(Base):
 
 
 class CustomReportPin(Base):
-    """A saved custom report one User keeps as a quick report (migration 0049).
+    """A saved custom report one User keeps as a quick report (migration 0048).
 
     Modelled so `alembic revision --autogenerate` does not propose dropping it;
     the router uses explicit SQL.

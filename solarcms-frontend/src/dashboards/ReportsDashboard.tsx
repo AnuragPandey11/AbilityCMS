@@ -23,7 +23,7 @@
  * ── Quick reports ────────────────────────────────────────────────────────────
  * Above both modes, the saved custom reports the reader pinned — up to five,
  * each downloadable in one click with today's dates, or opened in the builder
- * (`reports/QuickReports`, migration 0049).
+ * (`reports/QuickReports`, migration 0048).
  *
  * Below the preview, a Client's scheduled Reports (`ClientReportRuns`) — a
  * different job: every Plant in one workbook, including the settlement Report

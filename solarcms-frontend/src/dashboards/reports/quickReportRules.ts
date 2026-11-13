@@ -1,6 +1,6 @@
 /**
  * Quick reports: the saved custom reports a reader keeps at the top of
- * Reports, up to five, in their own order (migration 0049). Pure — what a
+ * Reports, up to five, in their own order (migration 0048). Pure — what a
  * card says about a saved report, and the row after a pin or an unpin.
  *
  * A pin is the reader's own; the saved report itself is still shared within

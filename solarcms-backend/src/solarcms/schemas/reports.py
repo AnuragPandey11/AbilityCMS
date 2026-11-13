@@ -53,7 +53,7 @@ class CustomReportSave(BaseModel):
     definition: CustomReportDefinition
 
 
-#: How many saved reports one User may keep as quick reports (migration 0049).
+#: How many saved reports one User may keep as quick reports (migration 0048).
 #: The user's choice of 13 Nov 2026; mirrored by the Reports screen
 #: (`dashboards/reports/quickReportRules.ts`), and the server enforces it regardless.
 CUSTOM_REPORT_PIN_LIMIT = 5
