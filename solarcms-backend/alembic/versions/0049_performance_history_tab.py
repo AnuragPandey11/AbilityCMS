@@ -8,8 +8,8 @@ anyone else under Users. No backfill, deliberately.
 ⚠ The downgrade drops nothing: `user_dashboard_access` cascades, so deleting
 the row would silently revoke it from everyone it was given to.
 
-Revision ID: 0048
-Revises: 0047
+Revision ID: 0049
+Revises: 0048
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from sqlalchemy import text
 
 from alembic import op
 
-revision = "0048"
-down_revision = "0047"
+revision = "0049"
+down_revision = "0048"
 branch_labels = None
 depends_on = None
 
