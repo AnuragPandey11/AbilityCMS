@@ -90,6 +90,15 @@ export function formatReportCell(
   }
 }
 
+/**
+ * N for a "last N days" period (`last_14_days` → 14), else null — the same
+ * spelling the server accepts (`domain/periods.last_days`): no leading zero.
+ */
+export function lastDaysOf(period: string): number | null {
+  const match = /^last_([1-9][0-9]*)_days$/.exec(period);
+  return match ? Number(match[1]) : null;
+}
+
 /** A `YYYY-MM-DD` moved by whole days — calendar arithmetic, no zone involved. */
 export function shiftDate(iso: string, days: number): string {
   const at = Date.parse(`${iso}T00:00:00Z`);

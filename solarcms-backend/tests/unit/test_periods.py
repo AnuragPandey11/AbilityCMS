@@ -224,6 +224,30 @@ class TestReportWindow:
         with pytest.raises(ValueError):
             periods.report_window("fortnight", self.NOW, KOLKATA)
 
+    def test_any_last_n_days_is_today_and_the_days_before(self) -> None:
+        window = periods.report_window("last_14_days", self.NOW, KOLKATA)
+        assert len(window.days) == 14
+        assert window.first_day == date(2026, 9, 15)
+        assert window.last_day == date(2026, 9, 28)
+        # Like every preset, it ignores dates and times it was not asked for.
+        assert window.end == self.NOW
+        one = periods.report_window("last_1_days", self.NOW, KOLKATA)
+        assert one.days == [date(2026, 9, 28)]
+
+    def test_last_n_days_is_bounded_like_a_custom_range(self) -> None:
+        longest = periods.report_window(
+            f"last_{periods.MAX_REPORT_DAYS}_days", self.NOW, KOLKATA)
+        assert len(longest.days) == periods.MAX_REPORT_DAYS
+        with pytest.raises(ValueError, match="at most"):
+            periods.report_window(
+                f"last_{periods.MAX_REPORT_DAYS + 1}_days", self.NOW, KOLKATA)
+
+    @pytest.mark.parametrize("period", ["last_0_days", "last_07_days", "last_x_days",
+                                        "last_7_day", "last__days"])
+    def test_a_malformed_last_n_days_is_refused(self, period: str) -> None:
+        with pytest.raises(ValueError, match="unknown"):
+            periods.report_window(period, self.NOW, KOLKATA)
+
 
 class TestReportWindowTimes:
     """A custom range may start and stop at a clock time on the Plant's clock."""

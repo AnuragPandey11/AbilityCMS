@@ -22,7 +22,8 @@ class CustomReportDefinition(BaseModel):
 
     `series` names Device and Tag pairs explicitly, so a saved report reopens as it
     was built even after a Device gains a Tag. `period` takes the same names as
-    the standard reports (today, yesterday, last_7_days, last_30_days, custom).
+    the standard reports (today, yesterday, last_7_days, last_30_days, any
+    last_N_days, custom).
     """
 
     name: str | None = Field(default=None, max_length=120)
@@ -50,6 +51,28 @@ class CustomReportDefinition(BaseModel):
 class CustomReportSave(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     definition: CustomReportDefinition
+
+
+#: How many saved reports one User may keep as quick reports (migration 0048).
+#: The user's choice of 13 Nov 2026; mirrored by the Reports screen
+#: (`dashboards/reports/quickReportRules.ts`), and the server enforces it regardless.
+CUSTOM_REPORT_PIN_LIMIT = 5
+
+
+class CustomReportPins(BaseModel):
+    """A User's quick reports, in the order they are shown — the whole list.
+
+    The cap is checked by the route, so a request over it gets a sentence
+    rather than a validation error; the bound here only stops a silly body.
+    """
+
+    report_ids: list[int] = Field(max_length=50)
+
+    @model_validator(mode="after")
+    def _distinct(self) -> CustomReportPins:
+        if len(set(self.report_ids)) != len(self.report_ids):
+            raise ValueError("each report may be pinned once")
+        return self
 
 
 class StatusCodeIn(BaseModel):

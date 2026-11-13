@@ -13,6 +13,7 @@ the tz database, which is I/O (Guardrail 9).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 
@@ -137,6 +138,19 @@ def previous_window(
 
 REPORT_PERIODS = ("today", "yesterday", "last_7_days", "last_30_days", "custom")
 
+# Any "last N days" beside the two presets — `last_14_days` is today and the
+# thirteen days before it, the way `last_7_days` is. Kept by name, so a saved
+# custom report or a quick report runs against the Plant's today every time it
+# is opened; a custom range is fixed dates and would not (13 Nov 2026, the
+# user's request). N is 1 to `MAX_REPORT_DAYS`, written without leading zeros.
+_LAST_DAYS = re.compile(r"last_([1-9][0-9]*)_days")
+
+
+def last_days(period: str) -> int | None:
+    """N for a "last N days" period (`last_7_days` → 7), else None."""
+    match = _LAST_DAYS.fullmatch(period)
+    return int(match.group(1)) if match else None
+
 # The longest custom range, in days. A product limit rather than an assumption
 # about the data: a year of days is 366 rows, and a per-day Report is read from
 # the hourly tier (a daily bucket is cut at UTC midnight, not the Plant's), so
@@ -203,21 +217,25 @@ def report_window(
     `to_time` on its last, both the Plant's wall clock; either omitted is that
     day's edge. The presets ignore them, as they ignore the dates.
 
+    `period` is a preset, any `last_N_days` (today and the N-1 days before
+    it), or `custom`.
+
     Raises ValueError with a sentence for the reader — a custom range with no
     dates, backwards, longer than `MAX_REPORT_DAYS`, reaching past today, or
-    starting after now.
+    starting after now; or a "last N days" longer than `MAX_REPORT_DAYS`.
     """
-    if period not in REPORT_PERIODS:
+    span = last_days(period)
+    if period not in REPORT_PERIODS and span is None:
         raise ValueError(f"unknown report period {period!r}")
     today = now.astimezone(zone).date()
     if period == "today":
         first, last = today, today
     elif period == "yesterday":
         first = last = today - timedelta(days=1)
-    elif period == "last_7_days":
-        first, last = today - timedelta(days=6), today
-    elif period == "last_30_days":
-        first, last = today - timedelta(days=29), today
+    elif span is not None:
+        if span > MAX_REPORT_DAYS:
+            raise ValueError(f"a period is at most {MAX_REPORT_DAYS} days")
+        first, last = today - timedelta(days=span - 1), today
     else:
         if first_day is None or last_day is None:
             raise ValueError("a custom period needs both a first and a last day")

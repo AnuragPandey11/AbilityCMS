@@ -20,6 +20,11 @@
  * reason. It stops at the end time; 23:59 is the end of that day, so a whole
  * day typed by hand reads exactly as the same day chosen as Yesterday.
  *
+ * ── Quick reports ────────────────────────────────────────────────────────────
+ * Above both modes, the saved custom reports the reader pinned — up to five,
+ * each downloadable in one click with today's dates, or opened in the builder
+ * (`reports/QuickReports`, migration 0048).
+ *
  * Below the preview, a Client's scheduled Reports (`ClientReportRuns`) — a
  * different job: every Plant in one workbook, including the settlement Report
  * that only the ABT Meter may produce.
@@ -44,6 +49,7 @@ import { printHtml } from "./reports/printHtml";
 import { ClientReportRuns } from "./reports/ClientReportRuns";
 import { ReportPreview } from "./reports/ReportPreview";
 import { CustomReportBuilder } from "./reports/CustomReportBuilder";
+import { QuickReports } from "./reports/QuickReports";
 
 const KINDS: { value: ReportKind; label: string; hint: string }[] = [
   {
@@ -110,6 +116,17 @@ export function ReportsDashboard(): JSX.Element {
    * first and by default: the common case should not have to see a builder.
    */
   const [mode, setMode] = useState<"standard" | "custom">("standard");
+  /**
+   * A quick report to open in the builder. `n` changes on every Open, and the
+   * builder is keyed on it, so opening one starts it afresh even when it is
+   * the report already on screen.
+   */
+  const [opening, setOpening] = useState<{ id: number; n: number } | null>(null);
+  const openQuickReport = (id: number) => {
+    setOpening((previous) => ({ id, n: (previous?.n ?? 0) + 1 }));
+    setMode("custom");
+    setNotice(null);
+  };
 
   const choosePeriod = (next: ReportPeriod) => {
     setPeriod(next);
@@ -181,6 +198,8 @@ export function ReportsDashboard(): JSX.Element {
             onChange={(next) => {
               setMode(next);
               setNotice(null);
+              // A quick report opened earlier is not reopened by switching back.
+              setOpening(null);
             }}
             options={[
               { value: "standard", label: "Standard", hint: "The ready-made Plant reports." },
@@ -203,13 +222,20 @@ export function ReportsDashboard(): JSX.Element {
         </div>
       </header>
 
+      {hasNoPlants ? null : <QuickReports plants={plants} onOpen={openQuickReport} />}
+
       {hasNoPlants ? (
         <EmptyState
           title="No Plants assigned"
           detail="A report is about one Plant, and this account has none. An administrator assigns Plants under Users."
         />
       ) : mode === "custom" ? (
-        <CustomReportBuilder plants={plants} startPlantId={plantId} />
+        <CustomReportBuilder
+          key={opening?.n ?? 0}
+          plants={plants}
+          startPlantId={plantId}
+          initialReportId={opening?.id ?? null}
+        />
       ) : (
         <>
           <Panel title="Report generator">
@@ -234,6 +260,7 @@ export function ReportsDashboard(): JSX.Element {
                   <p className="field-label mb-2">Period</p>
                   <ReportPeriodPicker
                     period={period}
+                    offerLastDays
                     onPeriod={choosePeriod}
                     range={range}
                     onRange={(next) => {

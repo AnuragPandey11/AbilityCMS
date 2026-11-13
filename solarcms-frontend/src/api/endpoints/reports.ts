@@ -21,7 +21,19 @@ import {
 // ── Report tables: one Plant, one period, answered while the reader waits ────
 
 export type ReportKind = "daily_plant" | "monthly_plant" | "inverter" | "weather" | "alarm";
-export type ReportPeriod = "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
+/**
+ * The presets, any "last N days" (`last_14_days`: today and the 13 days
+ * before it, N from 1 to 366) and a custom range. A period goes to the server
+ * by name, so a saved report keeps "the last 14 days" rather than the dates it
+ * was saved on (`domain/periods.last_days`).
+ */
+export type ReportPeriod =
+  | "today"
+  | "yesterday"
+  | "last_7_days"
+  | "last_30_days"
+  | `last_${number}_days`
+  | "custom";
 export type ReportFormat = "csv" | "xlsx" | "pdf";
 
 export interface ReportTableQuery {
@@ -178,6 +190,8 @@ export const SavedReportSchema = z.object({
   created_by: z.number().nullable(),
   created_by_email: z.string().nullable(),
   can_change: z.boolean(),
+  /** Where the reader keeps it among their quick reports (1 first), or null. */
+  pin_position: z.number().nullable().optional(),
 });
 export type SavedReport = z.infer<typeof SavedReportSchema>;
 
@@ -234,6 +248,23 @@ export async function saveReport(
 
 export async function deleteSavedReport(id: number): Promise<void> {
   await request(`/reports/custom/saved/${id}`, { method: "DELETE" });
+}
+
+/**
+ * Replace the reader's quick reports with `reportIds`, in that order — the
+ * whole row in one write, so a pin, an unpin and a replacement are each one
+ * request. Returns the row as stored.
+ */
+export async function setPinnedReports(reportIds: number[]): Promise<number[]> {
+  const body = await request("/reports/custom/pins", {
+    method: "PUT",
+    body: { report_ids: reportIds },
+  });
+  return parse(
+    z.object({ limit: z.number(), report_ids: z.array(z.number()) }),
+    body,
+    "PUT /reports/custom/pins",
+  ).report_ids;
 }
 
 // ── Report definitions and runs: a Client's Reports, rendered by the scheduler

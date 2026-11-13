@@ -18,8 +18,10 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -111,3 +113,25 @@ class CustomReport(Base):
     # Before `created_at`, which would otherwise shadow the column helper here.
     updated_at: Mapped[datetime] = created_at()
     created_at: Mapped[datetime] = created_at()
+
+
+class CustomReportPin(Base):
+    """A saved custom report one User keeps as a quick report (migration 0048).
+
+    Modelled so `alembic revision --autogenerate` does not propose dropping it;
+    the router uses explicit SQL.
+    """
+
+    __tablename__ = "custom_report_pins"
+    __table_args__ = (
+        UniqueConstraint("user_id", "position", name="uq_custom_report_pin_position"),
+        CheckConstraint("position >= 1", name="custom_report_pin_position"),
+        Index("ix_custom_report_pins_report", "report_id"),
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("custom_reports.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    pinned_at: Mapped[datetime] = created_at()
