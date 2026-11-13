@@ -198,6 +198,8 @@ export function ReportsDashboard(): JSX.Element {
             onChange={(next) => {
               setMode(next);
               setNotice(null);
+              // A quick report opened earlier is not reopened by switching back.
+              setOpening(null);
             }}
             options={[
               { value: "standard", label: "Standard", hint: "The ready-made Plant reports." },

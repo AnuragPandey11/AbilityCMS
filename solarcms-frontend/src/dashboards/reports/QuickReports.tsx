@@ -74,7 +74,7 @@ export function QuickReports({
   return (
     <Panel
       title="Quick reports"
-      subtitle={`Your pinned reports (${quick.pinned.length} of ${QUICK_REPORT_LIMIT}). A download is run afresh with today's dates; Open shows it in the builder.`}
+      subtitle={`Your pinned reports (${quick.pinned.length} of ${QUICK_REPORT_LIMIT}). Each download is worked out afresh (a fixed custom range keeps its dates); Open shows it in the builder.`}
       tray
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">

@@ -187,6 +187,17 @@ describe("Quick reports on the Reports screen", () => {
     expect(screen.getByRole("button", { name: "Unpin" })).toBeInTheDocument();
   });
 
+  it("starts the builder blank again after leaving it, not on the report opened before", async () => {
+    saved = [savedReport(3, "Inverter power", 1)];
+    renderScreen();
+    const card = await screen.findByRole("article", { name: "Inverter power" });
+    fireEvent.click(within(card).getByRole("button", { name: "Open" }));
+    expect(await screen.findByDisplayValue("Inverter power")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Standard"));
+    fireEvent.click(screen.getByText("Build your own"));
+    expect(((await screen.findByLabelText("Report name")) as HTMLInputElement).value).toBe("");
+  });
+
   it("asks which report to replace when the row is full, then writes the row once", async () => {
     saved = [
       ...[1, 2, 3, 4, 5].map((n) => savedReport(n, `Pinned ${n}`, n)),

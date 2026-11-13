@@ -13,7 +13,7 @@ its pins (CASCADE); a pin names a report only the pinner could see when they
 pinned it, and listing joins `custom_reports` under its own RLS, so a report
 the User can no longer see drops out of their row rather than leaking a name.
 
-Status: PROPOSED (the user's choice of 13 Nov 2026) / BUILT.
+Status: AGREED (the user's choice of 13 Nov 2026) / BUILT.
 
 Revision ID: 0049
 Revises: 0048
