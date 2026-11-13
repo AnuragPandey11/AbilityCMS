@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { request } from "../client";
+import type { ReportPeriod } from "./reports";
 import {
   BlockKpisSchema,
   BlockSchema,
@@ -114,7 +115,7 @@ export async function plantStrings(plantId: number): Promise<PlantStrings> {
 
 /** Which period an Inverter ranking covers — the Report tables' own names. */
 export interface InverterRankingQuery {
-  period: "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
+  period: ReportPeriod;
   /** The Plant's own dates and `HH:MM` clock times. Custom periods only. */
   fromDate?: string;
   toDate?: string;

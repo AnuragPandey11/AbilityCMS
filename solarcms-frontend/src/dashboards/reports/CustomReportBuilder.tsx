@@ -723,6 +723,7 @@ export function CustomReportBuilder({
               <p className="field-label mb-2">4 · Period</p>
               <ReportPeriodPicker
                 period={period}
+                offerLastDays
                 onPeriod={(next) => {
                   setPeriod(next);
                   setNotice(null);

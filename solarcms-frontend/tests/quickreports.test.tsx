@@ -227,6 +227,11 @@ describe("quick report rules", () => {
     ).toBe("01-03-2026 to 31-03-2026 (fixed dates)");
   });
 
+  it("names a last N days period as a count that moves with the calendar", () => {
+    expect(rules.periodWords({ ...WEEKLY, period: "last_14_days" })).toBe("Last 14 days");
+    expect(rules.periodWords({ ...WEEKLY, period: "last_1_days" })).toBe("Last 1 day");
+  });
+
   it("words an interval as people say it", () => {
     expect(rules.intervalWords(15)).toBe("15 min");
     expect(rules.intervalWords(60)).toBe("1 hour");

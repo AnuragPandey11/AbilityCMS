@@ -21,7 +21,19 @@ import {
 // ── Report tables: one Plant, one period, answered while the reader waits ────
 
 export type ReportKind = "daily_plant" | "monthly_plant" | "inverter" | "weather" | "alarm";
-export type ReportPeriod = "today" | "yesterday" | "last_7_days" | "last_30_days" | "custom";
+/**
+ * The presets, any "last N days" (`last_14_days`: today and the 13 days
+ * before it, N from 1 to 366) and a custom range. A period goes to the server
+ * by name, so a saved report keeps "the last 14 days" rather than the dates it
+ * was saved on (`domain/periods.last_days`).
+ */
+export type ReportPeriod =
+  | "today"
+  | "yesterday"
+  | "last_7_days"
+  | "last_30_days"
+  | `last_${number}_days`
+  | "custom";
 export type ReportFormat = "csv" | "xlsx" | "pdf";
 
 export interface ReportTableQuery {

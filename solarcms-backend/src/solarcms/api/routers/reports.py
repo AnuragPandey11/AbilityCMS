@@ -61,8 +61,8 @@ async def report_table(
 ) -> dict[str, Any]:
     """The table a Report download would contain, as JSON — the screen's preview.
 
-    `period` is today, yesterday, last_7_days, last_30_days or custom (with
-    `from_date` and `to_date`, inclusive, as the Plant's own dates, and
+    `period` is today, yesterday, last_7_days, last_30_days, any last_N_days,
+    or custom (with `from_date` and `to_date`, inclusive, as the Plant's own dates, and
     optionally `from_time` and `to_time` on them — `HH:MM` on the Plant's
     clock, the period stopping at `to_time`, and 23:59 meaning the day's end).
     """

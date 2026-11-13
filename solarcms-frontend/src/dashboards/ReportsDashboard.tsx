@@ -258,6 +258,7 @@ export function ReportsDashboard(): JSX.Element {
                   <p className="field-label mb-2">Period</p>
                   <ReportPeriodPicker
                     period={period}
+                    offerLastDays
                     onPeriod={choosePeriod}
                     range={range}
                     onRange={(next) => {

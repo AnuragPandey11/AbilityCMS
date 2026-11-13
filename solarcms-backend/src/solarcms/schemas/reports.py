@@ -22,7 +22,8 @@ class CustomReportDefinition(BaseModel):
 
     `series` names Device and Tag pairs explicitly, so a saved report reopens as it
     was built even after a Device gains a Tag. `period` takes the same names as
-    the standard reports (today, yesterday, last_7_days, last_30_days, custom).
+    the standard reports (today, yesterday, last_7_days, last_30_days, any
+    last_N_days, custom).
     """
 
     name: str | None = Field(default=None, max_length=120)

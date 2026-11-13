@@ -10,7 +10,7 @@
  */
 
 import type { CustomReportDefinition, ReportFormat, SavedReport } from "@/api/endpoints/reports";
-import { formatReportPeriod } from "./format";
+import { formatReportPeriod, lastDaysOf } from "./format";
 
 /** Mirrors `schemas/reports.CUSTOM_REPORT_PIN_LIMIT`; the server enforces it regardless. */
 export const QUICK_REPORT_LIMIT = 5;
@@ -65,8 +65,8 @@ const NAMED_PERIODS: Record<string, string> = {
 export function periodWords(definition: CustomReportDefinition): string {
   const named = NAMED_PERIODS[definition.period];
   if (named) return named;
-  const lastDays = /^last_(\d+)_days$/.exec(definition.period);
-  if (lastDays) return `Last ${lastDays[1]} days`;
+  const lastDays = lastDaysOf(definition.period);
+  if (lastDays !== null) return `Last ${lastDays} day${lastDays === 1 ? "" : "s"}`;
   if (definition.period === "custom" && definition.from_date && definition.to_date) {
     const range = formatReportPeriod({
       first_day: definition.from_date,

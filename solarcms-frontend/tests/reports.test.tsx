@@ -190,6 +190,41 @@ describe("Reports screen", () => {
     expect(within(firstRow).getByText("—")).toBeInTheDocument();
   });
 
+  it("asks for the last N days by name, applied when the count is left", async () => {
+    renderScreen();
+    await screen.findByText("Daily Plant Report — preview (1 row)");
+    fireEvent.click(screen.getByRole("radio", { name: "Last N Days" }));
+    await waitFor(() =>
+      expect(tableRequests().at(-1)!.searchParams.get("period")).toBe("last_14_days"),
+    );
+    const count = screen.getByLabelText("Number of days");
+    // Typing alone asks for nothing: the "7" of "70" is not a period.
+    fireEvent.change(count, { target: { value: "7" } });
+    fireEvent.change(count, { target: { value: "70" } });
+    expect(tableRequests().some((url) => url.searchParams.get("period") === "last_7_days")).toBe(false);
+    fireEvent.blur(count);
+    await waitFor(() =>
+      expect(tableRequests().at(-1)!.searchParams.get("period")).toBe("last_70_days"),
+    );
+    // No dates travel with it: the server counts back from the Plant's today.
+    expect(tableRequests().at(-1)!.searchParams.get("from_date")).toBeNull();
+  });
+
+  it("refuses a count of days it cannot ask for, and says why", async () => {
+    renderScreen();
+    await screen.findByText("Daily Plant Report — preview (1 row)");
+    fireEvent.click(screen.getByRole("radio", { name: "Last N Days" }));
+    const count = screen.getByLabelText("Number of days");
+    for (const bad of ["0", "367", "2.5"]) {
+      fireEvent.change(count, { target: { value: bad } });
+      fireEvent.keyDown(count, { key: "Enter" });
+      expect(screen.getByText("Choose a whole number of days from 1 to 366.")).toBeInTheDocument();
+    }
+    expect(
+      tableRequests().every((url) => ["today", "last_14_days"].includes(url.searchParams.get("period")!)),
+    ).toBe(true);
+  });
+
   it("opens a custom range on the Plant's last seven days and sends its dates", async () => {
     renderScreen();
     await screen.findByText("Daily Plant Report — preview (1 row)");
