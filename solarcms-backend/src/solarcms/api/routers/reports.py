@@ -11,7 +11,12 @@ from sqlalchemy import text
 
 from solarcms.api.deps import CurrentUser, SessionDep, require_permission
 from solarcms.domain.periods import report_window
-from solarcms.schemas.reports import CustomReportDefinition, CustomReportSave
+from solarcms.schemas.reports import (
+    CUSTOM_REPORT_PIN_LIMIT,
+    CustomReportDefinition,
+    CustomReportPins,
+    CustomReportSave,
+)
 from solarcms.services import custom_reports, report_tables
 from solarcms.services.storage import LocalArtifactStore, get_store
 
@@ -197,13 +202,19 @@ async def list_saved_custom_reports(
     session: SessionDep,
     user: CurrentUser = Depends(require_permission("report.generate")),
 ) -> list[dict[str, Any]]:
-    """Custom reports saved in this Client, newest first (shared within it)."""
+    """Custom reports saved in this Client, newest first (shared within it).
+
+    `pin_position` is where the caller keeps the report among their quick
+    reports (1 first), or null — another User's pins are never read here.
+    """
     rows = (await session.execute(text("""
         SELECT r.id, r.name, r.definition, r.created_at, r.updated_at, r.created_by,
-               u.email AS created_by_email
-          FROM custom_reports r LEFT JOIN users u ON u.id = r.created_by
+               u.email AS created_by_email, p.position AS pin_position
+          FROM custom_reports r
+          LEFT JOIN users u ON u.id = r.created_by
+          LEFT JOIN custom_report_pins p ON p.report_id = r.id AND p.user_id = :user
          ORDER BY r.updated_at DESC
-    """))).all()
+    """), {"user": user.user_id})).all()
     return [
         {**dict(row._mapping),
          "can_change": row.created_by == user.user_id or "config.modify" in user.permissions}
@@ -288,6 +299,61 @@ async def delete_custom_report(
     """), {"client_id": user.client_id, "user_id": user.user_id, "id": report_id,
            "before": json.dumps({"name": owner.name})})
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/custom/pins")
+async def set_custom_report_pins(
+    body: CustomReportPins, session: SessionDep,
+    user: CurrentUser = Depends(require_permission("report.generate")),
+) -> dict[str, Any]:
+    """Replace the caller's quick reports with `report_ids`, in that order.
+
+    The whole list in one request, so pinning, unpinning, replacing one when
+    the row is full and reordering are each one write and never leave a
+    half-changed row. Pins are the caller's own (RLS on `custom_report_pins`).
+    """
+    ids = body.report_ids
+    if len(ids) > CUSTOM_REPORT_PIN_LIMIT:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"At most {CUSTOM_REPORT_PIN_LIMIT} reports can be kept as quick reports; "
+            "unpin one first.")
+    if ids:
+        # Through `custom_reports`' own RLS: a report of another Client, or one
+        # deleted a moment ago, is refused rather than pinned unseen.
+        visible = set((await session.execute(text(
+            "SELECT id FROM custom_reports WHERE id = ANY(:ids)"
+        ), {"ids": ids})).scalars())
+        if len(visible) != len(ids):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "One of these reports has been deleted or is not visible to you; "
+                "refresh the page and pin again.")
+    # Two saves from one User at once would each delete then insert, and the
+    # second insert would collide; one at a time per User.
+    await session.execute(text(
+        "SELECT pg_advisory_xact_lock(hashtext('custom_report_pins'), CAST(:user AS integer))"
+    ), {"user": user.user_id})
+    before = list((await session.execute(text(
+        "SELECT report_id FROM custom_report_pins WHERE user_id = :user ORDER BY position"
+    ), {"user": user.user_id})).scalars())
+    await session.execute(text("DELETE FROM custom_report_pins WHERE user_id = :user"),
+                          {"user": user.user_id})
+    if ids:
+        await session.execute(text("""
+            INSERT INTO custom_report_pins (user_id, report_id, position)
+            SELECT :user, pinned.id, pinned.position
+              FROM unnest(CAST(:ids AS bigint[])) WITH ORDINALITY AS pinned(id, position)
+        """), {"user": user.user_id, "ids": ids})
+    await session.execute(text("""
+        INSERT INTO audit_log (client_id, user_id, action, entity_type, entity_id,
+                               before, after)
+        VALUES (:client_id, :user_id, 'custom_report.pins', 'users', :user_id,
+                CAST(:before AS jsonb), CAST(:after AS jsonb))
+    """), {"client_id": user.client_id, "user_id": user.user_id,
+           "before": json.dumps({"report_ids": before}),
+           "after": json.dumps({"report_ids": ids})})
+    return {"limit": CUSTOM_REPORT_PIN_LIMIT, "report_ids": ids}
 
 
 # ── Report definitions and runs: a Client's Reports, rendered by the scheduler

@@ -17,7 +17,7 @@
  * sentence saying what to change, and the sentence is shown as it is.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/api/queryKeys";
 import * as reportsApi from "@/api/endpoints/reports";
@@ -30,14 +30,15 @@ import type {
   SavedReport,
 } from "@/api/endpoints/reports";
 import type { MePlant } from "@/api/schemas";
-import { triggerDownload } from "@/api/client";
 import { isApiError } from "@/api/problem";
 import { useDebouncedValue } from "@/state/useDebouncedValue";
 import { Button, Panel, SegmentedControl } from "@/components/ui";
 import { IconChevronDown, IconExport } from "@/components/icons";
 import { DEFAULT_TIMEZONE, toDateTimeInput } from "@/format/datetime";
 import { customRangeEnd, customRangeProblem, type CustomRange } from "./format";
-import { printHtml } from "./printHtml";
+import { describeExport, downloadCustomReport } from "./exportCustom";
+import { QUICK_REPORT_LIMIT, asDefinition } from "./quickReportRules";
+import { useQuickReports } from "./useQuickReports";
 import { ReportPreview } from "./ReportPreview";
 import { MAX_CUSTOM_DAYS, ReportPeriodPicker } from "./ReportPeriodPicker";
 
@@ -97,18 +98,15 @@ interface DeviceGroup {
   devices: CatalogDevice[];
 }
 
-function asDefinition(value: unknown): CustomReportDefinition | null {
-  if (!value || typeof value !== "object") return null;
-  const definition = value as CustomReportDefinition;
-  return Array.isArray(definition.series) ? definition : null;
-}
-
 export function CustomReportBuilder({
   plants,
   startPlantId,
+  initialReportId = null,
 }: {
   plants: MePlant[];
   startPlantId: number | null;
+  /** A saved report to open as soon as the saved list arrives — a quick report's Open. */
+  initialReportId?: number | null;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const [plantIds, setPlantIds] = useState<number[]>(startPlantId !== null ? [startPlantId] : []);
@@ -143,12 +141,9 @@ export function CustomReportBuilder({
     staleTime: 5 * 60_000,
     placeholderData: (previous) => previous,
   });
-  const savedQuery = useQuery({
-    queryKey: qk.savedReports(),
-    queryFn: reportsApi.listSavedReports,
-    staleTime: 60_000,
-    retry: false,
-  });
+  const quick = useQuickReports();
+  /** The pinned report a full row would give up for this one, while choosing. */
+  const [choosingReplacement, setChoosingReplacement] = useState(false);
   const catalog = catalogQuery.data;
   // INVERTER_2 before INVERTER_10, as people count them.
   const devices = useMemo(
@@ -258,11 +253,13 @@ export function CustomReportBuilder({
   const stale = tableQuery.isPlaceholderData || settledKey !== definitionKey;
 
   // ── Saved reports ─────────────────────────────────────────────────────────
-  const saved = savedQuery.data ?? [];
+  const saved = quick.saved;
   const current = saved.find((report) => report.id === savedId) ?? null;
+  const currentPinned = current?.pin_position != null;
 
   const open = (report: SavedReport | null) => {
     setNotice(null);
+    setChoosingReplacement(false);
     if (!report) {
       setSavedId(null);
       setName("");
@@ -297,6 +294,41 @@ export function CustomReportBuilder({
         tone: "info",
         text: "Some of this report's Plants are not visible to you, so their columns are left out.",
       });
+    }
+  };
+
+  // A quick report's Open: once, when the saved list has arrived.
+  const openedInitial = useRef(false);
+  useEffect(() => {
+    if (openedInitial.current || initialReportId === null || !quick.loaded) return;
+    openedInitial.current = true;
+    const report = saved.find((candidate) => candidate.id === initialReportId);
+    if (report) open(report);
+    else setNotice({ tone: "bad", text: "That saved report has been deleted." });
+    // `open` is a fresh function every render; this runs once by the ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialReportId, quick.loaded, saved]);
+
+  const pinCurrent = async (replacing?: number) => {
+    if (!current) return;
+    setNotice(null);
+    try {
+      await quick.pin(current.id, replacing);
+      setChoosingReplacement(false);
+      setNotice({ tone: "ok", text: `Pinned “${current.name}” to your quick reports, at the top of Reports.` });
+    } catch (error) {
+      setNotice({ tone: "bad", text: isApiError(error) ? error.displayMessage : "Could not pin the report." });
+    }
+  };
+
+  const unpinCurrent = async () => {
+    if (!current) return;
+    setNotice(null);
+    try {
+      await quick.unpin(current.id);
+      setNotice({ tone: "info", text: `Unpinned “${current.name}”. It is still saved.` });
+    } catch (error) {
+      setNotice({ tone: "bad", text: isApiError(error) ? error.displayMessage : "Could not unpin the report." });
     }
   };
 
@@ -341,22 +373,10 @@ export function CustomReportBuilder({
     setExporting(format);
     setNotice(null);
     try {
-      const blob = await reportsApi.exportCustomReport(definition, format);
-      triggerDownload(blob, reportsApi.reportFilename(table, format));
+      const note = await downloadCustomReport(definition, format, reportsApi.reportFilename(table, format));
+      if (note) setNotice({ tone: "info", text: note });
     } catch (error) {
-      if (format === "pdf" && isApiError(error) && error.status === 503) {
-        try {
-          printHtml(await reportsApi.customReportPage(definition));
-          setNotice({
-            tone: "info",
-            text: "This server has no PDF renderer installed, so the report opened in your browser's print dialog — choose “Save as PDF” as the destination.",
-          });
-        } catch (inner) {
-          setNotice({ tone: "bad", text: isApiError(inner) ? inner.displayMessage : "Could not open the report." });
-        }
-      } else {
-        setNotice({ tone: "bad", text: isApiError(error) ? error.displayMessage : "Could not download the report." });
-      }
+      setNotice({ tone: "bad", text: describeExport(error) });
     } finally {
       setExporting(null);
     }
@@ -444,18 +464,61 @@ export function CustomReportBuilder({
                 <option value="">{saved.length === 0 ? "No saved reports yet" : "New report"}</option>
                 {saved.map((report) => (
                   <option key={report.id} value={report.id}>
+                    {report.pin_position != null ? "★ " : ""}
                     {report.name}
                     {report.created_by_email ? ` — ${report.created_by_email}` : ""}
                   </option>
                 ))}
               </select>
             </label>
+            {current ? (
+              currentPinned ? (
+                <Button
+                  disabled={quick.busy}
+                  onClick={() => void unpinCurrent()}
+                  title="Take it off your quick reports; it stays saved."
+                >
+                  Unpin
+                </Button>
+              ) : (
+                <Button
+                  disabled={quick.busy}
+                  onClick={() => (quick.full ? setChoosingReplacement(true) : void pinCurrent())}
+                  title={`Keep it at the top of Reports, to download in one click (up to ${QUICK_REPORT_LIMIT}).`}
+                >
+                  Pin to quick reports
+                </Button>
+              )
+            ) : null}
             {savedId !== null ? (
               <Button variant="ghost" onClick={() => open(null)}>
                 Start a new one
               </Button>
             ) : null}
           </div>
+
+          {/* A full row: which pinned report gives up its place. */}
+          {current && choosingReplacement && !currentPinned ? (
+            <div
+              role="group"
+              aria-label="Choose a quick report to replace"
+              className="rounded-control border border-line bg-surface-sunken px-3 py-2.5 text-xs text-ink-muted"
+            >
+              <p>
+                Your {QUICK_REPORT_LIMIT} quick reports are full. Replace one with “{current.name}”:
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {quick.pinned.map((pinned) => (
+                  <Button key={pinned.id} disabled={quick.busy} onClick={() => void pinCurrent(pinned.id)}>
+                    Replace {pinned.name}
+                  </Button>
+                ))}
+                <Button variant="ghost" onClick={() => setChoosingReplacement(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           {/* 1. Plants */}
           <div>
