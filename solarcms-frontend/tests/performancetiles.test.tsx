@@ -277,7 +277,11 @@ describe("The Availability tile", () => {
   it("leads with the Plant, then Grid and Inverter, with Data availability at the foot", () => {
     band({ kpis: { ...kpis, availability: figure(0.989), availability_levels: levels } });
     expect(screen.getByText("Availability")).toBeInTheDocument();
-    expect(drawing("Plant availability")).toHaveAccessibleName(/94\.4%/);
+    // Plant, Grid and Inverter are rows of one kind, so their figures are one size.
+    const sizeOf = (text: string) => screen.getByText(text).className.match(/text-\[[^\]]+\]/)?.[0];
+    expect(sizeOf("94.4")).toBeDefined();
+    expect(sizeOf("94.4")).toBe(sizeOf("90.0"));
+    expect(sizeOf("94.4")).toBe(sizeOf("97.9"));
     expect(screen.getByText("Stopped 30 min")).toBeInTheDocument();
     expect(screen.getByText("Grid")).toBeInTheDocument();
     expect(screen.getByText("Down 1 h")).toBeInTheDocument();
