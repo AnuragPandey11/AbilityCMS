@@ -17,7 +17,6 @@
 
 import type { ReactNode } from "react";
 import type { AvailabilityLevels, KpiFigure } from "@/api/schemas";
-import { RatioMeter } from "@/components/charts/RatioMeter";
 import { ratioTone, type RatioTone } from "@/components/charts/RatioDial";
 import { formatRatioAsPercent, ratioIsImplausible } from "@/format/value";
 
@@ -161,23 +160,19 @@ const TITLES = {
     }. Provisional (OPEN-16).`,
 };
 
-/** The tile's drawing: Plant large, then Grid and Inverter. */
+/** The tile's drawing: Plant, Grid and Inverter, each figure the same size. */
 export function AvailabilityLevelsVisual({ levels }: { levels: AvailabilityLevels }): JSX.Element {
   return (
     <div className="flex w-full flex-col gap-2">
-      <div className="flex flex-col gap-1">
-        <span className="flex min-w-0 items-baseline gap-1.5">
-          <span className="shrink-0 cursor-help text-[13px] font-medium text-ink-muted" title={TITLES.plant}>
-            Plant
-          </span>
-          {levels.plant.value !== null ? (
-            <span className="min-w-0 truncate text-[11.5px] text-ink-faint" title={plantLine(levels)}>
-              {plantLine(levels)}
-            </span>
-          ) : null}
-        </span>
-        <RatioMeter figure={levels.plant} label="Plant availability" />
-      </div>
+      {/* Same row as Grid and Inverter, so the three figures are one size
+          (the user's request, 13 Nov 2026). */}
+      <LevelRow
+        name="Plant"
+        figure={levels.plant}
+        line={plantLine(levels)}
+        title={TITLES.plant}
+        notAvailable={false}
+      />
       <div className="flex flex-col gap-2 border-t border-line pt-2">
         <LevelRow
           name="Grid"
