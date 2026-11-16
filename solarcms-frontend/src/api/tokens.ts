@@ -18,6 +18,22 @@ export interface TokenPair {
 }
 
 let current: TokenPair | null = null;
+
+// Whether a sign-in survives a reload. True by default — the behaviour before
+// the login page had a "Remember me" box — and set false only by a sign-in
+// that did not tick it, in which case the tokens live in this tab's memory and
+// are never written to localStorage.
+let persist = true;
+
+export function setPersistTokens(next: boolean): void {
+  persist = next;
+  if (next) return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Nothing stored that we could remove; the in-memory copy is all there is.
+  }
+}
 const listeners = new Set<(tokens: TokenPair | null) => void>();
 
 function load(): TokenPair | null {
@@ -41,7 +57,7 @@ export function getAccessToken(): string | null {
 export function setTokens(tokens: TokenPair | null): void {
   current = tokens;
   try {
-    if (tokens)
+    if (tokens && persist)
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
     else window.localStorage.removeItem(STORAGE_KEY);
   } catch {

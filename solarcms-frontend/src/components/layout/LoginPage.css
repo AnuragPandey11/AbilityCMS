@@ -1,0 +1,244 @@
+/*
+ * The sign-in page is the client's artwork with a card on top of it, in one of
+ * three arrangements.
+ *
+ * 1. Landscape, 17:10 or wider — the desktop artwork, at 3840x2160. It
+ *    carries the logo, the pitch, the four
+ *    industry panels and the footer on its left ~63%, and the card sits over
+ *    its right-hand side. It is fitted to the window's **height**, anchored
+ *    left, so the logo and the footer are always whole (`cover` scaled it by
+ *    width on any window wider than 16:9 and cut the logo off). Wider than
+ *    16:9, its right edge fades into `ability-cms-desktop-edge.png` — that
+ *    edge's own colours, blurred — repeated across the rest of the window.
+ *
+ * 2. Landscape but narrower than 17:10 (an iPad on its side, a phone on its
+ *    side) — too little of the artwork's right side is left for the card, so
+ *    the card centres over a dimmed copy, carrying the logo itself.
+ *
+ * 3. Portrait (phones, tablets upright) — the mobile artwork (1080x1920): the
+ *    logo and a photograph at the top, an empty middle for the card, the
+ *    footer at the bottom. Its top and bottom are drawn separately, each
+ *    fading into the middle's own colour, so a phone of any height shows the
+ *    logo and the footer whole with the card between them; on a screen too
+ *    short for all three the page scrolls rather than covering one. Wider than
+ *    560px the artwork is a centred column whose sides fade away.
+ *
+ * The card is set in Poppins, the artwork's own face (self-hosted,
+ * `@fontsource/poppins`, imported by LoginPage.tsx and used on this page only).
+ */
+
+.login-stage {
+  /* The desktop artwork's width when its height is the window's. */
+  --art-width: calc(100vh * 1920 / 1080);
+  /* Where the card's side of it begins: x = 1215 of 1920. */
+  --panel-start: calc(var(--art-width) * 0.633);
+
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Bottom: clear of the footer band in the artwork, 80px of 1080. */
+  padding: 3vh 2vh calc(100vh * 80 / 1080) var(--panel-start);
+  color: #fff;
+  font-family: "Poppins", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #011d38 url("/ability-cms-desktop-edge.png") left top / 1px 100% repeat-x;
+}
+
+.login-stage::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--art-width);
+  /* The 3840x2160 file on every screen: the 1920x1080 one did not look clean
+     enough, even where it is drawn at its own size (the user's call). */
+  background: url("/ability-cms-desktop-3840x2160.jpg") left top / auto 100% no-repeat;
+  /* Only ever on screen when the window is wider than 16:9. */
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 6vh), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 6vh), transparent);
+}
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  /* The client's mock-up draws the card at 34% of the artwork's width. */
+  width: min(60vh, calc(100vw - var(--panel-start) - 4vh), 620px);
+  min-width: 360px;
+}
+
+/* Only where the artwork's own logo is covered or absent. */
+.login-card-logo {
+  display: none;
+}
+
+/* ---- 2. Landscape, narrower than 17:10 ------------------------------------ */
+
+@media (max-aspect-ratio: 17/10) {
+  .login-stage {
+    padding: 2rem 1rem;
+    background:
+      linear-gradient(rgba(7, 21, 38, 0.86), rgba(7, 21, 38, 0.86)),
+      url("/ability-cms-desktop-1920x1080.jpg") left bottom / cover no-repeat;
+    background-color: #071526;
+  }
+
+  .login-stage::before {
+    display: none;
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 520px;
+    min-width: 0;
+  }
+
+  .login-card-logo {
+    display: block;
+  }
+}
+
+/* ---- 3. Portrait ----------------------------------------------------------- */
+
+@media (orientation: portrait) {
+  .login-stage {
+    --art-width: min(100vw, 560px);
+    --art-height: calc(var(--art-width) * 1920 / 1080);
+
+    min-height: 100vh;
+    min-height: 100svh;
+    /* The card's height on a phone, about; a shorter card only gains room. */
+    --card-height: 500px;
+    --footer-room: calc(var(--art-height) * 0.155);
+
+    flex-direction: column;
+    justify-content: flex-start;
+    /* The card begins where the photograph has faded (~38% down) and ends
+       above the footer's waves (~85%). On a screen too short for that it
+       rises over the photograph — never past the logo (~20%) — so the whole
+       form stays on the first screen; the footer is what scrolls. */
+    padding: clamp(
+        calc(var(--art-height) * 0.2),
+        calc(100svh - var(--card-height) - var(--footer-room)),
+        calc(var(--art-height) * 0.38)
+      )
+      1rem var(--footer-room);
+    /* The middle of the artwork, for whatever height it is stretched to. */
+    background: linear-gradient(rgb(8 27 48), rgb(9 32 57) 55%, rgb(8 27 48));
+  }
+
+  .login-stage::before,
+  .login-stage::after {
+    content: "";
+    display: block;
+    position: absolute;
+    z-index: 0;
+    left: 50%;
+    width: var(--art-width);
+    transform: translateX(-50%);
+    background-image: url("/ability-cms-mobile-1080x1920.jpg");
+    background-repeat: no-repeat;
+    background-size: 100% auto;
+  }
+
+  /* The logo and the photograph: the top 62%, fading out through the empty middle. */
+  .login-stage::before {
+    top: 0;
+    bottom: auto;
+    height: calc(var(--art-height) * 0.62);
+    background-position: center top;
+    -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent);
+    mask-image: linear-gradient(to bottom, #000 78%, transparent);
+  }
+
+  /* The waves and the footer: the bottom 20%, fading in from the middle. */
+  .login-stage::after {
+    bottom: 0;
+    height: calc(var(--art-height) * 0.2);
+    background-position: center bottom;
+    -webkit-mask-image: linear-gradient(to top, #000 70%, transparent);
+    mask-image: linear-gradient(to top, #000 70%, transparent);
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 480px;
+    min-width: 0;
+    margin: auto 0;
+  }
+
+  /* The artwork carries the logo here. */
+  .login-card-logo {
+    display: none;
+  }
+
+  /* Phones: the device row is the first thing to go, then some air. */
+  .login-stage .login-devices {
+    display: none;
+  }
+
+  .login-stage .login-devices + p {
+    margin-top: 1.1rem;
+  }
+
+  .login-stage .login-card {
+    padding: 1.5rem;
+  }
+
+  .login-stage .login-fields {
+    margin-top: 1.5rem;
+  }
+
+  .login-stage .login-fields > * + * {
+    margin-top: 0.9rem;
+  }
+
+  .login-stage .login-field,
+  .login-stage .login-submit {
+    height: 52px;
+  }
+
+  .login-stage .login-remember {
+    margin-top: 1rem;
+  }
+
+  .login-stage .login-submit {
+    margin-top: 1.25rem;
+  }
+}
+
+/* Upright tablets: the artwork is a column; let its sides fade away. */
+@media (orientation: portrait) and (min-width: 561px) {
+  .login-stage::before {
+    -webkit-mask-image:
+      linear-gradient(to bottom, #000 78%, transparent),
+      linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+    -webkit-mask-composite: source-in;
+    mask-image:
+      linear-gradient(to bottom, #000 78%, transparent),
+      linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+    mask-composite: intersect;
+  }
+
+  .login-stage::after {
+    -webkit-mask-image:
+      linear-gradient(to top, #000 70%, transparent),
+      linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+    -webkit-mask-composite: source-in;
+    mask-image:
+      linear-gradient(to top, #000 70%, transparent),
+      linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+    mask-composite: intersect;
+  }
+
+  .login-stage .login-devices {
+    display: flex;
+  }
+
+  .login-stage .login-card {
+    padding: 2.5rem;
+  }
+}

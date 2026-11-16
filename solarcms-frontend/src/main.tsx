@@ -6,6 +6,7 @@ import { AuthProvider } from "@/auth/AuthProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import { LiveSocketProvider } from "@/live/LiveSocket";
 import { AppRoutes } from "@/routes";
+import { SignInScreen } from "@/components/layout/SignInScreen";
 import { isApiError } from "@/api/problem";
 import "./index.css";
 
@@ -32,6 +33,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
             {/* One socket for the whole application (Guardrail 12). */}
             <LiveSocketProvider>
               <AppRoutes />
+              {/* Over the routes, so it outlasts the login page it starts on. */}
+              <SignInScreen />
             </LiveSocketProvider>
           </AuthProvider>
         </BrowserRouter>
