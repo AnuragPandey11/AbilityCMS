@@ -6,7 +6,8 @@
  * here reintroduces the account enumerator the backend was careful to avoid
  * (§3.3). The only branch is 409 — several Clients — which needs a picker.
  *
- * The page is the client's artwork (`LoginPage.css`) with this card on top. It
+ * The page is the client's artwork with this card on top (`LoginPage.css`); on
+ * desktop the artwork's lettering is drawn live by `LoginArtwork`. It
  * is dark whatever the operating system's theme and uses its own colours rather
  * than the app's tokens, which switch with the theme, and its own face —
  * Poppins, the artwork's — rather than the app's Inter.
@@ -16,6 +17,7 @@ import { useState, type FormEvent } from "react";
 import { useAuth } from "@/auth/AuthProvider";
 import { setPersistTokens } from "@/api/tokens";
 import { BrandMark } from "@/components/layout/BrandMark";
+import { LoginArtwork, LoginFooter } from "@/components/layout/LoginArtwork";
 import {
   ArrowRightIcon,
   DesktopIcon,
@@ -90,6 +92,7 @@ export function LoginPage(): JSX.Element {
 
   return (
     <div className="login-stage" style={{ colorScheme: "dark" }}>
+      <LoginArtwork />
       <form
         onSubmit={submit}
         className="login-card rounded-[28px] border border-[#37d6ee]/60 bg-[#071a33]/80 p-7 shadow-[0_0_46px_rgba(55,214,238,0.18),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-md sm:p-10 [@media(max-height:760px)]:sm:py-7"
@@ -214,6 +217,7 @@ export function LoginPage(): JSX.Element {
           Cloud Ready
         </p>
       </form>
+      <LoginFooter />
     </div>
   );
 }

@@ -2,8 +2,9 @@
 
     python3 brand/derive_login.py          (from solarcms-frontend/)
 
-Reads `public/ability-cms-desktop-3840x2160.jpg` — the client's file, never
-modified — and writes `public/ability-cms-desktop-edge.png` (1 x 2160): the
+Reads `public/ability-cms-desktop-clean-3840x2160.jpg` — the client's artwork
+without lettering, never modified — and writes
+`public/ability-cms-desktop-edge.png` (1 x 2160): the
 artwork's right-edge colour, row by row, blurred vertically into a smooth
 gradient.
 
@@ -11,12 +12,12 @@ The page fits the artwork to the window's *height* so the logo and the footer
 are never cropped; on a window wider than 16:9 the artwork's right edge fades
 into this strip, repeated across the remaining width. Each row is the **median
 of the rightmost 80 columns** (so a thin line crossing the edge counts for
-nothing), and the strip is then blurred so the forest, the dashboard picture
-and the waves along that edge become bands of colour rather than stripes.
+nothing), and the strip is then blurred so the forest, the dam and the water
+along that edge become bands of colour rather than stripes.
 
-The client's 1920 x 1080 and 3840 x 2160 files and the 1080 x 1920 mobile file
-are all served as they are. Re-run after replacing the desktop source; never
-hand-edit the output.
+The desktop artwork and the 1080 x 1920 mobile file are served as they are;
+the desktop page draws its own text over the artwork (LoginArtwork.tsx).
+Re-run after replacing the desktop source; never hand-edit the output.
 """
 
 from pathlib import Path
@@ -26,7 +27,7 @@ from PIL import Image, ImageFilter
 
 HERE = Path(__file__).resolve().parent
 PUBLIC = HERE.parent / "public"
-SOURCE = PUBLIC / "ability-cms-desktop-3840x2160.jpg"
+SOURCE = PUBLIC / "ability-cms-desktop-clean-3840x2160.jpg"
 EDGE = PUBLIC / "ability-cms-desktop-edge.png"
 
 EDGE_COLUMNS = 80
