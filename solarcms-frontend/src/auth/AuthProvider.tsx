@@ -23,6 +23,7 @@ import { setSessionLostHandler } from "@/api/client";
 import { getTokens, onTokensChanged, setTokens } from "@/api/tokens";
 import { ApiError, isApiError } from "@/api/problem";
 import type { Me } from "@/api/schemas";
+import { useSignInScreen } from "@/auth/signInScreen";
 
 export type LoginOutcome =
   | { kind: "ok" }
@@ -143,13 +144,21 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
 
   const login = useCallback<AuthContextValue["login"]>(
     async (email, password, clientId) => {
+      // The sign-in screen follows these steps; it never runs ahead of them.
+      const screen = useSignInScreen.getState();
+      screen.begin();
       try {
         const tokens = await authApi.login(email, password, clientId);
+        screen.profile();
         resetEverything();
         setTokens(tokens);
         await loadMe();
+        // `loadMe` clears the tokens when the account cannot be read.
+        if (getTokens()) screen.succeed();
+        else screen.fail();
         return { kind: "ok" };
       } catch (error) {
+        screen.fail();
         if (!isApiError(error)) {
           return { kind: "error", detail: "Could not reach the server." };
         }
