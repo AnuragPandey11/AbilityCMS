@@ -32,6 +32,7 @@ export function CheckboxMenu<T extends string>({
   options,
   selected,
   onChange,
+  bulk = false,
 }: {
   label: string;
   /** Names the group for a screen reader when `label` does not say enough. */
@@ -39,6 +40,12 @@ export function CheckboxMenu<T extends string>({
   options: CheckboxOption<T>[];
   selected: ReadonlySet<T>;
   onChange: (next: Set<T>) => void;
+  /**
+   * "All" and "None" above the list, for a long list where ticking each box
+   * is the slow way to ask for everything. "All" ticks only what can be
+   * chosen here: a disabled option stays off, with its reason.
+   */
+  bulk?: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   /**
@@ -109,6 +116,26 @@ export function CheckboxMenu<T extends string>({
           aria-label={ariaLabel ?? label}
           className={`surface-card absolute ${hangLeft ? "left-0" : "right-0"} z-30 mt-1.5 max-h-[min(70vh,30rem)] w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-card border border-line p-1.5 shadow-card`}
         >
+          {bulk && options.length > 4 ? (
+            <div className="flex items-center gap-1 px-2.5 pb-1.5 pt-1 text-[11px]">
+              <button
+                type="button"
+                className="rounded-control px-1.5 py-0.5 font-medium text-accent hover:bg-surface-sunken"
+                onClick={() =>
+                  onChange(new Set(options.filter((option) => !option.disabledReason).map((option) => option.value)))
+                }
+              >
+                All
+              </button>
+              <button
+                type="button"
+                className="rounded-control px-1.5 py-0.5 font-medium text-accent hover:bg-surface-sunken"
+                onClick={() => onChange(new Set())}
+              >
+                None
+              </button>
+            </div>
+          ) : null}
           {options.map((option) => {
             const disabled = Boolean(option.disabledReason);
             return (

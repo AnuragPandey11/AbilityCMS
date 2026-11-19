@@ -126,7 +126,8 @@ export function useSlotSeries(
   plantId: number | null,
   slotCode: string,
   range: WindowRange | null,
-  options: { live: boolean },
+  /** `enabled: false` resolves the slot (so its reason is known) without fetching its history. */
+  options: { live: boolean; enabled?: boolean },
 ): SlotSeries {
   const slotSource = useSlotSource(plantId, slotCode);
   const refusal = curveRefusal(slotSource.source);
@@ -139,7 +140,10 @@ export function useSlotSeries(
   const series = useSeries(
     { devices, tag: slotSource.tag, aggregate: slotSource.source?.aggregate ?? "first" },
     range,
-    { live: options.live, enabled: slotSource.source !== null && refusal === null },
+    {
+      live: options.live,
+      enabled: slotSource.source !== null && refusal === null && (options.enabled ?? true),
+    },
   );
 
   return {
