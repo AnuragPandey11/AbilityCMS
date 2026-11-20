@@ -19,6 +19,7 @@ import * as readingsApi from "@/api/endpoints/readings";
 import type { DeviceListItem, ReadingPoint, Tag, Tier } from "@/api/schemas";
 import { seriesFromReadings, type TrendPoint } from "@/api/useSlotTrend";
 import { tierWithin, windowRange, type TrendWindow, type WindowRange } from "@/api/trendWindow";
+import { stateSeries, type StateSeries } from "@/dashboards/equipment/stateSeries";
 
 /** The windows a screen about one Device offers, in the client's reference order. */
 export const TREND_WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
@@ -35,6 +36,7 @@ export interface TrendSeries {
 
 const NO_SERIES: TrendSeries = { points: [], flaggedCount: 0 };
 const NO_ITEMS: ReadingPoint[] = [];
+const NO_STATE: StateSeries = { points: [], changes: [], mixed: [], flaggedCount: 0, latest: null };
 
 export interface DeviceTrends {
   /** Null until the Plant's zone is known. */
@@ -48,6 +50,20 @@ export interface DeviceTrends {
   seriesOf: (tag: Tag | undefined) => TrendSeries;
   /** The buckets as the server sent them — min, max and last too — for a contact's steps. */
   itemsOf: (tag: Tag | undefined) => ReadingPoint[];
+  /**
+   * A contact's steps (`stateSeries`), worked out once per fetch rather than
+   * per render so a chart holding them does not repaint on every render.
+   * Empty for a Tag that is not a contact.
+   */
+  stateOf: (tag: Tag | undefined) => StateSeries;
+  /**
+   * True for a requested Tag whose history has not arrived yet. Ticking a
+   * reading changes the query, and `placeholderData` keeps the previous
+   * answer on screen meanwhile — which has nothing for the newly ticked Tag,
+   * and a chart that reads that as "no readings" says "nothing arrived" about
+   * a fetch still in flight. Always false once the answer is the right one.
+   */
+  pendingOf: (tag: Tag | undefined) => boolean;
 }
 
 export function useDeviceTrends(
@@ -108,6 +124,17 @@ export function useDeviceTrends(
     return out;
   }, [itemsByTag, query.data?.tier, tagsById, device?.expected_interval_s]);
 
+  const stateByTag = useMemo(() => {
+    const out = new Map<number, StateSeries>();
+    const servedTier = query.data?.tier ?? null;
+    // A contact is never throttled, so it is due every Device cycle.
+    const cycleMs = (device?.expected_interval_s ?? 0) * 1000;
+    for (const [tagId, items] of itemsByTag) {
+      if (tagsById.get(tagId)?.unit === "bool") out.set(tagId, stateSeries(items, servedTier, cycleMs));
+    }
+    return out;
+  }, [itemsByTag, query.data?.tier, tagsById, device?.expected_interval_s]);
+
   return {
     range,
     tier: query.data?.tier ?? null,
@@ -117,5 +144,7 @@ export function useDeviceTrends(
     refetch: () => void query.refetch(),
     seriesOf: (tag) => (tag ? seriesByTag.get(tag.id) : undefined) ?? NO_SERIES,
     itemsOf: (tag) => (tag ? itemsByTag.get(tag.id) : undefined) ?? NO_ITEMS,
+    stateOf: (tag) => (tag ? stateByTag.get(tag.id) : undefined) ?? NO_STATE,
+    pendingOf: (tag) => enabled && query.isPlaceholderData && tag !== undefined && !itemsByTag.has(tag.id),
   };
 }

@@ -38,26 +38,23 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
 import type {
   CommStatus,
   DeviceDetail,
   DeviceListItem,
   DeviceOperatingStatus,
-  ReadingPoint,
   Tag,
-  Tier,
 } from "@/api/schemas";
 import { useBindings, useDevice, useDeviceOperatingStatus, useTags } from "@/api/hooks";
-import { qk } from "@/api/queryKeys";
-import * as readingsApi from "@/api/endpoints/readings";
-import { withGaps, type TrendPoint } from "@/api/useSlotTrend";
 import { DEVICE_LOOKBACK_MINUTES, useDeviceLatest } from "@/api/useLatestValues";
-import { windowRange, type TrendWindow } from "@/api/trendWindow";
+import type { TrendWindow } from "@/api/trendWindow";
 import { Panel, SegmentedControl } from "@/components/ui";
-import { TrendChart } from "@/components/charts/TrendChart";
+import { LanedTrendChart } from "@/components/charts/LanedTrendChart";
+import { useTrendSelection } from "@/components/charts/useTrendSelection";
+import { useDeviceTrends } from "./useDeviceTrends";
+import { deviceTrendOption, isReported } from "./trendOption";
 import { FittedFigure } from "@/components/charts/FittedFigure";
-import { Skeleton } from "@/components/state";
+import { ErrorState, Skeleton } from "@/components/state";
 import { usePermission } from "@/auth/usePermission";
 import { UNDEFINED_DISPLAY, digitsForUnit, formatDigital, formatHeadline, isDigital } from "@/format/value";
 import { STATUS_KIND_TONE, STATUS_KIND_WORD, type StatusMeaning } from "@/format/statusCode";
@@ -561,14 +558,6 @@ const WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
   { value: "30d", label: "Last 30 days", hint: "Hourly." },
 ];
 
-/** Six Tags on one Device: a day per minute is ~8,600 points, inside the 20,000 cap. */
-const WINDOW_TIER: Record<TrendWindow, Tier> = {
-  today: "agg_1m",
-  yesterday: "agg_1m",
-  "7d": "agg_15m",
-  "30d": "agg_1h",
-};
-
 // ── The view ─────────────────────────────────────────────────────────────────
 
 export function InverterView({
@@ -675,53 +664,63 @@ export function InverterView({
     })
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  // ── Trends
+  // ── Trends: one chart with a menu, the six the client's reference draws
+  // first, then the rest of the AC side and the DC power where this Inverter
+  // reports them. Only what is ticked is fetched, so Today stays at one-minute
+  // buckets for up to twelve readings; past that the tier badge says it coarsened.
   const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
-  const now = Math.floor(Date.now() / 60_000) * 60_000;
-  const range = windowRange(trendWindow, now, timeZone);
-  const trendFills = TRENDS.map(fill);
-  const trendTagIds = trendFills
-    .map((filled) => filled.tag?.id)
-    .filter((id): id is number => id !== undefined);
-  const trendQueryArgs: readingsApi.ReadingsQuery = {
-    deviceIds: [device.id],
-    tagIds: [...new Set(trendTagIds)].sort((a, b) => a - b),
-    from: range.from,
-    to: range.to,
-    resolution: WINDOW_TIER[trendWindow],
-  };
-  const trendQuery = useQuery({
-    queryKey: qk.readings(trendQueryArgs),
-    queryFn: () => readingsApi.getReadings(trendQueryArgs),
-    enabled: trendTagIds.length > 0,
-    retry: false,
-    staleTime: 60_000,
-    refetchInterval: trendWindow === "today" ? 60_000 : false,
-    placeholderData: (previous) => previous,
-  });
-  const series = useMemo(() => {
-    const byTag = new Map<number, { points: TrendPoint[]; flagged: number }>();
-    for (const point of (trendQuery.data?.items ?? []) as ReadingPoint[]) {
-      const entry = byTag.get(point.tag_id) ?? { points: [], flagged: 0 };
-      byTag.set(point.tag_id, entry);
-      if (point.quality !== null && point.quality !== 0) {
-        entry.flagged += 1;
-        continue;
+  const trendCandidates = (() => {
+    const out: { key: string; label: string; filled: Filled; slot?: number; tone?: "accent" | "neutral"; markPeak: boolean }[] = [];
+    const taken = new Set<number>();
+    const add = (
+      position: Position,
+      extra: { slot?: number; tone?: "accent" | "neutral"; markPeak?: boolean } = {},
+    ) => {
+      const filled = fill(position);
+      // A Tag already on the menu under another position is not listed twice.
+      if (filled.tag) {
+        if (taken.has(filled.tag.id)) return;
+        taken.add(filled.tag.id);
       }
-      if (point.value === null) continue;
-      entry.points.push({ at: point.bucket, value: point.value, contributors: 1 });
+      out.push({ key: `t:${position.label}`, label: position.label, filled, markPeak: false, ...extra });
+    };
+    TRENDS.forEach((trend, index) => add(trend, { slot: trend.slot, tone: trend.tone, markPeak: index === 0 }));
+    // The rest of the AC side and the DC power, only where this Inverter reports them.
+    for (const position of [...AC_SIDE, DC_POWER]) {
+      if (isReported(fill(position), position.codes, bound)) add(position);
     }
-    const tier = trendQuery.data?.tier ?? null;
-    for (const [tagId, entry] of byTag) {
-      // How often this Tag on this Device is stored when all is well: its own
-      // throttle or the Device's cycle, whichever is longer, plus one more
-      // cycle — the health sweep's own tolerance before it calls a Device late.
-      const throttle = tagsById.get(tagId)?.min_interval_s ?? 0;
-      const cycle = device.expected_interval_s;
-      entry.points = withGaps(entry.points, tier, (Math.max(throttle, cycle) + cycle) * 1000);
-    }
-    return byTag;
-  }, [trendQuery.data, tagsById, device.expected_interval_s]);
+    return out;
+  })();
+  const trendSelection = useTrendSelection(
+    trendCandidates.map((entry) => ({
+      key: entry.key,
+      unavailableReason: entry.filled.tag ? null : (entry.filled.reason ?? "This Inverter does not report it."),
+    })),
+    TRENDS.map((trend) => `t:${trend.label}`),
+  );
+  const trends = useDeviceTrends(
+    device,
+    trendCandidates.filter((entry) => trendSelection.selected.has(entry.key)).map((entry) => entry.filled.tag),
+    trendWindow,
+    timeZone,
+    tagsById,
+  );
+  const trendOptions = trendCandidates.map((entry) =>
+    deviceTrendOption({
+      key: entry.key,
+      label: entry.label,
+      tag: entry.filled.tag,
+      reason: entry.filled.reason,
+      trends,
+      slot: entry.slot,
+      // As the client's reference draws them: a slot of its own, else the
+      // accent, which differs from slot 1's blue (the efficiency trend).
+      colorToken: entry.slot === undefined ? (entry.tone ?? "accent") : undefined,
+      // A peak means something for output; for a temperature or a power
+      // factor it is just the largest number.
+      markPeak: entry.markPeak,
+    }),
+  );
 
   return (
     <div className="space-y-4">
@@ -827,39 +826,20 @@ export function InverterView({
         }
         padding="p-4"
       >
-        <div className="grid gap-x-6 gap-y-5 lg:grid-cols-2">
-          {trendFills.map((filled, index) => {
-            const entry = filled.tag ? series.get(filled.tag.id) : undefined;
-            return (
-              <section key={filled.label} className="min-w-0">
-                <h3 className="field-label mb-1">
-                  {filled.label}
-                  {filled.tag?.unit && !NOT_A_UNIT.has(filled.tag.unit) ? ` (${filled.tag.unit})` : ""}
-                </h3>
-                {!filled.tag ? (
-                  <p className="py-8 text-center text-xs text-ink-faint">{filled.reason}</p>
-                ) : (
-                  <TrendChart
-                    points={entry?.points ?? []}
-                    unit={filled.tag.unit && !NOT_A_UNIT.has(filled.tag.unit) ? filled.tag.unit : null}
-                    label={filled.label}
-                    tier={trendQuery.data?.tier ?? null}
-                    flaggedCount={entry?.flagged ?? 0}
-                    isLoading={trendQuery.isLoading}
-                    timezone={timeZone}
-                    height={170}
-                    day={range.day}
-                    paletteSlot={TRENDS[index]?.slot}
-                    colorToken={TRENDS[index]?.tone ?? "accent"}
-                    // A peak means something for output; for a temperature or a
-                    // power factor it is just the largest number.
-                    markPeak={index === 0}
-                  />
-                )}
-              </section>
-            );
-          })}
-        </div>
+        {trends.isError ? (
+          <ErrorState error={trends.error} retry={trends.refetch} />
+        ) : (
+          <LanedTrendChart
+            options={trendOptions}
+            selected={trendSelection.selected}
+            onSelectedChange={trendSelection.setSelected}
+            from={trends.range ? Date.parse(trends.range.from) : 0}
+            to={trends.range ? Date.parse(trends.range.to) : 0}
+            day={trends.range?.day ?? null}
+            timezone={timeZone}
+            isLoading={trends.isLoading || trends.range === null}
+          />
+        )}
       </Panel>
 
       {/* Rendered only when there are any: a section that says "nothing else"

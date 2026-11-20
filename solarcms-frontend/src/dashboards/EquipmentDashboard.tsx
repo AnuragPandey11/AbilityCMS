@@ -30,13 +30,14 @@ import { useDashboard } from "@/auth/useDashboard";
 import { InfoHint, Panel, SegmentedControl, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
 import { CommStatusPill, PlantPicker, SeverityBadge } from "@/components/domain";
-import { TrendChart } from "@/components/charts/TrendChart";
 import { OverlayTrendChart } from "@/components/charts/OverlayTrendChart";
-import { StateTrendChart } from "@/components/charts/StateTrendChart";
+import { LanedTrendChart } from "@/components/charts/LanedTrendChart";
+import { useTrendSelection } from "@/components/charts/useTrendSelection";
 import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
 import { ReadingTile } from "@/components/devices/ReadingTile";
 import { useDeviceReadings, type DeviceReadings } from "@/components/devices/useDeviceReadings";
 import { TREND_WINDOWS, useDeviceTrends } from "@/components/devices/useDeviceTrends";
+import { deviceTrendOption } from "@/components/devices/trendOption";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
 import { flagState, openAlarmsByTag, type FlagState, type FlagTone } from "./equipment/flags";
@@ -53,7 +54,6 @@ import { useSlotSeries } from "@/api/useSeries";
 import { TIERS, type Tier } from "@/api/schemas";
 import type { WindowRange } from "@/api/trendWindow";
 import type { TrendSeries } from "@/components/devices/useDeviceTrends";
-import { stateSeries } from "./equipment/stateSeries";
 
 /** INVERTER_2 before INVERTER_10 — codes carry numbers, and people count. */
 const byTypeThenCode = (types: string[]) => (a: DeviceListItem, b: DeviceListItem) =>
@@ -281,7 +281,7 @@ function DeviceSection({
             </span>
           </p>
           {spec.flagTrends ? (
-            <FlagTrends spec={spec} device={device} readings={readings} timezone={timezone} embedded />
+            <DeviceTrendGraph spec={spec} device={device} readings={readings} timezone={timezone} embedded />
           ) : null}
         </div>
       </Panel>
@@ -301,115 +301,6 @@ function DeviceSection({
       </Panel>
       {otherDetails}
     </>
-  );
-}
-
-// ── Trends ───────────────────────────────────────────────────────────────────
-
-function Trends({
-  spec,
-  device,
-  readings,
-  timezone,
-}: {
-  spec: EquipmentSpec;
-  device: DeviceListItem;
-  readings: DeviceReadings;
-  timezone: string | undefined;
-}): JSX.Element {
-  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
-  const panels = spec.trends.map((trend: TrendSpec) => ({
-    trend,
-    lines: trend.lines
-      .map((figure) => ({ figure, filled: readings.fill(figure) }))
-      .filter(({ figure, filled }) => figureShown(figure, filled, readings.bound)),
-  }));
-  const trends = useDeviceTrends(
-    device,
-    panels.flatMap(({ lines }) => lines.map(({ filled }) => filled.tag)),
-    trendWindow,
-    timezone,
-    readings.tagsById,
-  );
-  const chartHeight = 240;
-  const day = trends.range?.day ?? null;
-
-  return (
-    <Panel
-      title={<span className="text-base">Trends</span>}
-      subtitle={
-        <span className="text-sm">
-          A break in a line is a stretch in which nothing was received from {spec.subject} — not a
-          reading of zero, and never drawn as one.
-        </span>
-      }
-      actions={
-        <SegmentedControl
-          label={`${spec.noun} trend window`}
-          value={trendWindow}
-          onChange={setTrendWindow}
-          options={TREND_WINDOWS}
-        />
-      }
-      padding="p-4"
-    >
-      {trends.isError ? (
-        <ErrorState error={trends.error} retry={trends.refetch} />
-      ) : (
-        <div className="grid gap-x-6 gap-y-6 lg:grid-cols-2">
-          {panels.map(({ trend, lines }) => {
-            const withTag = lines.filter(({ filled }) => filled.tag);
-            const units = new Set(withTag.map(({ filled }) => filled.tag?.unit));
-            const unit = unitOf(withTag[0]?.filled.tag);
-            return (
-              <section key={trend.key} className="min-w-0">
-                <h3 className="field-label mb-1">
-                  {trend.title}
-                  {unit ? ` (${unit})` : ""}
-                </h3>
-                {withTag.length === 0 ? (
-                  // Guardrail 26: the reason, never an empty frame.
-                  <p className="py-8 text-center text-xs text-ink-faint">{lines[0]?.filled.reason}</p>
-                ) : units.size > 1 ? (
-                  // One axis only for one unit (Guardrail 22).
-                  <p className="py-8 text-center text-xs text-ink-faint">
-                    These readings are recorded in different units, so they are not drawn on one axis.
-                  </p>
-                ) : withTag.length === 1 && withTag[0] ? (
-                  <TrendChart
-                    points={trends.seriesOf(withTag[0].filled.tag).points}
-                    unit={unit}
-                    label={withTag[0].filled.label}
-                    tier={trends.tier}
-                    provenance={device.code}
-                    flaggedCount={trends.seriesOf(withTag[0].filled.tag).flaggedCount}
-                    isLoading={trends.isLoading}
-                    timezone={timezone}
-                    height={chartHeight}
-                    day={day}
-                    markPeak={trend.markPeak}
-                  />
-                ) : (
-                  <OverlayTrendChart
-                    series={withTag.map(({ figure, filled }) => ({
-                      key: figure.codes[0] ?? figure.label,
-                      label: filled.label,
-                      ...trends.seriesOf(filled.tag),
-                    }))}
-                    unit={unit}
-                    tier={trends.tier}
-                    isLoading={trends.isLoading}
-                    timezone={timezone}
-                    height={chartHeight}
-                    day={day}
-                  />
-                )}
-              </section>
-            );
-          })}
-        </div>
-      )}
-    </Panel>
   );
 }
 
@@ -579,16 +470,28 @@ function SetpointTrends({
   );
 }
 
-// ── Contacts over time ───────────────────────────────────────────────────────
+// ── Everything over time, in one graph ───────────────────────────────────────
+
+/** A screen of contacts only opens on this many; "All" in the menu draws the rest. */
+const OPENING_CONTACTS = 5;
 
 /**
- * Every contact of the spec as a step trend, TRUE/FALSE over the window — the
- * client's reference (1 Nov 2026). One request for all of them
- * (`useDeviceTrends`), one window, and every chart on the same x-axis so a
- * trip on one lines up with a change on the next. `embedded` inside a
- * breaker's own panel, where several breakers share the page.
+ * Every measurement and every contact of the spec on one full-width chart,
+ * ticked from a menu (`LanedTrendChart`) — the Power trend's form, which
+ * replaced a grid of separate trends and a grid of separate step charts.
+ *
+ * Readings in one unit share a plot (oil and winding temperature), each other
+ * unit gets its own, and each contact is a thin TRUE/FALSE step plot, all on
+ * one time axis (Guardrail 22). It opens on what the screen's measurements
+ * are — the Transformer's temperatures — or, for a screen of contacts only,
+ * on the first few. Only the ticked Tags are fetched (`useDeviceTrends`), so
+ * Today stays at one-minute buckets for up to twelve of them; past that
+ * `tierWithin` coarsens it and the tier badge says so.
+ *
+ * `embedded` inside a breaker's own panel, where several breakers share the
+ * page: each has its own graph, window and menu.
  */
-function FlagTrends({
+function DeviceTrendGraph({
   spec,
   device,
   readings,
@@ -602,87 +505,89 @@ function FlagTrends({
   embedded: boolean;
 }): JSX.Element {
   const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
-  const flags = spec.flags.map((position: Position) => readings.fill(position));
+
+  // A variant's optional signal the Device neither reports nor is bound to is
+  // left off the menu altogether: on a 2-winding Transformer its absence is
+  // not a gap to explain.
+  const measured = spec.trends.flatMap((trend: TrendSpec) =>
+    trend.lines
+      .map((figure) => ({ figure, filled: readings.fill(figure), markPeak: trend.markPeak }))
+      .filter(({ figure, filled }) => figureShown(figure, filled, readings.bound)),
+  );
+  const candidates = [
+    ...measured.map(({ figure, filled, markPeak }) => ({
+      key: `line:${figure.codes[0] ?? figure.label}`,
+      label: figure.label,
+      filled,
+      markPeak,
+    })),
+    ...(spec.flagTrends
+      ? spec.flags.map((position: Position) => ({
+          key: `flag:${position.codes[0] ?? position.label}`,
+          label: position.label,
+          filled: readings.fill(position),
+          markPeak: false,
+        }))
+      : []),
+  ];
+  const opening =
+    measured.length > 0
+      ? candidates.filter((entry) => entry.key.startsWith("line:")).map((entry) => entry.key)
+      : candidates.slice(0, OPENING_CONTACTS).map((entry) => entry.key);
+  const selection = useTrendSelection(
+    candidates.map((entry) => ({
+      key: entry.key,
+      // Guardrail 26: the reason, never an empty frame.
+      unavailableReason: entry.filled.tag ? null : (entry.filled.reason ?? `${spec.subject} does not report this.`),
+    })),
+    opening,
+  );
   const trends = useDeviceTrends(
     device,
-    flags.map((filled) => filled.tag),
+    candidates.filter((entry) => selection.selected.has(entry.key)).map((entry) => entry.filled.tag),
     trendWindow,
     timezone,
     readings.tagsById,
   );
   const range = trends.range;
-  const from = range ? Date.parse(range.from) : 0;
-  const to = range ? Date.parse(range.to) : 0;
-  // A contact is never throttled, so it is due every Device cycle.
-  const cycleMs = (device.expected_interval_s ?? 0) * 1000;
+  const options = candidates.map((entry) =>
+    deviceTrendOption({
+      key: entry.key,
+      label: entry.label,
+      tag: entry.filled.tag,
+      reason: entry.filled.reason,
+      trends,
+      markPeak: entry.markPeak,
+      provenance: measured.length > 0 ? device.code : null,
+    }),
+  );
 
   const control = (
     <SegmentedControl
-      label={`${spec.noun} signal trend window`}
+      label={`${spec.noun} trend window`}
       value={trendWindow}
       onChange={setTrendWindow}
       options={TREND_WINDOWS}
     />
   );
   const subtitle =
-    "Each signal as the equipment sent it, held until it changed. A dot marks a change; a ring marks a " +
-    "stretch that saw both states. A break is a stretch with nothing received — never drawn as FALSE.";
+    `Tick the readings to draw. A break in a line is a stretch in which nothing was received from ${spec.subject} ` +
+    "— not a reading of zero, and never drawn as one. A contact is shown as the equipment sent it, held until " +
+    "it changed: a dot marks a change, a ring a stretch that saw both states.";
 
   const body = trends.isError ? (
     <ErrorState error={trends.error} retry={trends.refetch} />
   ) : (
-    <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-      {flags.map((filled) => {
-        const series = stateSeries(trends.itemsOf(filled.tag), trends.tier, cycleMs);
-        const empty = series.points.every((point) => point.state === null);
-        return (
-          <section key={filled.label} className="min-w-0">
-            <div className="flex items-baseline justify-between gap-2">
-              <h3
-                className="field-label truncate"
-                title={filled.tag ? `${filled.tag.name} · ${filled.tag.code}` : undefined}
-              >
-                {filled.label}
-              </h3>
-              {series.changes.length > 0 ? (
-                <span className="shrink-0 text-[11px] text-ink-faint">
-                  {series.changes.length} change{series.changes.length === 1 ? "" : "s"}
-                </span>
-              ) : null}
-            </div>
-            {!filled.tag ? (
-              // Guardrail 26: the reason, never an empty frame.
-              <p className="py-6 text-center text-xs text-ink-faint">{filled.reason}</p>
-            ) : trends.isLoading ? (
-              <div className="h-[132px] animate-pulse rounded bg-surface-sunken" />
-            ) : empty ? (
-              <p className="flex h-[132px] items-center justify-center text-center text-xs text-ink-faint">
-                {series.flaggedCount > 0
-                  ? `${series.flaggedCount} reading(s) arrived but were flagged unreadable, so none is drawn.`
-                  : `Nothing received from ${spec.subject} for this signal in this window.`}
-              </p>
-            ) : (
-              <>
-                <StateTrendChart
-                  series={series}
-                  label={filled.label}
-                  tier={trends.tier}
-                  from={from}
-                  to={to}
-                  day={range?.day ?? null}
-                  timezone={timezone}
-                />
-                {series.flaggedCount > 0 ? (
-                  <p className="text-[11px] text-ink-faint">
-                    {series.flaggedCount} flagged reading(s) not drawn.
-                  </p>
-                ) : null}
-              </>
-            )}
-          </section>
-        );
-      })}
-    </div>
+    <LanedTrendChart
+      options={options}
+      selected={selection.selected}
+      onSelectedChange={selection.setSelected}
+      from={range ? Date.parse(range.from) : 0}
+      to={range ? Date.parse(range.to) : 0}
+      day={range?.day ?? null}
+      timezone={timezone}
+      isLoading={trends.isLoading || range === null}
+    />
   );
 
   if (embedded) {
@@ -701,7 +606,7 @@ function FlagTrends({
   }
   return (
     <Panel
-      title={<span className="text-base">Status flag trends</span>}
+      title={<span className="text-base">Trends</span>}
       subtitle={<span className="text-sm">{subtitle}</span>}
       actions={control}
       padding="p-4"
@@ -730,14 +635,11 @@ function OneDevice({
   return (
     <>
       <DeviceSection spec={spec} device={device} readings={readings} timezone={timezone} headed={false} />
-      {spec.trends.length > 0 ? (
-        <Trends spec={spec} device={device} readings={readings} timezone={timezone} />
-      ) : null}
       {spec.versus && spec.versus.length > 0 ? (
         <SetpointTrends spec={spec} device={device} readings={readings} timezone={timezone} plantId={plantId} />
       ) : null}
-      {spec.flagTrends ? (
-        <FlagTrends spec={spec} device={device} readings={readings} timezone={timezone} embedded={false} />
+      {spec.trends.length > 0 || spec.flagTrends ? (
+        <DeviceTrendGraph spec={spec} device={device} readings={readings} timezone={timezone} embedded={false} />
       ) : null}
     </>
   );

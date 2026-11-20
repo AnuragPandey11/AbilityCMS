@@ -3,8 +3,11 @@
  * moved. The client's reference screen (28 Sep 2026).
  *
  * Top to bottom: nine instantaneous figures, four accumulated or averaged
- * ones, then four trends over a chosen window — GHI, GTI, ambient against
- * module temperature, wind speed.
+ * ones, then one full-width trend over a chosen window, with a menu of every
+ * reading the station sends — GHI, GTI, ambient and module temperature, wind
+ * speed drawn to begin with (what four separate charts drew before). Readings
+ * beyond those five are listed only where the station reports or is bound to
+ * them.
  *
  * ── Where the figures come from ─────────────────────────────────────────────
  * The same way the Inverter view builds its screen (`InverterView`): every Tag
@@ -21,24 +24,28 @@
  * in W/m² (TAG_CATALOGUE §2.2) — so they are labelled and unitted as that
  * says, not as kWh/m² totals. The catalogue is authoritative on units.
  *
- * Each trend is one unit on one axis (Guardrail 22): the temperature chart
- * carries two lines because both are °C on the same scale. Gaps stay gaps
- * (Guardrail 23) and flagged readings are counted, never drawn.
+ * One chart, plots by unit (Guardrail 22): GHI and GTI share a W/m² plot,
+ * ambient and module temperature a °C plot, wind speed its own, all on one
+ * time axis with one zoom and one crosshair (`LanedTrendChart`). Gaps stay
+ * gaps (Guardrail 23) and flagged readings are counted, never drawn. Only the
+ * ticked readings are fetched, so Today stays at one-minute buckets for up to
+ * twelve of them; past that the tier badge says it has coarsened.
  */
 
 import { useMemo, useState } from "react";
 import { usePlant, usePlantDevices } from "@/api/hooks";
-import type { DeviceListItem, Tag } from "@/api/schemas";
+import type { DeviceListItem } from "@/api/schemas";
 import type { TrendWindow } from "@/api/trendWindow";
 import { Panel, SegmentedControl, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
-import { TrendChart } from "@/components/charts/TrendChart";
-import { OverlayTrendChart } from "@/components/charts/OverlayTrendChart";
-import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
+import { LanedTrendChart } from "@/components/charts/LanedTrendChart";
+import { useTrendSelection } from "@/components/charts/useTrendSelection";
+import { FigureTile, type Filled, type Position } from "@/components/devices/InverterView";
 import { ReadingTile } from "@/components/devices/ReadingTile";
 import { useDeviceReadings } from "@/components/devices/useDeviceReadings";
 import { TREND_WINDOWS, useDeviceTrends } from "@/components/devices/useDeviceTrends";
+import { deviceTrendOption, isReported } from "@/components/devices/trendOption";
 import type { IconComponent } from "@/components/layout/navigation";
 import {
   IconBeam,
@@ -95,9 +102,6 @@ const [GHI, GTI, WIND_SPEED, , AMBIENT, MODULE] = NOW as [
 const byCode = (a: DeviceListItem, b: DeviceListItem) =>
   a.code.localeCompare(b.code, undefined, { numeric: true });
 
-const unitOf = (tag: Tag | undefined): string | null =>
-  tag?.unit && !NOT_A_UNIT.has(tag.unit) ? tag.unit : null;
-
 export function MeteorologicalDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   const plantQuery = usePlant(plantId);
@@ -111,7 +115,7 @@ export function MeteorologicalDashboard(): JSX.Element {
   const [chosenId, setChosenId] = useState<number | null>(null);
   const station = stations.find((device) => device.id === chosenId) ?? stations[0] ?? null;
 
-  const { values, fill, heard, tagsById } = useDeviceReadings(station, "this station");
+  const { values, fill, heard, tagsById, bound } = useDeviceReadings(station, "this station");
 
   const now = NOW.map(fill);
   const summary = SUMMARY.map(fill);
@@ -131,22 +135,65 @@ export function MeteorologicalDashboard(): JSX.Element {
   const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
   const timezone = plantQuery.data?.timezone;
 
-  const trendFills = {
-    ghi: fill(GHI),
-    gti: fill(GTI),
-    ambient: fill(AMBIENT),
-    module: fill(MODULE),
-    wind: fill(WIND_SPEED),
-  };
+  // Every reading the station sends that a line can be drawn for: the five
+  // the four old charts drew first, then the rest of its schedule, then
+  // anything else it reported. A reading the station does not send is listed
+  // (disabled, with the reason) only for the five; for the rest it would be a
+  // dozen greyed lines nobody asked about.
+  const candidates = (() => {
+    const core: { key: string; label: string; filled: Filled; markPeak: boolean }[] = [
+      { key: "ghi", label: "GHI", filled: fill(GHI), markPeak: true },
+      { key: "gti", label: "GTI", filled: fill(GTI), markPeak: true },
+      { key: "ambient", label: "Ambient temperature", filled: fill(AMBIENT), markPeak: false },
+      { key: "module", label: "Module temperature", filled: fill(MODULE), markPeak: false },
+      // The strongest gust is what a tracker stows for.
+      { key: "wind", label: "Wind speed", filled: fill(WIND_SPEED), markPeak: true },
+    ];
+    const taken = new Set(core.map((entry) => entry.filled.tag?.id).filter((id): id is number => id !== undefined));
+    const more: typeof core = [];
+    for (const position of [...NOW, ...SUMMARY]) {
+      const filled = fill(position);
+      // `fill` hands back the catalogue's Tag even for a signal the station
+      // has nothing to do with; list it only where it reported or is bound.
+      if (!filled.tag || taken.has(filled.tag.id) || !isReported(filled, position.codes, bound)) continue;
+      taken.add(filled.tag.id);
+      more.push({ key: `tag:${filled.tag.id}`, label: position.label, filled, markPeak: false });
+    }
+    for (const filled of others) {
+      if (!filled.tag || taken.has(filled.tag.id)) continue;
+      taken.add(filled.tag.id);
+      more.push({ key: `tag:${filled.tag.id}`, label: filled.label, filled, markPeak: false });
+    }
+    return [...core, ...more];
+  })();
+
+  const selection = useTrendSelection(
+    candidates.map((entry) => ({
+      key: entry.key,
+      unavailableReason: entry.filled.tag ? null : (entry.filled.reason ?? "The station does not report this."),
+    })),
+    ["ghi", "gti", "ambient", "module", "wind"],
+  );
+  // Only what is ticked is asked for: `tierWithin` spends one point budget on
+  // every Tag, and a whole station's worth would push Today off one-minute.
   const trends = useDeviceTrends(
     station,
-    Object.values(trendFills).map((filled) => filled.tag),
+    candidates.filter((entry) => selection.selected.has(entry.key)).map((entry) => entry.filled.tag),
     trendWindow,
     timezone,
     tagsById,
   );
   const range = trends.range;
-  const seriesOf = (filled: Filled) => trends.seriesOf(filled.tag);
+  const trendOptions = candidates.map((entry) =>
+    deviceTrendOption({
+      key: entry.key,
+      label: entry.label,
+      tag: entry.filled.tag,
+      reason: entry.filled.reason,
+      trends,
+      markPeak: entry.markPeak,
+    }),
+  );
 
   // ── Rendering
   if (hasNoPlants) {
@@ -228,10 +275,6 @@ export function MeteorologicalDashboard(): JSX.Element {
     );
   }
 
-  const chartHeight = 220;
-  const trendTier = trends.tier;
-  const trendLoading = trends.isLoading;
-
   return (
     <div className="flex flex-col gap-6">
       {header}
@@ -272,102 +315,18 @@ export function MeteorologicalDashboard(): JSX.Element {
         {trends.isError ? (
           <ErrorState error={trends.error} retry={trends.refetch} />
         ) : (
-          <div className="grid gap-x-6 gap-y-6 lg:grid-cols-2">
-            {[
-              { key: "ghi", title: "GHI trend", filled: trendFills.ghi, peak: true },
-              { key: "gti", title: "GTI trend", filled: trendFills.gti, peak: true },
-            ].map(({ key, title, filled, peak }) => (
-              <section key={key} className="min-w-0">
-                <h3 className="field-label mb-1">
-                  {title}
-                  {unitOf(filled.tag) ? ` (${unitOf(filled.tag)})` : ""}
-                </h3>
-                {!filled.tag ? (
-                  <p className="py-8 text-center text-xs text-ink-faint">{filled.reason}</p>
-                ) : (
-                  <TrendChart
-                    points={seriesOf(filled).points}
-                    unit={unitOf(filled.tag)}
-                    label={filled.label}
-                    tier={trendTier}
-                    flaggedCount={seriesOf(filled).flaggedCount}
-                    isLoading={trendLoading}
-                    timezone={timezone}
-                    height={chartHeight}
-                    day={range?.day ?? null}
-                    markPeak={peak}
-                  />
-                )}
-              </section>
-            ))}
-
-            <section className="min-w-0">
-              <h3 className="field-label mb-1">
-                Temperature trend
-                {unitOf(trendFills.ambient.tag ?? trendFills.module.tag)
-                  ? ` (${unitOf(trendFills.ambient.tag ?? trendFills.module.tag)})`
-                  : ""}
-              </h3>
-              {/* One axis for both, so only when both are in the same unit: a
-                  catalogue that ever gave them different units gets two charts'
-                  worth of honesty rather than one misleading scale. */}
-              {trendFills.ambient.tag &&
-              trendFills.module.tag &&
-              trendFills.ambient.tag.unit !== trendFills.module.tag.unit ? (
-                <p className="py-8 text-center text-xs text-ink-faint">
-                  Ambient ({trendFills.ambient.tag.unit}) and module ({trendFills.module.tag.unit})
-                  temperature are recorded in different units, so they are not drawn on one axis.
-                </p>
-              ) : (
-                <OverlayTrendChart
-                  series={[
-                    {
-                      key: "ambient",
-                      label: "Ambient",
-                      ...seriesOf(trendFills.ambient),
-                      unavailableReason: trendFills.ambient.tag ? null : trendFills.ambient.reason,
-                    },
-                    {
-                      key: "module",
-                      label: "Module",
-                      ...seriesOf(trendFills.module),
-                      unavailableReason: trendFills.module.tag ? null : trendFills.module.reason,
-                    },
-                  ]}
-                  unit={unitOf(trendFills.ambient.tag ?? trendFills.module.tag)}
-                  tier={trendTier}
-                  isLoading={trendLoading}
-                  timezone={timezone}
-                  height={chartHeight}
-                  day={range?.day ?? null}
-                />
-              )}
-            </section>
-
-            <section className="min-w-0">
-              <h3 className="field-label mb-1">
-                Wind speed trend
-                {unitOf(trendFills.wind.tag) ? ` (${unitOf(trendFills.wind.tag)})` : ""}
-              </h3>
-              {!trendFills.wind.tag ? (
-                <p className="py-8 text-center text-xs text-ink-faint">{trendFills.wind.reason}</p>
-              ) : (
-                <TrendChart
-                  points={seriesOf(trendFills.wind).points}
-                  unit={unitOf(trendFills.wind.tag)}
-                  label={trendFills.wind.label}
-                  tier={trendTier}
-                  flaggedCount={seriesOf(trendFills.wind).flaggedCount}
-                  isLoading={trendLoading}
-                  timezone={timezone}
-                  height={chartHeight}
-                  day={range?.day ?? null}
-                  // The strongest gust is what a tracker stows for.
-                  markPeak
-                />
-              )}
-            </section>
-          </div>
+          <LanedTrendChart
+            // A station switch starts its menu and zoom afresh.
+            key={station.id}
+            options={trendOptions}
+            selected={selection.selected}
+            onSelectedChange={selection.setSelected}
+            from={range ? Date.parse(range.from) : 0}
+            to={range ? Date.parse(range.to) : 0}
+            day={range?.day ?? null}
+            timezone={timezone}
+            isLoading={trends.isLoading || range === null}
+          />
         )}
       </Panel>
 

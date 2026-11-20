@@ -30,18 +30,20 @@
  */
 
 import { useMemo, useState } from "react";
-import { usePlant, usePlantDevices, useTags } from "@/api/hooks";
+import { usePlant, usePlantDevices } from "@/api/hooks";
 import type { DeviceListItem } from "@/api/schemas";
 import { measuresGeneration, useSlotSource } from "@/api/useSlotTrend";
-import { useSeries, type Series } from "@/api/useSeries";
-import { windowRange } from "@/api/trendWindow";
-import { Button, Panel, SelectBox } from "@/components/ui";
+import type { TrendWindow } from "@/api/trendWindow";
+import { Button, Panel, SegmentedControl, SelectBox } from "@/components/ui";
 import { EmptyState, ErrorState, SkeletonKpiRow, SkeletonPanel } from "@/components/state";
 import { CommStatusPill, PlantPicker } from "@/components/domain";
-import { TrendChart } from "@/components/charts/TrendChart";
-import { FigureTile, NOT_A_UNIT, type Filled, type Position } from "@/components/devices/InverterView";
+import { LanedTrendChart } from "@/components/charts/LanedTrendChart";
+import { useTrendSelection } from "@/components/charts/useTrendSelection";
+import { FigureTile, type Filled, type Position } from "@/components/devices/InverterView";
 import { ReadingTile } from "@/components/devices/ReadingTile";
 import { useDeviceReadings } from "@/components/devices/useDeviceReadings";
+import { TREND_WINDOWS, useDeviceTrends } from "@/components/devices/useDeviceTrends";
+import { deviceTrendOption, isReported } from "@/components/devices/trendOption";
 import { IconEnergy, IconFrequency, IconGauge, IconPower } from "@/components/icons";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { formatDateTime, timezoneLabel } from "@/format/datetime";
@@ -135,9 +137,6 @@ export function meterName(device: Pick<DeviceListItem, "name" | "code">): string
   return device.name && plain(device.name) !== plain(device.code) ? device.name : null;
 }
 
-const unitOf = (unit: string | null | undefined): string | null =>
-  unit && !NOT_A_UNIT.has(unit) ? unit : null;
-
 function PhasePanel({
   title,
   positions,
@@ -206,58 +205,10 @@ function MeterCard({
   );
 }
 
-/** A trend, or the reason there is none — never an empty frame (Guardrail 26). */
-function MeterTrend({
-  series,
-  unit,
-  label,
-  reason,
-  provenance,
-  timezone,
-  day,
-  markPeak,
-}: {
-  series: Series;
-  unit: string | null;
-  label: string;
-  reason: string | null;
-  provenance: string | null;
-  timezone: string | undefined;
-  day: { start: number; end: number } | null;
-  markPeak: boolean;
-}): JSX.Element {
-  if (reason) {
-    return <p className="flex h-[260px] items-center justify-center px-6 text-center text-xs text-ink-faint">{reason}</p>;
-  }
-  if (series.isError) {
-    return (
-      <p className="flex h-[260px] items-center justify-center px-6 text-center text-xs text-bad">
-        These readings could not be loaded.
-      </p>
-    );
-  }
-  return (
-    <TrendChart
-      points={series.points}
-      unit={unit}
-      label={label}
-      tier={series.tier}
-      provenance={provenance}
-      flaggedCount={series.flaggedCount}
-      isLoading={series.isLoading}
-      timezone={timezone}
-      height={260}
-      day={day}
-      markPeak={markPeak}
-    />
-  );
-}
-
 export function GridMonitoringDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
   const plantQuery = usePlant(plantId);
   const devicesQuery = usePlantDevices(plantId);
-  const tagsQuery = useTags();
   const timezone = plantQuery.data?.timezone;
 
   const meters = useMemo(
@@ -280,22 +231,71 @@ export function GridMonitoringDashboard(): JSX.Element {
 
   const readings = useDeviceReadings(headline, "this meter");
 
-  // ── Trends: the Plant's day, as the reference draws them.
-  const tagsByCode = useMemo(
-    () => new Map((tagsQuery.data ?? []).map((tag) => [tag.code, tag])),
-    [tagsQuery.data],
+  // ── Trends: one chart, every reading the meter on top sends that a line
+  // can be drawn for, ticked from a menu. Active power and frequency are
+  // drawn to begin with — the two the reference's separate charts showed.
+  const [trendWindow, setTrendWindow] = useState<TrendWindow>("today");
+  const candidates = [
+    { key: "active", position: ACTIVE_POWER, label: "Active power", markPeak: true },
+    { key: "frequency", position: FREQUENCY, label: "Frequency", markPeak: false },
+    { key: "reactive", position: REACTIVE_POWER, label: "Reactive power", markPeak: false },
+    ...LINE_VOLTAGE.map((position) => ({
+      key: `v:${position.label}`,
+      position,
+      label: `Voltage ${position.label}`,
+      markPeak: false,
+    })),
+    ...PHASE_CURRENT.map((position) => ({
+      key: `i:${position.label}`,
+      position,
+      label: `Current ${position.label}`,
+      markPeak: false,
+    })),
+    ...PHASE_PF.map((position) => ({
+      key: `pf:${position.label}`,
+      position,
+      label: `PF ${position.label}`,
+      markPeak: false,
+    })),
+    { key: "overall-pf", position: OVERALL_PF, label: "Overall PF", markPeak: false },
+  ]
+    .map((entry) => ({ ...entry, filled: readings.fill(entry.position) }))
+    // Active power and frequency are always listed (a quiet meter's history is
+    // what is wanted in an outage); the rest only where the meter reports or
+    // is bound to them — `fill` returns the catalogue's Tag for any of them.
+    .filter(
+      (entry) =>
+        entry.key === "active" ||
+        entry.key === "frequency" ||
+        isReported(entry.filled, entry.position.codes, readings.bound),
+    );
+  const selection = useTrendSelection(
+    candidates.map((entry) => ({
+      key: entry.key,
+      unavailableReason: entry.filled.tag ? null : (entry.filled.reason ?? "This meter does not report it."),
+    })),
+    ["active", "frequency"],
   );
-  const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
-  const range = timezone ? windowRange("today", nowMs, timezone) : null;
-  const onTop = useMemo(() => (headline ? [headline] : []), [headline]);
-  const activeTag = tagsByCode.get(ACTIVE_POWER.codes[0] ?? "");
-  const frequencyTag = tagsByCode.get(FREQUENCY.codes[0] ?? "");
-  const power = useSeries({ devices: onTop, tag: activeTag, aggregate: "first" }, range, { live: true });
-  const frequency = useSeries({ devices: onTop, tag: frequencyTag, aggregate: "first" }, range, {
-    live: true,
-  });
-  const catalogueReason = (code: string, found: unknown) =>
-    tagsQuery.isLoading || found ? null : `Tag ${code} is not in the catalogue.`;
+  // Only the ticked readings are fetched, so Today stays at one-minute buckets.
+  const trends = useDeviceTrends(
+    headline,
+    candidates.filter((entry) => selection.selected.has(entry.key)).map((entry) => entry.filled.tag),
+    trendWindow,
+    timezone,
+    readings.tagsById,
+  );
+  const trendOptions = candidates.map((entry) =>
+    deviceTrendOption({
+      key: entry.key,
+      label: entry.label,
+      tag: entry.filled.tag,
+      reason: entry.filled.reason,
+      trends,
+      markPeak: entry.markPeak,
+      // The meter on top is the claim: say which Device these come from.
+      provenance: headline?.code ?? null,
+    }),
+  );
 
   const showOnTop = (device: DeviceListItem) => {
     setChosenId(device.id);
@@ -391,8 +391,6 @@ export function GridMonitoringDashboard(): JSX.Element {
     );
   }
 
-  const day = range?.day ?? null;
-
   return (
     <div className="flex flex-col gap-6">
       {header}
@@ -419,53 +417,42 @@ export function GridMonitoringDashboard(): JSX.Element {
         <MeterCard key={device.id} device={device} timezone={timezone} onShow={() => showOnTop(device)} />
       ))}
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Panel
-          title={
-            <span className="text-base">
-              Active power trend
-              {unitOf(activeTag?.unit) ? (
-                <span className="font-normal text-ink-muted"> ({unitOf(activeTag?.unit)})</span>
-              ) : null}
-            </span>
-          }
-          padding="p-4"
-        >
-          <MeterTrend
-            series={power}
-            unit={unitOf(activeTag?.unit)}
-            label="Active power"
-            reason={catalogueReason("AC_ACTIVE_POWER", activeTag)}
-            provenance={headline.code}
-            timezone={timezone}
-            day={day}
-            markPeak
+      <Panel
+        title={<span className="text-base">Meter trends</span>}
+        subtitle={
+          <span className="text-sm">
+            Tick the readings to draw. Readings in one unit share a plot; each other unit gets its own,
+            on the same time axis. A break in a line is a stretch in which nothing was received from
+            this meter.
+          </span>
+        }
+        actions={
+          <SegmentedControl
+            label="Meter trend window"
+            value={trendWindow}
+            onChange={setTrendWindow}
+            options={TREND_WINDOWS}
           />
-        </Panel>
-        <Panel
-          title={
-            <span className="text-base">
-              Frequency trend
-              {unitOf(frequencyTag?.unit) ? (
-                <span className="font-normal text-ink-muted"> ({unitOf(frequencyTag?.unit)})</span>
-              ) : null}
-            </span>
-          }
-          padding="p-4"
-        >
-          <MeterTrend
-            series={frequency}
-            unit={unitOf(frequencyTag?.unit)}
-            label="Frequency"
-            reason={catalogueReason("FREQUENCY", frequencyTag)}
-            provenance={headline.code}
+        }
+        padding="p-4"
+      >
+        {trends.isError ? (
+          <ErrorState error={trends.error} retry={trends.refetch} />
+        ) : (
+          <LanedTrendChart
+            // Another meter on top starts its menu and zoom afresh.
+            key={headline.id}
+            options={trendOptions}
+            selected={selection.selected}
+            onSelectedChange={selection.setSelected}
+            from={trends.range ? Date.parse(trends.range.from) : 0}
+            to={trends.range ? Date.parse(trends.range.to) : 0}
+            day={trends.range?.day ?? null}
             timezone={timezone}
-            day={day}
-            // The highest instant of grid frequency is not a fact anyone acts on.
-            markPeak={false}
+            isLoading={trends.isLoading || trends.range === null}
           />
-        </Panel>
-      </div>
+        )}
+      </Panel>
     </div>
   );
 }

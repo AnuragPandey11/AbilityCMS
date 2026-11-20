@@ -2,9 +2,11 @@
  * `energy_analytics` — the Plant's history over a window you choose. The
  * client's reference screen (28 Sep 2026).
  *
- * Four trends on one window — Plant power, GHI, module temperature, one
- * Inverter's efficiency — and energy per day for the last thirty days. The
- * window is a preset or two Plant-local wall times typed by hand.
+ * One full-width trend on one window — Plant power, GHI, module temperature,
+ * one Inverter's efficiency, each ticked from a menu — and energy per day for
+ * the last thirty days. The window is a preset or two Plant-local wall times
+ * typed by hand. Readings in different units sit in stacked plots on one time
+ * axis (Guardrail 22; `LanedTrendChart`), and only the ticked ones are fetched.
  *
  * ── Where each curve comes from ─────────────────────────────────────────────
  * - **Plant power** and **module temperature** read their dashboard slots
@@ -36,6 +38,8 @@ import { Panel, SegmentedControl, SelectBox, inputClass } from "@/components/ui"
 import { EmptyState, ErrorState } from "@/components/state";
 import { PlantPicker } from "@/components/domain";
 import { TrendChart } from "@/components/charts/TrendChart";
+import { LanedTrendChart, type TrendLaneOption } from "@/components/charts/LanedTrendChart";
+import { effectiveSelection } from "@/components/charts/trendLanes";
 import { NOT_A_UNIT } from "@/components/devices/InverterView";
 import { useFilteredPlantScope } from "@/state/usePlantScope";
 import { fromDateTimeInput, timezoneLabel, toDateTimeInput } from "@/format/datetime";
@@ -43,6 +47,9 @@ import { fromDateTimeInput, timezoneLabel, toDateTimeInput } from "@/format/date
 const WMS_TYPE_CODE = "WMS";
 const INVERTER_TYPE_CODE = "INVERTER";
 const DAILY_ENERGY_DAYS = 30;
+
+/** The readings on the trend's menu, in menu order. */
+const TREND_KEYS = ["power", "ghi", "module", "efficiency"];
 
 const WINDOWS: { value: TrendWindow; label: string; hint: string }[] = [
   { value: "today", label: "Today", hint: "The Plant's day so far, midnight to midnight." },
@@ -66,57 +73,6 @@ const titled = (label: string, unit: string | null) => (
     {unit ? <span className="font-normal text-ink-muted"> ({unit})</span> : null}
   </span>
 );
-
-/** A chart, or the reason there is none — never an empty frame (Guardrail 26). */
-function SeriesChart({
-  series,
-  unavailableReason,
-  unit,
-  label,
-  provenance,
-  timezone,
-  day,
-  markPeak,
-}: {
-  series: Series;
-  unavailableReason: string | null;
-  unit: string | null;
-  label: string;
-  provenance?: string | null;
-  timezone: string | undefined;
-  day: WindowRange["day"];
-  markPeak: boolean;
-}): JSX.Element {
-  if (unavailableReason) {
-    return (
-      <p key="unavailable" className="flex h-[260px] items-center justify-center px-6 text-center text-xs text-ink-faint">
-        {unavailableReason}
-      </p>
-    );
-  }
-  if (series.isError) {
-    return (
-      <p key="error" className="flex h-[260px] items-center justify-center px-6 text-center text-xs text-bad">
-        These readings could not be loaded.
-      </p>
-    );
-  }
-  return (
-    <TrendChart
-      points={series.points}
-      unit={unit}
-      label={label}
-      tier={series.tier}
-      provenance={provenance}
-      flaggedCount={series.flaggedCount}
-      isLoading={series.isLoading}
-      timezone={timezone}
-      height={260}
-      day={day}
-      markPeak={markPeak}
-    />
-  );
-}
 
 export function EnergyAnalyticsDashboard(): JSX.Element {
   const { plants, plantId, setPlantId, hasNoPlants } = useFilteredPlantScope();
@@ -179,12 +135,23 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
     [tagsQuery.data],
   );
 
-  const power = useSlotSeries(plantId, "kpi.current_power", range, { live });
-  const moduleTemperature = useSlotSeries(plantId, "env.module_temperature", range, { live });
+  // What is ticked. Until the menu is touched all four are, as the four
+  // separate charts were; only a ticked reading's history is fetched.
+  const [chosen, setChosen] = useState<Set<string> | null>(null);
+  const wants = (key: string) => (chosen === null ? TREND_KEYS.includes(key) : chosen.has(key));
+
+  const power = useSlotSeries(plantId, "kpi.current_power", range, { live, enabled: wants("power") });
+  const moduleTemperature = useSlotSeries(plantId, "env.module_temperature", range, {
+    live,
+    enabled: wants("module"),
+  });
 
   const stations = useMemo(() => devices.filter((device) => device.type_code === WMS_TYPE_CODE), [devices]);
   const ghiTag = tagsByCode.get("GHI");
-  const ghi = useSeries({ devices: stations, tag: ghiTag, aggregate: "avg" }, range, { live });
+  const ghi = useSeries({ devices: stations, tag: ghiTag, aggregate: "avg" }, range, {
+    live,
+    enabled: wants("ghi"),
+  });
 
   const inverters = useMemo(
     () => devices.filter((device) => device.type_code === INVERTER_TYPE_CODE).sort(byCode),
@@ -197,6 +164,7 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
   const efficiencyTag = tagsByCode.get("INVERTER_EFFICIENCY");
   const efficiency = useSeries({ devices: oneInverter, tag: efficiencyTag, aggregate: "first" }, range, {
     live,
+    enabled: wants("efficiency"),
   });
 
   const energyDays = useSlotSteps(plantId, "kpi.energy_today", { days: DAILY_ENERGY_DAYS }, { resetsExpected: true });
@@ -224,6 +192,50 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
   const moduleReason = noStation
     ? "No Weather Station (WMS) is registered at this Plant."
     : moduleTemperature.unavailableReason;
+
+  /** One reading on the menu: its series, or why it cannot be drawn (Guardrail 26). */
+  const option = (
+    key: string,
+    label: string,
+    unit: string | null,
+    series: Series,
+    unavailableReason: string | null,
+    extra: Partial<TrendLaneOption> = {},
+  ): TrendLaneOption => ({
+    key,
+    label,
+    unit,
+    kind: "analog",
+    points: series.points,
+    flaggedCount: series.flaggedCount,
+    tier: series.tier,
+    unavailableReason: unavailableReason ?? (series.isError ? "These readings could not be loaded." : null),
+    // Each reading is its own request: ticking one waits for that one only.
+    pending: wants(key) && series.isLoading,
+    ...extra,
+  });
+  const trendOptions: TrendLaneOption[] = [
+    option("power", "Plant power", power.unit, power, power.unavailableReason, {
+      provenance: power.provenance,
+      markPeak: true,
+    }),
+    option("ghi", "Irradiance GHI", ghiTag?.unit ?? null, ghi, missing(stations, "Weather Station (WMS)", ghiTag, "GHI"), {
+      provenance:
+        stations.length > 1 ? `avg of ${stations.length} WMS` : stations.length === 1 ? "WMS" : null,
+      markPeak: true,
+    }),
+    option("module", "Module temperature", moduleTemperature.unit, moduleTemperature, moduleReason, {
+      provenance: moduleTemperature.provenance,
+    }),
+    option(
+      "efficiency",
+      inverter ? `${inverter.code} efficiency` : "Inverter efficiency",
+      efficiencyTag?.unit ?? null,
+      efficiency,
+      missing(oneInverter, "Inverter", efficiencyTag, "INVERTER_EFFICIENCY"),
+    ),
+  ];
+  const selected = effectiveSelection(trendOptions, chosen, TREND_KEYS);
 
   if (hasNoPlants) {
     return (
@@ -300,84 +312,44 @@ export function EnergyAnalyticsDashboard(): JSX.Element {
         <ErrorState error={plantQuery.error} retry={() => void plantQuery.refetch()} />
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Panel title={titled("Plant power", unitOf(power.unit))} padding="p-4">
-          <SeriesChart
-            series={power}
-            unavailableReason={power.unavailableReason}
-            unit={unitOf(power.unit)}
-            label="Plant power"
-            provenance={power.provenance}
-            timezone={timezone}
-            day={day}
-            markPeak
-          />
-        </Panel>
-
-        <Panel title={titled("Irradiance GHI", unitOf(ghiTag?.unit))} padding="p-4">
-          <SeriesChart
-            series={ghi}
-            unavailableReason={missing(stations, "Weather Station (WMS)", ghiTag, "GHI")}
-            unit={unitOf(ghiTag?.unit)}
-            label="GHI"
-            provenance={
-              stations.length > 1 ? `avg of ${stations.length} WMS` : stations.length === 1 ? "WMS" : null
-            }
-            timezone={timezone}
-            day={day}
-            markPeak
-          />
-        </Panel>
-
-        <Panel title={titled("Module temperature", unitOf(moduleTemperature.unit))} padding="p-4">
-          <SeriesChart
-            series={moduleTemperature}
-            unavailableReason={moduleReason}
-            unit={unitOf(moduleTemperature.unit)}
-            label="Module temperature"
-            provenance={moduleTemperature.provenance}
-            timezone={timezone}
-            day={day}
-            // The hottest minute is just the largest number here.
-            markPeak={false}
-          />
-        </Panel>
-
-        <Panel
-          title={titled(
-            inverter ? `${inverter.code} efficiency` : "Inverter efficiency",
-            unitOf(efficiencyTag?.unit),
-          )}
-          actions={
-            inverters.length > 1 && inverter ? (
-              <SelectBox
-                label="Inverter"
-                value={String(inverter.id)}
-                onChange={(next) => setInverterId(Number(next))}
-                display={<span className="font-mono">{inverter.code}</span>}
-              >
-                {inverters.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.code}
-                    {device.name && device.name !== device.code ? ` — ${device.name}` : ""}
-                  </option>
-                ))}
-              </SelectBox>
-            ) : null
-          }
-          padding="p-4"
-        >
-          <SeriesChart
-            series={efficiency}
-            unavailableReason={missing(oneInverter, "Inverter", efficiencyTag, "INVERTER_EFFICIENCY")}
-            unit={unitOf(efficiencyTag?.unit)}
-            label="Efficiency"
-            timezone={timezone}
-            day={day}
-            markPeak={false}
-          />
-        </Panel>
-      </div>
+      <Panel
+        title={<span className="text-base">Trends</span>}
+        subtitle={
+          <span className="text-sm">
+            Tick the readings to draw. Readings in one unit share a plot; each other unit gets its own,
+            on the same time axis. A break in a line is a stretch in which nothing was received.
+          </span>
+        }
+        actions={
+          inverters.length > 1 && inverter ? (
+            <SelectBox
+              label="Inverter"
+              value={String(inverter.id)}
+              onChange={(next) => setInverterId(Number(next))}
+              display={<span className="font-mono">{inverter.code}</span>}
+            >
+              {inverters.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.code}
+                  {device.name && device.name !== device.code ? ` — ${device.name}` : ""}
+                </option>
+              ))}
+            </SelectBox>
+          ) : null
+        }
+        padding="p-4"
+      >
+        <LanedTrendChart
+          options={trendOptions}
+          selected={selected}
+          onSelectedChange={setChosen}
+          from={range ? Date.parse(range.from) : 0}
+          to={range ? Date.parse(range.to) : 0}
+          day={day}
+          timezone={timezone}
+          isLoading={range === null}
+        />
+      </Panel>
 
       <Panel
         title={titled(`Daily energy — last ${DAILY_ENERGY_DAYS} days`, unitOf(energyDays.unit))}
