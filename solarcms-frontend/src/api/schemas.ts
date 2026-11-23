@@ -818,6 +818,11 @@ export const DeviceListItemSchema = z.object({
   installed_on: z.string().nullable().optional().catch(null),
   rated_capacity_kw: nullableNumeric().optional(),
   /**
+   * Nameplate apparent power in kVA — a Transformer's rating, which has no
+   * fixed kW (migration 0049). Never derived from or into `rated_capacity_kw`.
+   */
+  rated_apparent_power_kva: nullableNumeric().optional(),
+  /**
    * The kWp of panels behind this unit — an Inverter's PR divides by it, and
    * the energy its stops cost scales with it. Null is unknown, never estimated.
    */

@@ -170,6 +170,12 @@ export interface DeviceCreate {
   expected_interval_s?: number;
   rated_capacity_kw?: number | null;
   /**
+   * Nameplate apparent power in kVA — a Transformer's rating. Not a kW figure:
+   * the two differ by the power factor. Clear it with
+   * `clear: ["rated_apparent_power_kva"]`.
+   */
+  rated_apparent_power_kva?: number | null;
+  /**
    * The kWp of panels behind this unit, from its design. An Inverter's PR
    * divides by it; clear it with `clear: ["dc_capacity_kwp"]`.
    */

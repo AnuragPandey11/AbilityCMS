@@ -67,6 +67,9 @@ import { StatusCodeValue, useStatusLookup } from "./StatusMeanings";
 import { formatAge, formatDate, formatDateTime, ageSeconds } from "@/format/datetime";
 
 /** Category order: what an operator looks at first, first. */
+/** Device Types with PV inputs, the only ones a string count applies to. */
+const STRING_TYPES = new Set(["INVERTER", "SMB"]);
+
 const CATEGORY_ORDER: TagCategory[] = [
   "performance",
   "electrical",
@@ -155,6 +158,14 @@ export function DeviceInspector({
   const detailQuery = useDevice(device.id);
   const bindingsQuery = useBindings(device.id);
   const detail = detailQuery.data as DeviceDetail | undefined;
+  // Each rating from its own column: a kW figure and a kVA figure are different
+  // quantities and neither is ever converted into the other.
+  const ratedKw = detail?.rated_capacity_kw ?? null;
+  const ratedKva = detail?.rated_apparent_power_kva ?? device.rated_apparent_power_kva ?? null;
+  const ratedParts = [
+    ratedKw != null ? formatValue(ratedKw, "kW") : null,
+    ratedKva != null ? formatValue(ratedKva, "kVA") : null,
+  ].filter((part): part is string => part !== null);
   const { lookup: statusLookup } = useStatusLookup(detail?.plant_id);
   /**
    * Payload keys arriving that no binding maps.
@@ -298,19 +309,22 @@ export function DeviceInspector({
           <Row label="Serial">{dash(detail?.serial_number ?? device.serial_number)}</Row>
           <Row
             label="Rated"
-            hint="Nameplate capacity. Absent is not zero — no rated capacity and a rated capacity of zero are different statements about a machine."
+            hint="Nameplate rating: kW is real power, kVA apparent power (a Transformer's rating). Each is shown from its own record, never converted — they differ by the power factor. Absent is not zero."
           >
-            {detail?.rated_capacity_kw != null
-              ? formatValue(detail.rated_capacity_kw, "kW")
-              : dash(null)}
+            {ratedParts.length > 0 ? ratedParts.join(" · ") : dash(null)}
           </Row>
           {device.variant ? <Row label="Variant">{device.variant}</Row> : null}
-          <Row
-            label="Strings"
-            hint="How many inputs of the Model's repeating group this unit has. A fact about the unit, not the Model — with none recorded, none of the group is bound."
-          >
-            {dash(detail?.string_count ?? device.string_count)}
-          </Row>
+          {/* Only equipment with PV inputs has strings — on a Transformer the
+              row could only ever read "—". A count recorded anyway is shown. */}
+          {STRING_TYPES.has(device.type_code ?? "") ||
+          (detail?.string_count ?? device.string_count) != null ? (
+            <Row
+              label="Strings"
+              hint="How many inputs of the Model's repeating group this unit has. A fact about the unit, not the Model — with none recorded, none of the group is bound."
+            >
+              {dash(detail?.string_count ?? device.string_count)}
+            </Row>
+          ) : null}
           <Row label="Installed">
             {detail?.installed_on ? formatDate(detail.installed_on, timezone) : dash(null)}
           </Row>

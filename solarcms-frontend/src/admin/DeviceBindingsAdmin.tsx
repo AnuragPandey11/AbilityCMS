@@ -740,6 +740,11 @@ function DeviceSettings({
     (model) => !device || model.device_type_code === device.type_code,
   );
   const isInverter = device?.type_code === "INVERTER";
+  // A Transformer is rated in kVA: its kW depends on the load's power factor.
+  const isTransformer = device?.type_code === "TRANSFORMER";
+  // The kW box stays for a Transformer only while a value is stored there, so
+  // a figure typed before kVA existed can be seen and removed, never hidden.
+  const showKw = !isTransformer || device?.rated_capacity_kw != null;
   // Only a meter can be on a line other than the solar output; the server
   // refuses the setting on anything else.
   const isMeter = device?.type_code === "ABT_METER" || device?.type_code === "MFM";
@@ -759,6 +764,11 @@ function DeviceSettings({
           : String(device.dc_capacity_kwp),
       string_count: device.string_count === null ? "" : String(device.string_count),
       measures_generation: measuresGeneration(device) ? "true" : "false",
+      rated_apparent_power_kva:
+        device.rated_apparent_power_kva == null ? "" : String(device.rated_apparent_power_kva),
+      serial_number: device.serial_number ?? "",
+      // A date input wants exactly YYYY-MM-DD.
+      installed_on: device.installed_on ? device.installed_on.slice(0, 10) : "",
     });
   }, [device]);
 
@@ -775,6 +785,11 @@ function DeviceSettings({
           : undefined,
         string_count: form.string_count ? Number(form.string_count) : undefined,
         dc_capacity_kwp: form.dc_capacity_kwp ? Number(form.dc_capacity_kwp) : undefined,
+        rated_apparent_power_kva: form.rated_apparent_power_kva
+          ? Number(form.rated_apparent_power_kva)
+          : undefined,
+        serial_number: form.serial_number?.trim() || undefined,
+        installed_on: form.installed_on || undefined,
         // Sent only when it changed, so an unrelated edit never re-asserts it.
         measures_generation:
           isMeter && device && (form.measures_generation === "true") !== measuresGeneration(device)
@@ -791,6 +806,15 @@ function DeviceSettings({
           form.string_count ? null : "string_count",
           // Only an Inverter shows the box, so only an Inverter can empty it.
           isInverter && !form.dc_capacity_kwp ? "dc_capacity_kwp" : null,
+          // Only when one was recorded, so an unrelated edit clears nothing.
+          !form.serial_number?.trim() && device?.serial_number ? "serial_number" : null,
+          !form.rated_capacity_kw && device?.rated_capacity_kw != null
+            ? "rated_capacity_kw"
+            : null,
+          !form.rated_apparent_power_kva && device?.rated_apparent_power_kva != null
+            ? "rated_apparent_power_kva"
+            : null,
+          !form.installed_on && device?.installed_on ? "installed_on" : null,
         ].filter((field): field is string => field !== null),
       }),
     onSuccess: () => {
@@ -844,7 +868,7 @@ function DeviceSettings({
   return (
     <Panel
       title="Device settings"
-      subtitle="Topic, interval, capacity and string count. These fail differently from bindings."
+      subtitle="Topic, interval, capacity, string count and nameplate details. These fail differently from bindings."
       actions={
         <button
           type="button"
@@ -873,12 +897,24 @@ function DeviceSettings({
           <span>
             Interval <span className="text-ink">{device.expected_interval_s}s</span>
           </span>
-          <span>
-            Capacity{" "}
-            <span className="text-ink">
-              {device.rated_capacity_kw ?? "not set"} kW
+          {isTransformer ? (
+            <span>
+              Rated{" "}
+              <span className="text-ink">
+                {device.rated_apparent_power_kva != null
+                  ? `${device.rated_apparent_power_kva} kVA`
+                  : "not set"}
+              </span>
             </span>
-          </span>
+          ) : null}
+          {showKw ? (
+            <span>
+              Capacity{" "}
+              <span className="text-ink">
+                {device.rated_capacity_kw ?? "not set"} kW
+              </span>
+            </span>
+          ) : null}
           {isInverter ? (
             <span>
               DC size{" "}
@@ -894,6 +930,12 @@ function DeviceSettings({
               of {stringMax}
             </span>
           ) : null}
+          <span>
+            Serial <span className="text-ink">{device.serial_number ?? "not set"}</span>
+          </span>
+          <span>
+            Installed <span className="text-ink">{device.installed_on?.slice(0, 10) ?? "not set"}</span>
+          </span>
           {isMeter ? (
             <span>
               Solar output meter{" "}
@@ -965,20 +1007,66 @@ function DeviceSettings({
                 className={`${inputClass} border-warn/40`}
               />
             </Field>
+            {isTransformer ? (
+              <Field
+                label="Rated power (kVA)"
+                hint="The nameplate rating. A transformer is rated in kVA, not kW: what it delivers in kW depends on the load's power factor."
+              >
+                <input
+                  type="number"
+                  min={0}
+                  value={form.rated_apparent_power_kva ?? ""}
+                  onChange={(event) =>
+                    setForm((f) => ({ ...f, rated_apparent_power_kva: event.target.value }))
+                  }
+                  className={inputClass}
+                  data-testid="rated-kva"
+                />
+              </Field>
+            ) : null}
+            {showKw ? (
+              <Field
+                label="Rated capacity (kW)"
+                hint="Specific yield is energy ÷ capacity; without it there is none."
+              >
+                <input
+                  type="number"
+                  value={form.rated_capacity_kw ?? ""}
+                  onChange={(event) =>
+                    setForm((f) => ({
+                      ...f,
+                      rated_capacity_kw: event.target.value,
+                    }))
+                  }
+                  className={inputClass}
+                />
+              </Field>
+            ) : null}
             <Field
-              label="Rated capacity (kW)"
-              hint="Specific yield is energy ÷ capacity; without it there is none."
+              label="Serial number"
+              hint="From the nameplate. Empty the box and save to remove it."
             >
               <input
-                type="number"
-                value={form.rated_capacity_kw ?? ""}
+                value={form.serial_number ?? ""}
                 onChange={(event) =>
-                  setForm((f) => ({
-                    ...f,
-                    rated_capacity_kw: event.target.value,
-                  }))
+                  setForm((f) => ({ ...f, serial_number: event.target.value }))
+                }
+                className={`${inputClass} font-mono text-xs`}
+                data-testid="serial-number"
+              />
+            </Field>
+            <Field
+              label="Installed on"
+              hint="The day this unit was installed. Empty the box and save to remove it."
+            >
+              <input
+                type="date"
+                value={form.installed_on ?? ""}
+                onChange={(event) =>
+                  setForm((f) => ({ ...f, installed_on: event.target.value }))
                 }
                 className={inputClass}
+                data-testid="installed-on"
               />
             </Field>
             {isInverter ? (
