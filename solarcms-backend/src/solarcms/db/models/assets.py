@@ -172,6 +172,9 @@ class Device(Base):
     # default — the test broker publishes ~21x faster than assumed.
     expected_interval_s: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     rated_capacity_kw: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    # Nameplate apparent power — a Transformer's rating (migration 0049). Never
+    # derived from or into `rated_capacity_kw`: they differ by the power factor.
+    rated_apparent_power_kva: Mapped[float | None] = mapped_column(Numeric(12, 2))
     # The panels behind this unit, in kWp — an Inverter's share of the Plant's DC
     # capacity, entered from its design, never estimated (migration 0040).
     # Its PR divides by this, and the energy its stops cost scales with it.

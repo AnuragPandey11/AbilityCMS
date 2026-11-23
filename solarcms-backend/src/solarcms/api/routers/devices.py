@@ -203,6 +203,7 @@ async def list_devices(
         SELECT d.id, d.code, d.name, d.status, d.block_id, d.parent_device_id,
                d.reports_via_device_id, d.collector_code, d.source_address,
                d.expected_interval_s, d.rated_capacity_kw, d.dc_capacity_kwp,
+               d.rated_apparent_power_kva,
                d.string_count, d.serial_number, d.installed_on,
                -- FALSE on a meter on another line than the solar output: the
                -- trends and the meter screen pass it over (migration 0043).
@@ -404,11 +405,13 @@ async def _insert_devices(
                                      reports_via_device_id, collector_code,
                                      source_address,
                                      expected_interval_s, rated_capacity_kw,
-                                     dc_capacity_kwp, string_count, installed_on)
+                                     dc_capacity_kwp, string_count, installed_on,
+                                     rated_apparent_power_kva)
                 VALUES (:client_id, :plant_id, :model_id, :code, :name, :serial,
                         :block_id, :parent_id, :collector_id, :collector_code,
                         :source_address,
-                        :interval_s, :capacity, :dc_kwp, :string_count, :installed_on)
+                        :interval_s, :capacity, :dc_kwp, :string_count, :installed_on,
+                        CAST(:kva AS numeric))
                 RETURNING id, code, name, status, source_address, expected_interval_s,
                           string_count, collector_code
             """), {
@@ -424,6 +427,7 @@ async def _insert_devices(
                 "dc_kwp": device.dc_capacity_kwp,
                 "string_count": device.string_count,
                 "installed_on": device.installed_on,
+                "kva": device.rated_apparent_power_kva,
             })).first()
         except IntegrityError as exc:
             # I-3 (parent shares the Plant) and topic uniqueness are enforced
@@ -574,7 +578,8 @@ async def update_device(
         SELECT d.client_id, d.plant_id, d.code, d.name, d.status, d.block_id,
                d.parent_device_id, d.reports_via_device_id, d.collector_code,
                d.source_address, d.expected_interval_s, d.string_count,
-               d.dc_capacity_kwp, d.device_model_id, d.measures_generation
+               d.dc_capacity_kwp, d.device_model_id, d.measures_generation,
+               d.serial_number, d.installed_on, d.rated_apparent_power_kva
           FROM devices d WHERE d.id = :id
     """), {"id": device_id})).first()
     if before is None:
@@ -626,7 +631,9 @@ async def update_device(
     clear = set(body.clear or [])
     unknown = clear - {"block_id", "parent_device_id", "reports_via_device_id",
                        "collector_code", "source_address", "string_count",
-                       "dc_capacity_kwp", "sld_stage_override"}
+                       "dc_capacity_kwp", "sld_stage_override",
+                       "serial_number", "installed_on", "rated_apparent_power_kva",
+                       "rated_capacity_kw"}
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"cannot clear {sorted(unknown)}")
@@ -715,7 +722,8 @@ async def update_device(
         row = (await session.execute(text("""
             UPDATE devices
                SET name = coalesce(:name, name),
-                   serial_number = coalesce(:serial, serial_number),
+                   serial_number = CASE WHEN :clear_serial THEN NULL
+                                        ELSE coalesce(:serial, serial_number) END,
                    block_id = CASE WHEN :clear_block THEN NULL
                                    ELSE coalesce(:block_id, block_id) END,
                    parent_device_id = CASE WHEN :clear_parent THEN NULL
@@ -730,14 +738,21 @@ async def update_device(
                    source_address = CASE WHEN :clear_topic THEN NULL
                                          ELSE coalesce(:source_address, source_address) END,
                    expected_interval_s = coalesce(:interval_s, expected_interval_s),
-                   rated_capacity_kw = coalesce(:capacity, rated_capacity_kw),
+                   rated_capacity_kw = CASE WHEN :clear_capacity THEN NULL
+                                            ELSE coalesce(:capacity, rated_capacity_kw) END,
+                   rated_apparent_power_kva =
+                       CASE WHEN :clear_kva THEN NULL
+                            ELSE coalesce(CAST(:kva AS numeric),
+                                          rated_apparent_power_kva) END,
                    dc_capacity_kwp = CASE WHEN :clear_dc_kwp THEN NULL
                                           ELSE coalesce(CAST(:dc_kwp AS numeric),
                                                         dc_capacity_kwp) END,
                    string_count = CASE WHEN :clear_strings THEN NULL
                                        ELSE coalesce(:string_count, string_count) END,
                    device_model_id = coalesce(:model_id, device_model_id),
-                   installed_on = coalesce(CAST(:installed_on AS date), installed_on),
+                   installed_on = CASE WHEN :clear_installed THEN NULL
+                                       ELSE coalesce(CAST(:installed_on AS date),
+                                                     installed_on) END,
                    sld_stage_override =
                        CASE WHEN :clear_stage THEN NULL
                             ELSE coalesce(CAST(:stage_override AS varchar(16)),
@@ -750,9 +765,12 @@ async def update_device(
                       reports_via_device_id, collector_code, source_address,
                       expected_interval_s, rated_capacity_kw, dc_capacity_kwp,
                       string_count, sld_stage_override, device_model_id,
-                      measures_generation
+                      measures_generation, serial_number, installed_on,
+                      rated_apparent_power_kva
         """), {
-            "id": device_id, "name": body.name, "serial": body.serial_number,
+            "id": device_id, "name": body.name,
+            "serial": value("serial_number", body.serial_number),
+            "clear_serial": "serial_number" in clear,
             "block_id": value("block_id", body.block_id),
             "parent_id": value("parent_device_id", body.parent_device_id),
             "collector_id": value("reports_via_device_id", body.reports_via_device_id),
@@ -760,12 +778,17 @@ async def update_device(
                               else _clean_collector(body.collector_code),
             "source_address": value("source_address", body.source_address),
             "interval_s": body.expected_interval_s,
-            "capacity": body.rated_capacity_kw,
+            "capacity": value("rated_capacity_kw", body.rated_capacity_kw),
+            "clear_capacity": "rated_capacity_kw" in clear,
+            "kva": value("rated_apparent_power_kva", body.rated_apparent_power_kva),
+            "clear_kva": "rated_apparent_power_kva" in clear,
             "dc_kwp": value("dc_capacity_kwp", body.dc_capacity_kwp),
             "clear_dc_kwp": "dc_capacity_kwp" in clear,
             "string_count": value("string_count", body.string_count),
             "model_id": body.device_model_id,
-            "installed_on": body.installed_on, "status": body.status,
+            "installed_on": value("installed_on", body.installed_on),
+            "clear_installed": "installed_on" in clear,
+            "status": body.status,
             "stage_override": value("sld_stage_override", body.sld_stage_override),
             "clear_stage": "sld_stage_override" in clear,
             "measures_generation": body.measures_generation,

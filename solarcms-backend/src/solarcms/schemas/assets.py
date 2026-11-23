@@ -125,6 +125,9 @@ class DeviceCreate(BaseModel):
     # faster than the assumed 60s.
     expected_interval_s: int = Field(default=60, ge=1)
     rated_capacity_kw: float | None = Field(default=None, ge=0)
+    # Nameplate apparent power in kVA — a Transformer's rating, which has no
+    # fixed kW (migration 0049). Never put into `rated_capacity_kw`.
+    rated_apparent_power_kva: float | None = Field(default=None, ge=0)
     # The kWp of panels behind this unit — an Inverter's share of the Plant's
     # DC capacity, from its design. Its PR divides by this (migration 0040).
     dc_capacity_kwp: float | None = Field(default=None, gt=0, le=1_000_000)
@@ -168,6 +171,9 @@ class DeviceUpdate(BaseModel):
     source_address: str | None = None
     expected_interval_s: int | None = Field(default=None, ge=1)
     rated_capacity_kw: float | None = Field(default=None, ge=0)
+    # Nameplate apparent power in kVA — a Transformer's rating, which has no
+    # fixed kW (migration 0049). Never put into `rated_capacity_kw`.
+    rated_apparent_power_kva: float | None = Field(default=None, ge=0)
     # The kWp of panels behind this unit — an Inverter's share of the Plant's
     # DC capacity, from its design. Its PR divides by this (migration 0040).
     dc_capacity_kwp: float | None = Field(default=None, gt=0, le=1_000_000)
@@ -196,7 +202,9 @@ class DeviceUpdate(BaseModel):
         default=None,
         description="Fields to set to NULL: block_id, parent_device_id, "
                     "reports_via_device_id, collector_code, source_address, "
-                    "string_count, dc_capacity_kwp, sld_stage_override.",
+                    "string_count, dc_capacity_kwp, sld_stage_override, "
+                    "serial_number, installed_on, rated_apparent_power_kva, "
+                    "rated_capacity_kw.",
     )
 
 
